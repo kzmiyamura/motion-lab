@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { audioEngine, type BeatCallback } from '../engine/AudioEngine';
 import { PRESETS, type PresetName, type TotalSteps } from '../engine/presets';
+import { toEngineSteps, type ClavePattern } from '../engine/salsaPatterns';
 
 export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -74,6 +75,16 @@ export function useAudioEngine() {
     setPresetState('Standard');
   }, []);
 
+  /** Salsa Clave パターンを選んだとき AudioEngine にも反映する */
+  const applyClavePattern = useCallback((pattern: ClavePattern) => {
+    const steps = toEngineSteps(pattern.beatPositions);
+    audioEngine.beatsPerBar = 8;
+    setTotalStepsState(8);
+    setCheckedSteps(steps);
+    audioEngine.setActiveSteps(steps);
+    setPresetState('Standard');
+  }, []);
+
   const loadAudioFile = useCallback(async (file: File) => {
     const arrayBuffer = await file.arrayBuffer();
     await audioEngine.loadBuffer(arrayBuffer);
@@ -84,6 +95,7 @@ export function useAudioEngine() {
     currentBeat, totalSteps, setTotalSteps,
     checkedSteps, toggleStep,
     preset, applyPreset,
+    applyClavePattern,
     start, stop,
     loadAudioFile,
   };

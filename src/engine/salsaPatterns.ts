@@ -17,6 +17,14 @@ export type ClavePattern = {
   beatPositions: number[];
 };
 
+/**
+ * 小数ビート位置 (1-8) → AudioEngine 用の 0-indexed 整数ステップに変換
+ * 例: 6.5 → Math.round(6.5) - 1 = 6
+ */
+export function toEngineSteps(positions: number[]): Set<number> {
+  return new Set(positions.map(p => Math.round(p) - 1));
+}
+
 /** 小数ビート位置 → タイル番号 + HitType に変換 */
 export function computeHits(positions: number[]): Map<number, HitType> {
   const map = new Map<number, HitType>();

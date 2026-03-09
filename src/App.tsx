@@ -1,8 +1,7 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { ControlPanel } from './components/ControlPanel';
 import { StepGrid } from './components/StepGrid';
-import { PresetSelector } from './components/PresetSelector';
 import { ClaveBeatGrid } from './components/ClaveBeatGrid';
 import { ClavePatternSelector } from './components/ClavePatternSelector';
 import { CLAVE_PATTERNS, type ClavePattern } from './engine/salsaPatterns';
@@ -11,14 +10,20 @@ import styles from './App.module.css';
 function App() {
   const {
     isPlaying, bpm, setBpm,
-    currentBeat, totalSteps, setTotalSteps,
+    currentBeat, totalSteps,
     checkedSteps, toggleStep,
-    preset, applyPreset,
+    applyClavePattern,
     start, stop,
     loadAudioFile,
   } = useAudioEngine();
 
   const [selectedPattern, setSelectedPattern] = useState<ClavePattern>(CLAVE_PATTERNS[0]);
+
+  // Clave パターン選択 → ビジュアルと音を同時に更新
+  const handlePatternSelect = useCallback((pattern: ClavePattern) => {
+    setSelectedPattern(pattern);
+    applyClavePattern(pattern);
+  }, [applyClavePattern]);
 
   return (
     <main className={styles.main}>
@@ -33,7 +38,7 @@ function App() {
 
         <ClavePatternSelector
           selectedId={selectedPattern.id}
-          onSelect={setSelectedPattern}
+          onSelect={handlePatternSelect}
         />
 
         <ClaveBeatGrid beatPositions={selectedPattern.beatPositions} />
@@ -42,13 +47,6 @@ function App() {
       {/* ── Metronome ── */}
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>Metronome</h2>
-
-        <PresetSelector
-          totalSteps={totalSteps}
-          preset={preset}
-          onTotalStepsChange={setTotalSteps}
-          onPresetChange={applyPreset}
-        />
 
         <StepGrid
           totalSteps={totalSteps}

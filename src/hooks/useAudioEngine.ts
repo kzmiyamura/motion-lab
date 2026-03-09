@@ -26,6 +26,11 @@ export function useAudioEngine() {
     return () => { unsubscribe(); };
   }, []);
 
+  // バックグラウンドでサンプルをプリロード（失敗時はシンセにフォールバック）
+  useEffect(() => {
+    audioEngine.loadSamples().catch(() => { /* 合成音にフォールバック済み */ });
+  }, []);
+
   const start = useCallback(() => {
     audioEngine.start();
     setIsPlaying(true);

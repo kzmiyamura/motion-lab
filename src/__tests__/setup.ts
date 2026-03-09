@@ -36,6 +36,20 @@ class MockAudioContext {
     };
   }
 
+  createConvolver() {
+    return { buffer: null as AudioBuffer | null, connect: vi.fn() };
+  }
+
+  createBuffer(channels: number, length: number, sampleRate: number) {
+    return {
+      numberOfChannels: channels,
+      length,
+      sampleRate,
+      duration: length / sampleRate,
+      getChannelData: (_: number) => new Float32Array(length),
+    } as unknown as AudioBuffer;
+  }
+
   decodeAudioData(_: ArrayBuffer) {
     return Promise.resolve({} as AudioBuffer);
   }

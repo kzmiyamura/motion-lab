@@ -1,10 +1,18 @@
 /**
  * AudioEngine.ts — Multi-track rhythm machine
  *
- * Singleton audio engine with look-ahead scheduler (~100ms) for
- * 1-sample precision timing. Supports 3 synthesized instrument tracks.
+ * Uses real percussion samples from VSCO Community Edition (CC0 1.0):
+ *   https://github.com/sgossner/VSCO-2-CE
  *
- * Fixed: 16 steps per bar, subdivision=2 (8th notes at BPM quarter-note rate)
+ * Features:
+ *   - Real WAV samples for Clave, Conga (Tumba), and Cowbell
+ *   - Synthetic fallback sounds while samples are loading
+ *   - ConvolverNode reverb with a programmatically generated room IR
+ *   - Humanization: ±12% gain, ±3% pitch, ±3ms timing per hit
+ *   - Round-robin sample playback to avoid the "machine gun" effect
+ *
+ * Timing: look-ahead scheduler (~100ms) with AudioContext.currentTime
+ * Fixed: 16 steps per bar, subdivision=2 (8th notes)
  */
 
 export type TrackId = 'clave' | 'conga' | 'cowbell';
@@ -22,16 +30,38 @@ export type Beat = {
 
 export type BeatCallback = (beat: Beat) => void;
 
-const SCHEDULE_AHEAD_TIME = 0.1; // seconds to schedule ahead
-const LOOKAHEAD_MS = 25;          // scheduler interval in ms
+const SCHEDULE_AHEAD_TIME = 0.1;
+const LOOKAHEAD_MS = 25;
 const BEATS_PER_BAR = 16;
-const SUBDIVISION = 2;            // 8th notes (2 per quarter note)
+const SUBDIVISION = 2; // 8th notes
 
-/** Default Son Clave 2-3 pattern: beat positions [2,3,5,6.5,8] → 16-step indices */
-const DEFAULT_CLAVE_STEPS = new Set([2, 4, 8, 11, 14]);
-/** Conga Tumbao: beats 4 and 8 (quarter notes) → 8th-note steps 6,14 */
-const DEFAULT_CONGA_STEPS = new Set([6, 14]);
-/** Cowbell: beats 1,3,5,7 (quarter notes) → 8th-note steps 0,4,8,12 */
+// VSCO-2-CE CC0 1.0 Universal — https://github.com/sgossner/VSCO-2-CE
+const VSCO = 'https://raw.githubusercontent.com/sgossner/VSCO-2-CE/master/Percussion';
+const SAMPLE_URLS: Record<TrackId, string[]> = {
+  clave: [
+    `${VSCO}/Claves1_Hit_v2_rr1_Sum.wav`,
+    `${VSCO}/Claves1_Hit_v2_rr2_Sum.wav`,
+  ],
+  conga: [
+    `${VSCO}/Tumba-HitN_v2_rr1_Sum.wav`,
+    `${VSCO}/Tumba-HitN_v2_rr2_Sum.wav`,
+  ],
+  cowbell: [
+    `${VSCO}/Cowbell1_Hit_v2_rr1_Sum.wav`,
+    `${VSCO}/Cowbell1_Hit_v2_rr2_Sum.wav`,
+  ],
+};
+
+// Reverb wet level per instrument (clave is traditionally dry)
+const REVERB_WET: Record<TrackId, number> = {
+  clave:   0.08,
+  conga:   0.22,
+  cowbell: 0.18,
+};
+
+// Default patterns: Son Clave 2-3, Conga Tumbao, Cowbell
+const DEFAULT_CLAVE_STEPS   = new Set([2, 4, 8, 11, 14]);
+const DEFAULT_CONGA_STEPS   = new Set([6, 14]);
 const DEFAULT_COWBELL_STEPS = new Set([0, 4, 8, 12]);
 
 export class AudioEngine {
@@ -42,13 +72,23 @@ export class AudioEngine {
   private beatCallbacks: Set<BeatCallback> = new Set();
   private _bpm = 120;
   private _isPlaying = false;
-  private customBuffer: AudioBuffer | null = null;
 
   private tracks: Map<TrackId, Track> = new Map([
     ['clave',   { id: 'clave',   pattern: new Set(DEFAULT_CLAVE_STEPS),   muted: false }],
     ['conga',   { id: 'conga',   pattern: new Set(DEFAULT_CONGA_STEPS),   muted: false }],
     ['cowbell', { id: 'cowbell', pattern: new Set(DEFAULT_COWBELL_STEPS), muted: false }],
   ]);
+
+  // Samples: 2 round-robin buffers per instrument
+  private sampleBuffers: Map<TrackId, AudioBuffer[]> = new Map([
+    ['clave', []], ['conga', []], ['cowbell', []],
+  ]);
+  private rrCounters: Map<TrackId, number> = new Map([
+    ['clave', 0], ['conga', 0], ['cowbell', 0],
+  ]);
+
+  // Reverb
+  private convolver: ConvolverNode | null = null;
 
   // ── Public API ────────────────────────────────────────────────────────────
 
@@ -57,7 +97,6 @@ export class AudioEngine {
 
   get isPlaying() { return this._isPlaying; }
 
-  /** Registers a callback fired on each scheduled step. */
   onBeat(cb: BeatCallback) {
     this.beatCallbacks.add(cb);
     return () => this.beatCallbacks.delete(cb);
@@ -71,20 +110,41 @@ export class AudioEngine {
     this.tracks.get(id)!.pattern = steps;
   }
 
-  setTrackMuted(id: TrackId, muted: boolean) {
-    this.tracks.get(id)!.muted = muted;
-  }
-
-  toggleTrackMute(id: TrackId) {
+  toggleTrackMute(id: TrackId): boolean {
     const track = this.tracks.get(id)!;
     track.muted = !track.muted;
     return track.muted;
   }
 
-  /** Load a WAV/audio file as the Clave sound. Falls back to synth. */
+  /**
+   * Fetches VSCO-2-CE samples (CC0) and sets up reverb.
+   * Falls back to synthesis silently on network failure.
+   */
+  async loadSamples(): Promise<void> {
+    const ctx = this.getContext();
+    this.setupReverb(ctx);
+
+    await Promise.allSettled(
+      (Object.entries(SAMPLE_URLS) as [TrackId, string[]][]).flatMap(([id, urls]) =>
+        urls.map(url =>
+          fetch(url)
+            .then(r => {
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              return r.arrayBuffer();
+            })
+            .then(buf => ctx.decodeAudioData(buf))
+            .then(decoded => { this.sampleBuffers.get(id)!.push(decoded); })
+            .catch(() => { /* network error → synthesis fallback */ })
+        )
+      )
+    );
+  }
+
+  /** Load a WAV/audio file as the Clave sound (user upload). */
   async loadBuffer(arrayBuffer: ArrayBuffer) {
     const ctx = this.getContext();
-    this.customBuffer = await ctx.decodeAudioData(arrayBuffer);
+    const decoded = await ctx.decodeAudioData(arrayBuffer);
+    this.sampleBuffers.set('clave', [decoded]);
   }
 
   start() {
@@ -117,16 +177,53 @@ export class AudioEngine {
   // ── Private ───────────────────────────────────────────────────────────────
 
   private getContext(): AudioContext {
-    if (!this.context) {
-      this.context = new AudioContext();
-    }
+    if (!this.context) this.context = new AudioContext();
     return this.context;
+  }
+
+  /**
+   * Create a synthetic room impulse response for the ConvolverNode.
+   * Exponentially decaying white noise — classic plate/room reverb technique.
+   */
+  private setupReverb(ctx: AudioContext) {
+    const sampleRate = ctx.sampleRate;
+    const duration = 1.2;  // seconds of reverb tail
+    const decay = 2.8;
+    const length = Math.floor(sampleRate * duration);
+    const ir = ctx.createBuffer(2, length, sampleRate);
+
+    for (let c = 0; c < 2; c++) {
+      const data = ir.getChannelData(c);
+      for (let i = 0; i < length; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+      }
+    }
+
+    this.convolver = ctx.createConvolver();
+    this.convolver.buffer = ir;
+
+    // Reverb output at full volume — per-instrument wet levels control mix
+    const reverbOut = ctx.createGain();
+    reverbOut.gain.value = 1.0;
+    this.convolver.connect(reverbOut);
+    reverbOut.connect(ctx.destination);
+  }
+
+  /**
+   * Humanization: randomise gain, pitch, and timing slightly on every hit.
+   * This avoids the "quantised machine" feel of perfectly uniform playback.
+   */
+  private humanize(baseGain: number, baseTime: number) {
+    return {
+      gain:  baseGain * (0.88 + Math.random() * 0.24),     // ±12% velocity
+      pitch: 0.97 + Math.random() * 0.06,                   // ±3% pitch
+      time:  baseTime + (Math.random() - 0.5) * 0.006,     // ±3ms timing
+    };
   }
 
   private schedule() {
     const ctx = this.getContext();
     const horizon = ctx.currentTime + SCHEDULE_AHEAD_TIME;
-
     while (this.nextBeatTime < horizon) {
       this.scheduleBeat(ctx, this.nextBeatTime, this.currentBeat);
       this.advanceBeat();
@@ -134,105 +231,137 @@ export class AudioEngine {
   }
 
   private scheduleBeat(ctx: AudioContext, time: number, beat: number) {
-    // Play each non-muted track if current step is in its pattern
     for (const track of this.tracks.values()) {
       if (!track.muted && track.pattern.has(beat)) {
         this.playTrack(ctx, track.id, time);
       }
     }
 
-    // Notify UI callbacks with appropriate delay
     const delay = (time - ctx.currentTime) * 1000;
     setTimeout(() => {
       this.beatCallbacks.forEach(cb => cb({ beat, time }));
     }, Math.max(0, delay));
   }
 
-  private playTrack(ctx: AudioContext, id: TrackId, time: number) {
+  private playTrack(ctx: AudioContext, id: TrackId, baseTime: number) {
+    const buffers = this.sampleBuffers.get(id)!;
+    if (buffers.length > 0) {
+      this.playSampleBuffer(ctx, id, buffers, baseTime);
+    } else {
+      // Synthesis fallback while samples are loading or on network failure
+      this.playSynth(ctx, id, baseTime);
+    }
+  }
+
+  private playSampleBuffer(
+    ctx: AudioContext,
+    id: TrackId,
+    buffers: AudioBuffer[],
+    baseTime: number,
+  ) {
+    const { gain, pitch, time } = this.humanize(0.85, baseTime);
+
+    // Round-robin: alternate between available samples
+    const counter = this.rrCounters.get(id)!;
+    const buffer = buffers[counter % buffers.length];
+    this.rrCounters.set(id, counter + 1);
+
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.value = pitch;
+
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = gain;
+    src.connect(gainNode);
+
+    // Dry path → destination
+    gainNode.connect(ctx.destination);
+
+    // Wet path → convolver → reverb output → destination
+    if (this.convolver) {
+      const wetGain = ctx.createGain();
+      wetGain.gain.value = REVERB_WET[id];
+      gainNode.connect(wetGain);
+      wetGain.connect(this.convolver);
+    }
+
+    src.start(time);
+  }
+
+  // ── Synthesis fallbacks ───────────────────────────────────────────────────
+
+  private playSynth(ctx: AudioContext, id: TrackId, time: number) {
     switch (id) {
-      case 'clave':   return this.playClave(ctx, time);
-      case 'conga':   return this.playConga(ctx, time);
-      case 'cowbell': return this.playCowbell(ctx, time);
+      case 'clave':   return this.synthClave(ctx, time);
+      case 'conga':   return this.synthConga(ctx, time);
+      case 'cowbell': return this.synthCowbell(ctx, time);
     }
   }
 
-  /**
-   * Clave — high percussive click (wood sticks).
-   * Uses custom buffer if loaded, otherwise synthesized.
-   */
-  private playClave(ctx: AudioContext, time: number) {
-    if (this.customBuffer) {
-      const src = ctx.createBufferSource();
-      src.buffer = this.customBuffer;
-      src.connect(ctx.destination);
-      src.start(time);
-      return;
+  /** Clave: two detuned inharmonic sine partials, very short decay */
+  private synthClave(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(0.5, time);
+
+    const masterGain = ctx.createGain();
+    masterGain.gain.setValueAtTime(g, t);
+    masterGain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+
+    for (const freq of [2500, 3800]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.7, t + 0.015);
+      osc.connect(masterGain);
+      osc.start(t);
+      osc.stop(t + 0.05);
     }
 
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(1200, time);
-    osc.frequency.exponentialRampToValueAtTime(600, time + 0.03);
-
-    gain.gain.setValueAtTime(0.5, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(time);
-    osc.stop(time + 0.06);
+    masterGain.connect(ctx.destination);
   }
 
-  /**
-   * Conga Tumbao — low drum thud.
-   * Sine oscillator pitched down with a pitch envelope.
-   */
-  private playConga(ctx: AudioContext, time: number) {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
+  /** Conga Tumbao: sine with pitch-drop envelope + noise transient */
+  private synthConga(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(0.7, time);
 
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(180, time);
-    osc.frequency.exponentialRampToValueAtTime(60, time + 0.12);
-
-    gain.gain.setValueAtTime(0.7, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.18);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(time);
-    osc.stop(time + 0.2);
+    const body = ctx.createOscillator();
+    const bodyGain = ctx.createGain();
+    body.type = 'sine';
+    body.frequency.setValueAtTime(200, t);
+    body.frequency.exponentialRampToValueAtTime(65, t + 0.15);
+    bodyGain.gain.setValueAtTime(g, t);
+    bodyGain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+    body.connect(bodyGain);
+    body.start(t);
+    body.stop(t + 0.24);
+    bodyGain.connect(ctx.destination);
+    if (this.convolver) bodyGain.connect(this.convolver);
   }
 
-  /**
-   * Cowbell — metallic clang.
-   * Two detuned square oscillators through a bandpass filter.
-   */
-  private playCowbell(ctx: AudioContext, time: number) {
-    const freqs = [562, 845]; // classic cowbell frequencies
-    const gain = ctx.createGain();
+  /** Cowbell: classic 562Hz + 845Hz squares through bandpass */
+  private synthCowbell(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(0.4, time);
+
     const filter = ctx.createBiquadFilter();
-
     filter.type = 'bandpass';
     filter.frequency.value = 700;
-    filter.Q.value = 2;
+    filter.Q.value = 3;
 
-    gain.gain.setValueAtTime(0.4, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.3);
+    const masterGain = ctx.createGain();
+    masterGain.gain.setValueAtTime(g, t);
+    masterGain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
 
-    for (const freq of freqs) {
+    for (const freq of [562, 845]) {
       const osc = ctx.createOscillator();
       osc.type = 'square';
-      osc.frequency.setValueAtTime(freq, time);
+      osc.frequency.setValueAtTime(freq, t);
       osc.connect(filter);
-      osc.start(time);
-      osc.stop(time + 0.35);
+      osc.start(t);
+      osc.stop(t + 0.38);
     }
 
-    filter.connect(gain);
-    gain.connect(ctx.destination);
+    filter.connect(masterGain);
+    masterGain.connect(ctx.destination);
+    if (this.convolver) masterGain.connect(this.convolver);
   }
 
   private advanceBeat() {
@@ -242,5 +371,4 @@ export class AudioEngine {
   }
 }
 
-// Singleton instance — shared across the app via the useAudioEngine hook.
 export const audioEngine = new AudioEngine();

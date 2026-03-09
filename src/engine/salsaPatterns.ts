@@ -18,11 +18,24 @@ export type ClavePattern = {
 };
 
 /**
- * 小数ビート位置 (1-8) → AudioEngine 用の 0-indexed 整数ステップに変換
- * 例: 6.5 → Math.round(6.5) - 1 = 6
+ * 小数ビート位置 (1〜8) → 16ステップグリッドの 0-indexed インデックスに変換
+ *
+ * 16ステップ = 各ビートを「表拍」と「裏拍(and)」に分割
+ *   index = (beat - 1) * 2         → 表拍
+ *   index = (beat - 1) * 2 + 1    → 裏拍 (frac ≈ 0.5)
+ *   frac ≈ 0.3 (Rumba late) は表拍ステップに割り当て（視覚は ClaveBeatGrid で表現）
+ *
+ * 例: 6.5 → (6-1)*2 + 1 = 11  (6の裏拍)
+ *     8.0 → (8-1)*2     = 14  (8の表拍)
+ *     8.3 → (8-1)*2     = 14  (Rumba: 8の表拍として扱う)
  */
 export function toEngineSteps(positions: number[]): Set<number> {
-  return new Set(positions.map(p => Math.round(p) - 1));
+  return new Set(positions.map(pos => {
+    const beat = Math.floor(pos);
+    const frac = +(pos - beat).toFixed(2);
+    const baseIndex = (beat - 1) * 2;
+    return frac >= 0.4 ? baseIndex + 1 : baseIndex;
+  }));
 }
 
 /** 小数ビート位置 → タイル番号 + HitType に変換 */

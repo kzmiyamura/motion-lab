@@ -75,11 +75,11 @@ export function useAudioEngine() {
     setPresetState('Standard');
   }, []);
 
-  /** Salsa Clave パターンを選んだとき AudioEngine にも反映する */
+  /** Salsa Clave パターンを選んだとき AudioEngine にも反映する (16ステップグリッド) */
   const applyClavePattern = useCallback((pattern: ClavePattern) => {
     const steps = toEngineSteps(pattern.beatPositions);
-    audioEngine.beatsPerBar = 8;
-    setTotalStepsState(8);
+    audioEngine.beatsPerBar = 16;
+    setTotalStepsState(16);
     setCheckedSteps(steps);
     audioEngine.setActiveSteps(steps);
     setPresetState('Standard');

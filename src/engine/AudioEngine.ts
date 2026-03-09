@@ -75,8 +75,8 @@ export class AudioEngine {
 
   private tracks: Map<TrackId, Track> = new Map([
     ['clave',   { id: 'clave',   pattern: new Set(DEFAULT_CLAVE_STEPS),   muted: false }],
-    ['conga',   { id: 'conga',   pattern: new Set(DEFAULT_CONGA_STEPS),   muted: false }],
-    ['cowbell', { id: 'cowbell', pattern: new Set(DEFAULT_COWBELL_STEPS), muted: false }],
+    ['conga',   { id: 'conga',   pattern: new Set(DEFAULT_CONGA_STEPS),   muted: true  }],
+    ['cowbell', { id: 'cowbell', pattern: new Set(DEFAULT_COWBELL_STEPS), muted: true  }],
   ]);
 
   // Samples: 2 round-robin buffers per instrument

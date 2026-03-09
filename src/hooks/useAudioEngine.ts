@@ -68,14 +68,18 @@ export function useAudioEngine() {
   // isPlaying が false になると useWakeLock が自動的に Wake Lock を解放する
   useEffect(() => {
     const handler = () => {
-      if (
-        document.visibilityState === 'hidden' &&
-        !backgroundPlayRef.current &&
-        isPlayingRef.current
-      ) {
-        audioEngine.stop();
-        setIsPlaying(false);
-        setCurrentBeat(-1);
+      if (document.visibilityState === 'hidden') {
+        if (!backgroundPlayRef.current && isPlayingRef.current) {
+          audioEngine.stop();
+          setIsPlaying(false);
+          setCurrentBeat(-1);
+        }
+      } else if (document.visibilityState === 'visible') {
+        // エンジンが停止済みなのに React state が「再生中」のままなら同期する
+        if (!audioEngine.isPlaying && isPlayingRef.current) {
+          setIsPlaying(false);
+          setCurrentBeat(-1);
+        }
       }
     };
     document.addEventListener('visibilitychange', handler);

@@ -1,14 +1,19 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { audioEngine, type BeatCallback } from '../engine/AudioEngine';
+import { PRESETS, type PresetName, type TotalSteps } from '../engine/presets';
 
 export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [bpm, setBpmState] = useState(audioEngine.bpm);
   const [currentBeat, setCurrentBeat] = useState(-1);
+  const [totalSteps, setTotalStepsState] = useState<TotalSteps>(4);
+  const [checkedSteps, setCheckedSteps] = useState<Set<number>>(
+    new Set(PRESETS['Standard'].pattern)
+  );
+  const [preset, setPresetState] = useState<PresetName>('Standard');
 
-  // Keep latest beat callback stable without re-subscribing
+  // Beat コールバックを最新の状態に保つ（再購読を回避）
   const beatHandlerRef = useRef<BeatCallback | null>(null);
-
   useEffect(() => {
     beatHandlerRef.current = ({ beat }) => setCurrentBeat(beat);
   });
@@ -16,6 +21,11 @@ export function useAudioEngine() {
   useEffect(() => {
     const unsubscribe = audioEngine.onBeat((b) => beatHandlerRef.current?.(b));
     return () => { unsubscribe(); };
+  }, []);
+
+  // 初期状態をエンジンに反映
+  useEffect(() => {
+    audioEngine.setActiveSteps(new Set(PRESETS['Standard'].pattern));
   }, []);
 
   const start = useCallback(() => {
@@ -34,10 +44,47 @@ export function useAudioEngine() {
     setBpmState(value);
   }, []);
 
+  const setTotalSteps = useCallback((steps: TotalSteps) => {
+    audioEngine.beatsPerBar = steps;
+    setTotalStepsState(steps);
+    setPresetState('Standard');
+    const allSteps = new Set(Array.from({ length: steps }, (_, i) => i));
+    setCheckedSteps(allSteps);
+    audioEngine.setActiveSteps(allSteps);
+  }, []);
+
+  const applyPreset = useCallback((name: PresetName) => {
+    const p = PRESETS[name];
+    audioEngine.beatsPerBar = p.totalSteps;
+    setTotalStepsState(p.totalSteps);
+    setPresetState(name);
+    const steps = new Set(p.pattern);
+    setCheckedSteps(steps);
+    audioEngine.setActiveSteps(steps);
+  }, []);
+
+  const toggleStep = useCallback((step: number) => {
+    setCheckedSteps(prev => {
+      const next = new Set(prev);
+      if (next.has(step)) next.delete(step);
+      else next.add(step);
+      audioEngine.setActiveSteps(next);
+      return next;
+    });
+    setPresetState('Standard');
+  }, []);
+
   const loadAudioFile = useCallback(async (file: File) => {
     const arrayBuffer = await file.arrayBuffer();
     await audioEngine.loadBuffer(arrayBuffer);
   }, []);
 
-  return { isPlaying, bpm, setBpm, currentBeat, start, stop, loadAudioFile };
+  return {
+    isPlaying, bpm, setBpm,
+    currentBeat, totalSteps, setTotalSteps,
+    checkedSteps, toggleStep,
+    preset, applyPreset,
+    start, stop,
+    loadAudioFile,
+  };
 }

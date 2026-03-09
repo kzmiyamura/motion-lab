@@ -1,0 +1,82 @@
+.grid {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  max-width: 600px;
+}
+
+.step {
+  aspect-ratio: 1;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.08s, box-shadow 0.08s, background 0.1s;
+  padding: 0;
+  position: relative;
+}
+
+.step:active {
+  transform: scale(0.92);
+}
+
+/* ── Accent marker (step 0, step 8) ── */
+.accent::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+/* ── Checked (音が鳴る) ── */
+.checked {
+  background: #2a2a4a;
+  border-color: #7c6bff;
+  color: #c0b8ff;
+}
+
+.checked.accent {
+  border-color: #ff9f43;
+  color: #ffcf9f;
+  background: #2a1f0a;
+}
+
+/* ── Unchecked (サイレント) ── */
+.unchecked {
+  background: #111128;
+  border-color: #2a2a4a;
+  color: #3a3a6a;
+}
+
+/* ── Active (現在再生中) ── */
+.active {
+  background: #7c6bff;
+  border-color: #9d8fff;
+  color: #fff;
+  box-shadow: 0 0 16px 4px rgba(124, 107, 255, 0.55);
+  transform: scale(1.08);
+}
+
+.activeAccent {
+  background: #ff9f43;
+  border-color: #ffbf7f;
+  color: #fff;
+  box-shadow: 0 0 16px 4px rgba(255, 159, 67, 0.55);
+  transform: scale(1.08);
+}
+
+.stepNumber {
+  font-size: 0.65rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+  user-select: none;
+}

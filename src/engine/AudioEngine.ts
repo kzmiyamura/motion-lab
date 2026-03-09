@@ -30,6 +30,8 @@ export class AudioEngine {
   private _beatsPerBar = 4;
   private _isPlaying = false;
   private customBuffer: AudioBuffer | null = null;
+  /** 音を鳴らす 0-indexed ステップ番号。null = 全ステップ再生 */
+  private activeSteps: Set<number> | null = null;
 
   // ── Public API ────────────────────────────────────────────────────────────
 
@@ -45,6 +47,11 @@ export class AudioEngine {
   onBeat(cb: BeatCallback) {
     this.beatCallbacks.add(cb);
     return () => this.beatCallbacks.delete(cb);
+  }
+
+  /** どのステップで音を鳴らすかを設定する。null を渡すと全ステップ再生。 */
+  setActiveSteps(steps: Set<number> | null) {
+    this.activeSteps = steps;
   }
 
   /** Load a WAV/audio file as the click sound. Falls back to SynthClave. */
@@ -102,14 +109,17 @@ export class AudioEngine {
 
   private scheduleBeat(time: number, beat: number) {
     const ctx = this.getContext();
+    const shouldPlay = this.activeSteps === null || this.activeSteps.has(beat);
 
-    if (this.customBuffer) {
-      const src = ctx.createBufferSource();
-      src.buffer = this.customBuffer;
-      src.connect(ctx.destination);
-      src.start(time);
-    } else {
-      this.playSynthClave(ctx, time, beat === 0);
+    if (shouldPlay) {
+      if (this.customBuffer) {
+        const src = ctx.createBufferSource();
+        src.buffer = this.customBuffer;
+        src.connect(ctx.destination);
+        src.start(time);
+      } else {
+        this.playSynthClave(ctx, time, beat === 0);
+      }
     }
 
     // Notify callbacks (fire from JS thread at the scheduled wall-clock time)

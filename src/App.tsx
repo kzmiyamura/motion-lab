@@ -1,11 +1,18 @@
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { ControlPanel } from './components/ControlPanel';
-import { VisualMetronome } from './components/VisualMetronome';
+import { StepGrid } from './components/StepGrid';
+import { PresetSelector } from './components/PresetSelector';
 import styles from './App.module.css';
 
 function App() {
-  const { isPlaying, bpm, setBpm, currentBeat, start, stop, loadAudioFile } =
-    useAudioEngine();
+  const {
+    isPlaying, bpm, setBpm,
+    currentBeat, totalSteps, setTotalSteps,
+    checkedSteps, toggleStep,
+    preset, applyPreset,
+    start, stop,
+    loadAudioFile,
+  } = useAudioEngine();
 
   return (
     <main className={styles.main}>
@@ -14,11 +21,19 @@ function App() {
         <p className={styles.subtitle}>High-Precision Dance Training & Motion Analysis</p>
       </header>
 
-      <section className={styles.metronomeSection}>
-        <VisualMetronome
-          currentBeat={currentBeat}
-          beatsPerBar={4}
-          isPlaying={isPlaying}
+      <section className={styles.section}>
+        <PresetSelector
+          totalSteps={totalSteps}
+          preset={preset}
+          onTotalStepsChange={setTotalSteps}
+          onPresetChange={applyPreset}
+        />
+
+        <StepGrid
+          totalSteps={totalSteps}
+          activeStep={currentBeat}
+          checkedSteps={checkedSteps}
+          onToggleStep={toggleStep}
         />
 
         <ControlPanel

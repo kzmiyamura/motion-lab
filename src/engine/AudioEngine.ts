@@ -119,6 +119,13 @@ export class AudioEngine {
     this.tracks.get(id)!.muted = muted;
   }
 
+  /** OS による強制 suspend からの復帰用。useSilentAudio の visibilitychange から呼ぶ。 */
+  resumeIfSuspended() {
+    if (this.context && this.context.state === 'suspended') {
+      this.context.resume().catch(() => {});
+    }
+  }
+
   toggleTrackMute(id: TrackId): boolean {
     const track = this.tracks.get(id)!;
     track.muted = !track.muted;

@@ -3,12 +3,26 @@ import { audioEngine, type BeatCallback, type TrackId } from '../engine/AudioEng
 import { toEngineSteps, type ClavePattern } from '../engine/salsaPatterns';
 import { storage } from '../engine/storage';
 import { useWakeLock } from './useWakeLock';
-import { useMediaSession } from './useMediaSession';
+import { useSilentAudio } from './useSilentAudio';
 
 export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
+
+  // start/stop を先に定義 → useSilentAudio の action handler に渡すため
+  const start = useCallback(() => {
+    audioEngine.start();
+    setIsPlaying(true);
+  }, []);
+
+  const stop = useCallback(() => {
+    audioEngine.stop();
+    setIsPlaying(false);
+    setCurrentBeat(-1);
+  }, []);
+
+  // 画面スリープ防止 + 無音ループ + Media Session（3層バックグラウンド対策）
   useWakeLock(isPlaying);
-  useMediaSession(isPlaying);
+  useSilentAudio(isPlaying, start, stop);
 
   // BPM: localStorage から復元。なければデフォルト 180（ミディアム）
   const [bpm, setBpmState] = useState<number>(() => {
@@ -30,7 +44,6 @@ export function useAudioEngine() {
   const [backgroundPlay, setBackgroundPlayState] = useState<boolean>(
     () => storage.getBackgroundPlay()
   );
-  // visibilitychange ハンドラ内でスタールクロージャを避けるため ref に同期
   const backgroundPlayRef = useRef(backgroundPlay);
   backgroundPlayRef.current = backgroundPlay;
   const isPlayingRef = useRef(isPlaying);
@@ -67,17 +80,6 @@ export function useAudioEngine() {
     };
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
-  }, []); // マウント時に一度だけ登録。値は ref 経由で参照
-
-  const start = useCallback(() => {
-    audioEngine.start();
-    setIsPlaying(true);
-  }, []);
-
-  const stop = useCallback(() => {
-    audioEngine.stop();
-    setIsPlaying(false);
-    setCurrentBeat(-1);
   }, []);
 
   const setBpm = useCallback((value: number) => {

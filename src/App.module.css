@@ -56,3 +56,30 @@
   margin: 0;
   align-self: flex-start;
 }
+
+@media (max-width: 480px) {
+  .main {
+    padding: 1.25rem 0.75rem 2rem;
+  }
+
+  .header {
+    margin-bottom: 1.25rem;
+  }
+
+  .title {
+    font-size: 1.75rem;
+  }
+
+  .subtitle {
+    font-size: 0.75rem;
+  }
+
+  .section {
+    gap: 1rem;
+    padding-bottom: 1.5rem;
+  }
+
+  .section + .section {
+    padding-top: 1.5rem;
+  }
+}

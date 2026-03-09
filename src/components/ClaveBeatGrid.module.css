@@ -133,3 +133,52 @@
 .legendDot.on   { background: #2a2060; border-color: #7c6bff; }
 .legendDot.and  { background: #1a1640; border-color: #5a52b0; }
 .legendDot.late { background: #2a1e00; border-color: #c07a00; }
+
+@media (max-width: 480px) {
+  .grid {
+    gap: 4px;
+  }
+
+  .tile {
+    border-radius: 7px;
+    gap: 1px;
+    border-width: 1.5px;
+  }
+
+  .beatNum {
+    font-size: 0.6rem;
+  }
+
+  .hitMark {
+    font-size: 0.8rem;
+  }
+
+  .and .hitMark,
+  .late .hitMark {
+    font-size: 0.85rem;
+  }
+
+  .hitCaption {
+    font-size: 0.38rem;
+  }
+
+  .downbeatDot {
+    width: 2px;
+    height: 2px;
+    bottom: 2px;
+  }
+
+  .legend {
+    gap: 0.9rem;
+  }
+
+  .legendItem {
+    font-size: 0.65rem;
+    gap: 4px;
+  }
+
+  .legendDot {
+    width: 8px;
+    height: 8px;
+  }
+}

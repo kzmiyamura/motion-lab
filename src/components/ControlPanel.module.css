@@ -106,3 +106,32 @@
 .fileInput {
   display: none;
 }
+
+@media (max-width: 480px) {
+  .panel {
+    padding: 1.25rem 1rem;
+    gap: 1.25rem;
+    border-radius: 10px;
+  }
+
+  .bpmRow {
+    gap: 0.75rem;
+  }
+
+  .bpmValue {
+    font-size: 1.2rem;
+    min-width: 2.5rem;
+  }
+
+  .btn {
+    /* 横いっぱいに広げてタップしやすく */
+    width: 100%;
+    padding: 0.85rem 1rem;
+    font-size: 1.05rem;
+  }
+
+  .fileLabel {
+    font-size: 0.75rem;
+    padding: 0.5rem 0.75rem;
+  }
+}

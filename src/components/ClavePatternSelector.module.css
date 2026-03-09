@@ -68,3 +68,30 @@
 .selected .description {
   color: #6868b0;
 }
+
+@media (max-width: 480px) {
+  .grid {
+    gap: 8px;
+  }
+
+  .card {
+    padding: 0.7rem 0.75rem;
+    gap: 0.3rem;
+    /* タップ領域を確保 */
+    min-height: 72px;
+  }
+
+  .name {
+    font-size: 0.8rem;
+  }
+
+  .tag {
+    font-size: 0.6rem;
+    padding: 1px 5px;
+  }
+
+  .description {
+    font-size: 0.68rem;
+    line-height: 1.4;
+  }
+}

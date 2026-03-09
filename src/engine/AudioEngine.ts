@@ -90,6 +90,11 @@ export class AudioEngine {
   // Reverb
   private convolver: ConvolverNode | null = null;
 
+  // バックグラウンド維持用: 極小ノイズをループ再生して AudioContext をアクティブに保つ
+  private silentSource: AudioBufferSourceNode | null = null;
+  // visibilitychange リスナー（一度だけ登録）
+  private visibilityHandler: (() => void) | null = null;
+
   // ── Public API ────────────────────────────────────────────────────────────
 
   get bpm() { return this._bpm; }
@@ -159,6 +164,8 @@ export class AudioEngine {
     this.currentBeat = 0;
     this.nextBeatTime = ctx.currentTime + 0.05;
     this.schedulerTimer = setInterval(() => this.schedule(), LOOKAHEAD_MS);
+    this.startSilentLoop(ctx);
+    this.attachVisibilityHandler();
   }
 
   stop() {
@@ -168,10 +175,15 @@ export class AudioEngine {
       clearInterval(this.schedulerTimer);
       this.schedulerTimer = null;
     }
+    this.stopSilentLoop();
   }
 
   dispose() {
     this.stop();
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+      this.visibilityHandler = null;
+    }
     if (this.context) {
       this.context.close();
       this.context = null;
@@ -183,6 +195,52 @@ export class AudioEngine {
   private getContext(): AudioContext {
     if (!this.context) this.context = new AudioContext();
     return this.context;
+  }
+
+  /**
+   * タブがバックグラウンドから復帰したとき、iOS Safari が
+   * AudioContext を自動 suspend するので、明示的に resume する。
+   * また、無音ループが途切れていれば再開する。
+   */
+  private attachVisibilityHandler() {
+    if (this.visibilityHandler) return; // 二重登録しない
+    this.visibilityHandler = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!this._isPlaying || !this.context) return;
+      this.context.resume().catch(() => {});
+      if (!this.silentSource) this.startSilentLoop(this.context);
+    };
+    document.addEventListener('visibilitychange', this.visibilityHandler);
+  }
+
+  /**
+   * 無音（極小ノイズ）バッファをループ再生し、AudioContext を
+   * バックグラウンドでもアクティブに維持する。
+   * 振幅 0.00001（約 -100 dB）= 聴覚上は完全に無音。
+   */
+  private startSilentLoop(ctx: AudioContext) {
+    this.stopSilentLoop();
+    const sampleRate = ctx.sampleRate;
+    const buf = ctx.createBuffer(1, sampleRate, sampleRate); // 1秒
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * 0.00001; // -100 dB ノイズ
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    src.connect(ctx.destination);
+    src.start();
+    this.silentSource = src;
+  }
+
+  private stopSilentLoop() {
+    if (!this.silentSource) return;
+    try {
+      this.silentSource.stop();
+      this.silentSource.disconnect();
+    } catch { /* already stopped */ }
+    this.silentSource = null;
   }
 
   /**

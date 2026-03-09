@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+
+<!--
+  MotionLab — iOS Info.plist テンプレート
+  =========================================
+  このファイルは `npx cap add ios` で生成される
+  ios/App/App/Info.plist のベースです。
+
+  `npx cap add ios` 実行後、生成された Info.plist に
+  以下のキー（UIBackgroundModes, NSMicrophoneUsageDescription）を
+  マージしてください。
+
+  Xcode での設定手順:
+    1. Signing & Capabilities → "+ Capability" → "Background Modes" を追加
+    2. "Audio, AirPlay, and Picture in Picture" にチェック
+  上記 GUI 操作が Info.plist への UIBackgroundModes 追記と等価です。
+-->
+
+<plist version="1.0">
+<dict>
+
+  <!-- ── アプリ基本情報 ── -->
+  <key>CFBundleDisplayName</key>
+  <string>MotionLab</string>
+
+  <key>CFBundleIdentifier</key>
+  <string>com.motionlab.app</string>
+
+  <key>CFBundleShortVersionString</key>
+  <string>1.0.0</string>
+
+  <key>CFBundleVersion</key>
+  <string>1</string>
+
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+
+  <key>LSRequiresIPhoneOS</key>
+  <true/>
+
+  <!-- ── バックグラウンドオーディオ ── -->
+  <!--
+    "audio" を指定することで、アプリがバックグラウンドに
+    移行しても AVAudioSession / Web Audio API の再生が継続する。
+    App Store 審査では「バックグラウンド再生が必要な理由」を
+    メタデータで説明すること（ダンストレーニング用リズム音源）。
+  -->
+  <key>UIBackgroundModes</key>
+  <array>
+    <string>audio</string>
+  </array>
+
+  <!-- ── AVAudioSession カテゴリ (Capacitor プラグイン or JS で設定) ── -->
+  <!--
+    WKWebView 内の Web Audio API をバックグラウンドで動かすには
+    AVAudioSession.Category を .playback に設定する必要がある。
+    Capacitor + @capacitor-community/native-audio プラグイン、
+    または Swift ブリッジコードで下記を呼び出す:
+
+      try AVAudioSession.sharedInstance().setCategory(
+        .playback, mode: .default, options: []
+      )
+      try AVAudioSession.sharedInstance().setActive(true)
+  -->
+
+  <!-- ── プライバシー説明文 ── -->
+  <!-- マイク使用時（将来のモーション解析機能用）に必要 -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>MotionLab はダンスの動作解析のためにマイクを使用します。</string>
+
+  <!-- ── UI 設定 ── -->
+  <key>UIStatusBarStyle</key>
+  <string>UIStatusBarStyleLightContent</string>
+
+  <key>UIViewControllerBasedStatusBarAppearance</key>
+  <false/>
+
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+  </array>
+
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+
+  <!-- iOS 13+ ダークモード強制（アプリが独自ダークUIを持つため） -->
+  <key>UIUserInterfaceStyle</key>
+  <string>Dark</string>
+
+</dict>
+</plist>

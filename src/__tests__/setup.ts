@@ -24,7 +24,15 @@ class MockAudioContext {
   }
 
   createBufferSource() {
-    return { buffer: null, connect: vi.fn(), start: vi.fn() };
+    return {
+      buffer: null as AudioBuffer | null,
+      loop: false,
+      playbackRate: { value: 1 },
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      disconnect: vi.fn(),
+    };
   }
 
   createBiquadFilter() {

@@ -3,10 +3,12 @@ import { audioEngine, type BeatCallback, type TrackId } from '../engine/AudioEng
 import { toEngineSteps, type ClavePattern } from '../engine/salsaPatterns';
 import { storage } from '../engine/storage';
 import { useWakeLock } from './useWakeLock';
+import { useMediaSession } from './useMediaSession';
 
 export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
   useWakeLock(isPlaying);
+  useMediaSession(isPlaying);
   // BPM: localStorage から復元。なければデフォルト 180（ミディアム）
   const [bpm, setBpmState] = useState<number>(() => {
     const saved = storage.getBpm();

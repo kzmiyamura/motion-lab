@@ -9,6 +9,8 @@ const baseProps = {
   onStop: vi.fn(),
   onBpmChange: vi.fn(),
   onFileLoad: vi.fn(),
+  backgroundPlay: false,
+  onBackgroundPlayChange: vi.fn(),
 };
 
 describe('ControlPanel', () => {

@@ -13,6 +13,7 @@ function App() {
     isPlaying, bpm, setBpm,
     currentBeat,
     mutedTracks, toggleTrackMute,
+    backgroundPlay, setBackgroundPlay,
     applyClavePattern,
     start, stop,
     loadAudioFile,
@@ -72,6 +73,8 @@ function App() {
           onStop={stop}
           onBpmChange={setBpm}
           onFileLoad={loadAudioFile}
+          backgroundPlay={backgroundPlay}
+          onBackgroundPlayChange={setBackgroundPlay}
         />
       </section>
     </main>

@@ -182,6 +182,67 @@
   display: none;
 }
 
+/* ── 設定行 ── */
+.settingsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: #0e0e1e;
+  border-radius: 8px;
+  border: 1px solid #1e1e3a;
+}
+
+.settingsLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #a0a0c0;
+}
+
+.settingsSub {
+  font-size: 0.65rem;
+  font-weight: 400;
+  color: #4040a0;
+}
+
+/* iOS スタイルのトグルスイッチ */
+.toggle {
+  flex-shrink: 0;
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  border: none;
+  background: #2a2a4a;
+  cursor: pointer;
+  transition: background 0.2s;
+  padding: 0;
+}
+
+.toggleOn {
+  background: #7c6bff;
+}
+
+.toggleThumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform 0.2s;
+}
+
+.toggleOn .toggleThumb {
+  transform: translateX(18px);
+}
+
 @media (max-width: 480px) {
   .panel {
     padding: 1.25rem 1rem;

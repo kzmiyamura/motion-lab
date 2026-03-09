@@ -1,9 +1,10 @@
 /** localStorage のキー定義と読み書きユーティリティ */
 
 const KEYS = {
-  bpm:         'motionlab:bpm',
-  patternId:   'motionlab:patternId',
-  mutedTracks: 'motionlab:mutedTracks',
+  bpm:            'motionlab:bpm',
+  patternId:      'motionlab:patternId',
+  mutedTracks:    'motionlab:mutedTracks',
+  backgroundPlay: 'motionlab:backgroundPlay',
 } as const;
 
 function load<T>(key: string, fallback: T, parse: (v: string) => T): T {
@@ -28,4 +29,7 @@ export const storage = {
 
   getMutedTracks: () => load(KEYS.mutedTracks, ['conga', 'cowbell'] as string[], v => JSON.parse(v) as string[]),
   setMutedTracks: (ids: string[]) => save(KEYS.mutedTracks, JSON.stringify(ids)),
+
+  getBackgroundPlay: ()           => load(KEYS.backgroundPlay, false, v => v === 'true'),
+  setBackgroundPlay: (v: boolean) => save(KEYS.backgroundPlay, String(v)),
 };

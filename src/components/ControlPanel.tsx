@@ -9,6 +9,8 @@ type Props = {
   onStop: () => void;
   onBpmChange: (bpm: number) => void;
   onFileLoad: (file: File) => void;
+  backgroundPlay: boolean;
+  onBackgroundPlayChange: (v: boolean) => void;
 };
 
 export function ControlPanel({
@@ -18,6 +20,8 @@ export function ControlPanel({
   onStop,
   onBpmChange,
   onFileLoad,
+  backgroundPlay,
+  onBackgroundPlayChange,
 }: Props) {
   const activeCategoryId = getActiveCategoryId(bpm);
 
@@ -105,6 +109,25 @@ export function ControlPanel({
             className={styles.fileInput}
           />
         </label>
+      </div>
+
+      {/* ── 設定 ── */}
+      <div className={styles.settingsRow}>
+        <span className={styles.settingsLabel}>
+          バックグラウンド再生
+          <span className={styles.settingsSub}>
+            {backgroundPlay ? 'タブを離れても継続' : '非表示時に自動停止'}
+          </span>
+        </span>
+        <button
+          role="switch"
+          aria-checked={backgroundPlay}
+          aria-label="バックグラウンド再生"
+          className={`${styles.toggle} ${backgroundPlay ? styles.toggleOn : ''}`}
+          onClick={() => onBackgroundPlayChange(!backgroundPlay)}
+        >
+          <span className={styles.toggleThumb} />
+        </button>
       </div>
     </div>
   );

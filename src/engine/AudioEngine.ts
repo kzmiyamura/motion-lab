@@ -70,8 +70,8 @@ const REVERB_WET: Record<TrackId, number> = {
 const TRACK_GAIN: Record<TrackId, number> = {
   clave:         0.85,
   conga:         1.40,
-  'cowbell-low':  0.60,
-  'cowbell-high': 0.90,
+  'cowbell-low':  0.28,
+  'cowbell-high': 0.40,
 };
 
 // Default patterns (16 steps = 2 bars of 4/4 at 8th-note subdivision)

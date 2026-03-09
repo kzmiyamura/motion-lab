@@ -1,13 +1,88 @@
 .panel {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.25rem;
   padding: 1.5rem 2rem;
   background: #1a1a2e;
   border-radius: 12px;
   border: 1px solid #2a2a4a;
   width: 100%;
-  max-width: 480px;
+  max-width: 520px;
+}
+
+/* ── BPM カテゴリグリッド (2×2) ── */
+.categoryGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.catBtn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 0.65rem 0.75rem;
+  border-radius: 9px;
+  border: 1.5px solid #2a2a4a;
+  background: #0e0e22;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+  min-height: 68px;
+}
+
+.catBtn:hover {
+  border-color: #4a42a0;
+  background: #13132a;
+}
+
+.catBtnActive {
+  border-color: #7c6bff;
+  background: #16143a;
+  box-shadow: 0 0 0 2px rgba(124, 107, 255, 0.2);
+}
+
+.catLabel {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #c0b8ff;
+  line-height: 1;
+}
+
+.catBtnActive .catLabel {
+  color: #fff;
+}
+
+.catSublabel {
+  font-size: 0.65rem;
+  color: #5050a0;
+  line-height: 1;
+}
+
+.catBtnActive .catSublabel {
+  color: #8878e0;
+}
+
+.catRange {
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #7c6bff;
+  line-height: 1;
+  margin-top: 2px;
+}
+
+/* アクティブカテゴリの説明文 */
+.feelText {
+  font-size: 0.75rem;
+  color: #6868b0;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid #7c6bff;
+  background: #0e0e1e;
+  border-radius: 0 6px 6px 0;
 }
 
 .bpmRow {
@@ -110,8 +185,33 @@
 @media (max-width: 480px) {
   .panel {
     padding: 1.25rem 1rem;
-    gap: 1.25rem;
+    gap: 1rem;
     border-radius: 10px;
+  }
+
+  .categoryGrid {
+    gap: 6px;
+  }
+
+  .catBtn {
+    padding: 0.55rem 0.65rem;
+    min-height: 60px;
+  }
+
+  .catLabel {
+    font-size: 0.78rem;
+  }
+
+  .catSublabel {
+    font-size: 0.6rem;
+  }
+
+  .catRange {
+    font-size: 0.68rem;
+  }
+
+  .feelText {
+    font-size: 0.7rem;
   }
 
   .bpmRow {

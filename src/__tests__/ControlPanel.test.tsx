@@ -39,12 +39,25 @@ describe('ControlPanel', () => {
   it('calls onBpmChange with numeric value on slider change', () => {
     const onBpmChange = vi.fn();
     render(<ControlPanel {...baseProps} onBpmChange={onBpmChange} />);
-    fireEvent.change(screen.getByRole('slider'), { target: { value: '140' } });
-    expect(onBpmChange).toHaveBeenCalledWith(140);
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '180' } });
+    expect(onBpmChange).toHaveBeenCalledWith(180);
   });
 
   it('displays the current BPM', () => {
-    render(<ControlPanel {...baseProps} bpm={95} />);
-    expect(screen.getByText('95')).toBeInTheDocument();
+    render(<ControlPanel {...baseProps} bpm={180} />);
+    expect(screen.getByText('180')).toBeInTheDocument();
+  });
+
+  it('calls onBpmChange when a category button is clicked', () => {
+    const onBpmChange = vi.fn();
+    render(<ControlPanel {...baseProps} onBpmChange={onBpmChange} />);
+    fireEvent.click(screen.getByText('ミディアム'));
+    expect(onBpmChange).toHaveBeenCalledWith(180);
+  });
+
+  it('highlights the active category based on current BPM', () => {
+    render(<ControlPanel {...baseProps} bpm={210} />);
+    // BPM 210 はファスト(196-225)に該当
+    expect(screen.getByText('ファスト').closest('button')).toHaveAttribute('class', expect.stringContaining('catBtnActive'));
   });
 });

@@ -1,8 +1,9 @@
 name = "motion-lab"
 compatibility_date = "2024-09-23"
 
-# Cloudflare Pages ビルド成果物
-pages_build_output_dir = "dist"
+# Workers Static Assets — dist を静的サイトとして配信
+[assets]
+directory = "./dist"
 
 [vars]
 APP_ENV = "production"

@@ -5,6 +5,16 @@ import { storage } from '../engine/storage';
 import { useWakeLock } from './useWakeLock';
 import { useSilentAudio } from './useSilentAudio';
 
+/** 現在のスキーマで有効な TrackId 一覧 — 旧データの不正 ID をフィルタするため */
+const VALID_TRACK_IDS: readonly TrackId[] = [
+  'clave',
+  'conga-open', 'conga-slap', 'conga-heel',
+  'cowbell-low', 'cowbell-high',
+];
+
+const CONGA_IDS:   readonly TrackId[] = ['conga-open', 'conga-slap', 'conga-heel'];
+const COWBELL_IDS: readonly TrackId[] = ['cowbell-low', 'cowbell-high'];
+
 export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
 
@@ -33,12 +43,10 @@ export function useAudioEngine() {
   const [currentBeat, setCurrentBeat] = useState(-1);
 
   // トラックのミュート状態: localStorage から復元してエンジンにも反映
-  const VALID_TRACK_IDS: TrackId[] = ['clave', 'conga', 'cowbell-low', 'cowbell-high'];
-
+  // storage モジュール内の migrate() で旧バージョンは自動的にリセット済み
   const [mutedTracks, setMutedTracks] = useState<Set<TrackId>>(() => {
-    // 旧バージョン ('cowbell') などの無効な ID を除外してからエンジンに適用
     const saved = storage.getMutedTracks().filter(
-      (id): id is TrackId => VALID_TRACK_IDS.includes(id as TrackId)
+      (id): id is TrackId => (VALID_TRACK_IDS as string[]).includes(id),
     );
     const muted = new Set<TrackId>(saved);
     for (const id of muted) audioEngine.setTrackMuted(id, true);
@@ -70,7 +78,6 @@ export function useAudioEngine() {
   }, []);
 
   // バックグラウンド制御: スイッチが OFF なら hidden 時に強制停止
-  // isPlaying が false になると useWakeLock が自動的に Wake Lock を解放する
   useEffect(() => {
     const handler = () => {
       if (document.visibilityState === 'hidden') {
@@ -80,7 +87,6 @@ export function useAudioEngine() {
           setCurrentBeat(-1);
         }
       } else if (document.visibilityState === 'visible') {
-        // エンジンが停止済みなのに React state が「再生中」のままなら同期する
         if (!audioEngine.isPlaying && isPlayingRef.current) {
           setIsPlaying(false);
           setCurrentBeat(-1);
@@ -119,19 +125,30 @@ export function useAudioEngine() {
     });
   }, []);
 
-  /** カウベル両トラックを一括 ON/OFF する Master Mute */
+  /** コンガ3トラックを一括 ON/OFF する Master Mute */
+  const toggleCongaMute = useCallback(() => {
+    setMutedTracks(prev => {
+      const mute = !CONGA_IDS.every(id => prev.has(id));
+      for (const id of CONGA_IDS) audioEngine.setTrackMuted(id, mute);
+      const next = new Set(prev);
+      for (const id of CONGA_IDS) {
+        if (mute) next.add(id);
+        else next.delete(id);
+      }
+      storage.setMutedTracks([...next]);
+      return next;
+    });
+  }, []);
+
+  /** カウベル2トラックを一括 ON/OFF する Master Mute */
   const toggleCowbellMute = useCallback(() => {
     setMutedTracks(prev => {
-      const mute = !(prev.has('cowbell-low') && prev.has('cowbell-high'));
-      audioEngine.setTrackMuted('cowbell-low',  mute);
-      audioEngine.setTrackMuted('cowbell-high', mute);
+      const mute = !COWBELL_IDS.every(id => prev.has(id));
+      for (const id of COWBELL_IDS) audioEngine.setTrackMuted(id, mute);
       const next = new Set(prev);
-      if (mute) {
-        next.add('cowbell-low');
-        next.add('cowbell-high');
-      } else {
-        next.delete('cowbell-low');
-        next.delete('cowbell-high');
+      for (const id of COWBELL_IDS) {
+        if (mute) next.add(id);
+        else next.delete(id);
       }
       storage.setMutedTracks([...next]);
       return next;
@@ -143,12 +160,14 @@ export function useAudioEngine() {
     await audioEngine.loadBuffer(arrayBuffer);
   }, []);
 
-  const cowbellMuted = mutedTracks.has('cowbell-low') && mutedTracks.has('cowbell-high');
+  const congaMuted   = CONGA_IDS.every(id => mutedTracks.has(id));
+  const cowbellMuted = COWBELL_IDS.every(id => mutedTracks.has(id));
 
   return {
     isPlaying, bpm, setBpm,
     currentBeat,
     mutedTracks, toggleTrackMute,
+    congaMuted,   toggleCongaMute,
     cowbellMuted, toggleCowbellMute,
     backgroundPlay, setBackgroundPlay,
     applyClavePattern,

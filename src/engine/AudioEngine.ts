@@ -15,7 +15,7 @@
  * Fixed: 16 steps per bar, subdivision=2 (8th notes)
  */
 
-export type TrackId = 'clave' | 'conga' | 'cowbell-low' | 'cowbell-high';
+export type TrackId = 'clave' | 'conga-open' | 'conga-slap' | 'conga-heel' | 'cowbell-low' | 'cowbell-high';
 
 export type Track = {
   id: TrackId;
@@ -42,16 +42,27 @@ const SAMPLE_URLS: Record<TrackId, string[]> = {
     `${VSCO}/Claves1_Hit_v2_rr1_Sum.wav`,
     `${VSCO}/Claves1_Hit_v2_rr2_Sum.wav`,
   ],
-  conga: [
+  // Conga Open: full resonant open tone (v2 = louder velocity)
+  'conga-open': [
     `${VSCO}/Tumba-HitN_v2_rr1_Sum.wav`,
     `${VSCO}/Tumba-HitN_v2_rr2_Sum.wav`,
   ],
-  // Low (open): v2 = louder velocity layer → fuller resonant tone
+  // Conga Slap: sharp dry accent (slap variant; falls back to synth if absent)
+  'conga-slap': [
+    `${VSCO}/Tumba-Slap_v2_rr1_Sum.wav`,
+    `${VSCO}/Tumba-Slap_v2_rr2_Sum.wav`,
+  ],
+  // Conga Heel/Toe: ghost note (v1 = softer velocity layer)
+  'conga-heel': [
+    `${VSCO}/Tumba-HitN_v1_rr1_Sum.wav`,
+    `${VSCO}/Tumba-HitN_v1_rr2_Sum.wav`,
+  ],
+  // Cowbell Low (open): v2 = fuller resonant tone
   'cowbell-low': [
     `${VSCO}/Cowbell1_Hit_v2_rr1_Sum.wav`,
     `${VSCO}/Cowbell1_Hit_v2_rr2_Sum.wav`,
   ],
-  // High (muted): v1 = softer velocity layer → shorter, brighter attack
+  // Cowbell High (muted): v1 = shorter, brighter attack
   'cowbell-high': [
     `${VSCO}/Cowbell1_Hit_v1_rr1_Sum.wav`,
     `${VSCO}/Cowbell1_Hit_v1_rr2_Sum.wav`,
@@ -61,7 +72,9 @@ const SAMPLE_URLS: Record<TrackId, string[]> = {
 // Reverb wet level per instrument (clave is traditionally dry)
 const REVERB_WET: Record<TrackId, number> = {
   clave:         0.08,
-  conga:         0.22,
+  'conga-open':  0.22,
+  'conga-slap':  0.12,
+  'conga-heel':  0.06,
   'cowbell-low':  0.18,
   'cowbell-high': 0.10,
 };
@@ -69,15 +82,23 @@ const REVERB_WET: Record<TrackId, number> = {
 // Base gain per instrument — adjust to balance perceived loudness
 const TRACK_GAIN: Record<TrackId, number> = {
   clave:         0.85,
-  conga:         1.40,
+  'conga-open':  1.40,  // dominant hit
+  'conga-slap':  0.90,  // medium accent
+  'conga-heel':  0.35,  // ghost notes — quiet
   'cowbell-low':  0.28,
   'cowbell-high': 0.40,
 };
 
 // Default patterns (16 steps = 2 bars of 4/4 at 8th-note subdivision)
-// Steps: 0=beat1, 2=beat2, 4=beat3, 6=beat4 (bar1); 8-14 (bar2)
+// Grid: 0=beat1, 2=beat2, 4=beat3, 6=beat4 per bar (× 2 bars)
 const DEFAULT_CLAVE_STEPS        = new Set([2, 4, 8, 11, 14]);
-const DEFAULT_CONGA_STEPS        = new Set([6, 14]);
+// Tumbao conga — classic salsa 2-bar pattern:
+//   Heel/Toe: ghost notes on beat 1 & "and of 2" each bar → [0,3,8,11]
+//   Slap:     sharp accent on beat 2 each bar             → [2,10]
+//   Open:     "pomm-pom" — and-of-3 + beat 4 each bar    → [5,6,13,14]
+const DEFAULT_CONGA_HEEL_STEPS   = new Set([0, 3, 8, 11]);
+const DEFAULT_CONGA_SLAP_STEPS   = new Set([2, 10]);
+const DEFAULT_CONGA_OPEN_STEPS   = new Set([5, 6, 13, 14]);
 // Montuno campana: Low on all quarter beats, High on syncopated upbeats
 const DEFAULT_COWBELL_LOW_STEPS  = new Set([0, 2, 4, 6, 8, 10, 12, 14]);
 const DEFAULT_COWBELL_HIGH_STEPS = new Set([3, 5, 11, 13]);
@@ -93,17 +114,21 @@ export class AudioEngine {
 
   private tracks: Map<TrackId, Track> = new Map([
     ['clave',        { id: 'clave',        pattern: new Set(DEFAULT_CLAVE_STEPS),        muted: false }],
-    ['conga',        { id: 'conga',        pattern: new Set(DEFAULT_CONGA_STEPS),        muted: true  }],
+    ['conga-open',   { id: 'conga-open',   pattern: new Set(DEFAULT_CONGA_OPEN_STEPS),   muted: true  }],
+    ['conga-slap',   { id: 'conga-slap',   pattern: new Set(DEFAULT_CONGA_SLAP_STEPS),   muted: true  }],
+    ['conga-heel',   { id: 'conga-heel',   pattern: new Set(DEFAULT_CONGA_HEEL_STEPS),   muted: true  }],
     ['cowbell-low',  { id: 'cowbell-low',  pattern: new Set(DEFAULT_COWBELL_LOW_STEPS),  muted: true  }],
     ['cowbell-high', { id: 'cowbell-high', pattern: new Set(DEFAULT_COWBELL_HIGH_STEPS), muted: true  }],
   ]);
 
   // Samples: 2 round-robin buffers per instrument
   private sampleBuffers: Map<TrackId, AudioBuffer[]> = new Map([
-    ['clave', []], ['conga', []], ['cowbell-low', []], ['cowbell-high', []],
+    ['clave', []], ['conga-open', []], ['conga-slap', []], ['conga-heel', []],
+    ['cowbell-low', []], ['cowbell-high', []],
   ]);
   private rrCounters: Map<TrackId, number> = new Map([
-    ['clave', 0], ['conga', 0], ['cowbell-low', 0], ['cowbell-high', 0],
+    ['clave', 0], ['conga-open', 0], ['conga-slap', 0], ['conga-heel', 0],
+    ['cowbell-low', 0], ['cowbell-high', 0],
   ]);
 
   // Reverb
@@ -381,7 +406,9 @@ export class AudioEngine {
   private playSynth(ctx: AudioContext, id: TrackId, time: number) {
     switch (id) {
       case 'clave':        return this.synthClave(ctx, time);
-      case 'conga':        return this.synthConga(ctx, time);
+      case 'conga-open':   return this.synthCongaOpen(ctx, time);
+      case 'conga-slap':   return this.synthCongaSlap(ctx, time);
+      case 'conga-heel':   return this.synthCongaHeel(ctx, time);
       case 'cowbell-low':  return this.synthCowbellLow(ctx, time);
       case 'cowbell-high': return this.synthCowbellHigh(ctx, time);
     }
@@ -408,9 +435,12 @@ export class AudioEngine {
     masterGain.connect(ctx.destination);
   }
 
-  /** Conga Tumbao: sine with pitch-drop envelope + noise transient */
-  private synthConga(ctx: AudioContext, time: number) {
-    const { gain: g, time: t } = this.humanize(0.7, time);
+  /**
+   * Conga Open (ドーン): low resonant open tone.
+   * Sine with pitch-drop envelope — 200Hz → 65Hz over 0.15s.
+   */
+  private synthCongaOpen(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['conga-open'], time);
 
     const body = ctx.createOscillator();
     const bodyGain = ctx.createGain();
@@ -424,6 +454,50 @@ export class AudioEngine {
     body.stop(t + 0.24);
     bodyGain.connect(ctx.destination);
     if (this.convolver) bodyGain.connect(this.convolver);
+  }
+
+  /**
+   * Conga Slap (パシッ): sharp, dry high-frequency crack.
+   * Noise burst + high oscillator, very short decay (~50ms).
+   */
+  private synthCongaSlap(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['conga-slap'], time);
+
+    // High-pitched body
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(900, t);
+    osc.frequency.exponentialRampToValueAtTime(400, t + 0.04);
+
+    const oscGain = ctx.createGain();
+    oscGain.gain.setValueAtTime(g, t);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    osc.connect(oscGain);
+    osc.start(t);
+    osc.stop(t + 0.07);
+    oscGain.connect(ctx.destination);
+  }
+
+  /**
+   * Conga Heel/Toe (ゴソゴソ): muffled ghost note.
+   * Slow attack simulates palm pressed on drumhead, low freq, quiet.
+   */
+  private synthCongaHeel(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['conga-heel'], time);
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(180, t);
+    osc.frequency.exponentialRampToValueAtTime(120, t + 0.08);
+
+    const envGain = ctx.createGain();
+    envGain.gain.setValueAtTime(0, t);
+    envGain.gain.linearRampToValueAtTime(g, t + 0.02);   // slow attack
+    envGain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    osc.connect(envGain);
+    osc.start(t);
+    osc.stop(t + 0.16);
+    envGain.connect(ctx.destination);
   }
 
   /**

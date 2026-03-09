@@ -11,6 +11,8 @@ const baseProps = {
   onFileLoad: vi.fn(),
   backgroundPlay: false,
   onBackgroundPlayChange: vi.fn(),
+  congaMuted: true,
+  onCongaMuteToggle: vi.fn(),
   cowbellMuted: true,
   onCowbellMuteToggle: vi.fn(),
 };

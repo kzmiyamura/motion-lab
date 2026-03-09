@@ -8,34 +8,52 @@ type Props = {
   onToggleMute: (id: TrackId) => void;
 };
 
-const TRACKS: { id: TrackId; label: string; sublabel: string }[] = [
-  { id: 'clave',        label: 'Clave',        sublabel: 'Wood stick click'    },
-  { id: 'conga',        label: 'Conga',        sublabel: 'Tumbao pattern'      },
-  { id: 'cowbell-low',  label: 'Cowbell Low',  sublabel: 'Open / Campana'      },
-  { id: 'cowbell-high', label: 'Cowbell High', sublabel: 'Muted / Accent'      },
+const CONGA_TRACKS: { id: TrackId; label: string; sublabel: string }[] = [
+  { id: 'conga-open', label: 'Conga Open', sublabel: 'Open / ドーン' },
+  { id: 'conga-slap', label: 'Conga Slap', sublabel: 'Slap / パシッ'  },
+  { id: 'conga-heel', label: 'Conga Heel', sublabel: 'Heel・Toe / ゴソゴソ' },
+];
+
+const COWBELL_TRACKS: { id: TrackId; label: string; sublabel: string }[] = [
+  { id: 'cowbell-low',  label: 'Cowbell Low',  sublabel: 'Open / Campana'  },
+  { id: 'cowbell-high', label: 'Cowbell High', sublabel: 'Muted / Accent'  },
 ];
 
 export function RhythmMachine({ currentBeat, mutedTracks, onToggleMute }: Props) {
   return (
     <div className={styles.machine}>
-      {/* ── Clave & Conga ── */}
-      {TRACKS.slice(0, 2).map(({ id, label, sublabel }) => (
-        <TrackRow
-          key={id}
-          id={id}
-          label={label}
-          sublabel={sublabel}
-          pattern={audioEngine.getTrack(id).pattern}
-          currentBeat={currentBeat}
-          muted={mutedTracks.has(id)}
-          onToggleMute={() => onToggleMute(id)}
-        />
-      ))}
+      {/* ── Clave ── */}
+      <TrackRow
+        id="clave"
+        label="Clave"
+        sublabel="Wood stick click"
+        pattern={audioEngine.getTrack('clave').pattern}
+        currentBeat={currentBeat}
+        muted={mutedTracks.has('clave')}
+        onToggleMute={() => onToggleMute('clave')}
+      />
+
+      {/* ── Tumbao (Conga) ── */}
+      <div className={styles.group}>
+        <span className={styles.groupLabel}>Tumbao</span>
+        {CONGA_TRACKS.map(({ id, label, sublabel }) => (
+          <TrackRow
+            key={id}
+            id={id}
+            label={label}
+            sublabel={sublabel}
+            pattern={audioEngine.getTrack(id).pattern}
+            currentBeat={currentBeat}
+            muted={mutedTracks.has(id)}
+            onToggleMute={() => onToggleMute(id)}
+          />
+        ))}
+      </div>
 
       {/* ── Campana (Cowbell) ── */}
       <div className={styles.group}>
         <span className={styles.groupLabel}>Campana</span>
-        {TRACKS.slice(2).map(({ id, label, sublabel }) => (
+        {COWBELL_TRACKS.map(({ id, label, sublabel }) => (
           <TrackRow
             key={id}
             id={id}

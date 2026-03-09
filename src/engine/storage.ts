@@ -1,6 +1,14 @@
 /** localStorage のキー定義と読み書きユーティリティ */
 
+/**
+ * スキーマバージョン — トラック構成が変わるたびにインクリメント。
+ *   v1: cowbell を low/high に分割
+ *   v2: conga を open/slap/heel に分割（現在）
+ */
+const SCHEMA_VERSION = 2;
+
 const KEYS = {
+  schemaVersion:  'motionlab:schemaVersion',
   bpm:            'motionlab:bpm',
   patternId:      'motionlab:patternId',
   mutedTracks:    'motionlab:mutedTracks',
@@ -20,6 +28,21 @@ function save(key: string, value: string) {
   try { localStorage.setItem(key, value); } catch { /* quota超過等は無視 */ }
 }
 
+/**
+ * トラック構成変更に伴う localStorage マイグレーション。
+ * storage モジュールのインポート時に一度だけ実行される。
+ * 旧バージョンのミュート状態は構造が合わないためリセットし、
+ * 新しいデフォルト値を使用する。
+ */
+;(function migrate() {
+  const savedVersion = load(KEYS.schemaVersion, 0, Number);
+  if (savedVersion < SCHEMA_VERSION) {
+    // ミュート状態をリセット（新しいトラック構成のデフォルトを使用）
+    try { localStorage.removeItem(KEYS.mutedTracks); } catch { /* ignore */ }
+    save(KEYS.schemaVersion, String(SCHEMA_VERSION));
+  }
+})();
+
 export const storage = {
   getBpm:       ()         => load(KEYS.bpm, 180, Number),
   setBpm:       (v: number) => save(KEYS.bpm, String(v)),
@@ -27,7 +50,12 @@ export const storage = {
   getPatternId: ()          => load(KEYS.patternId, 'son-2-3', s => s),
   setPatternId: (id: string) => save(KEYS.patternId, id),
 
-  getMutedTracks: () => load(KEYS.mutedTracks, ['conga', 'cowbell-low', 'cowbell-high'] as string[], v => JSON.parse(v) as string[]),
+  // デフォルト: clave のみ ON、残り全トラック OFF
+  getMutedTracks: () => load(
+    KEYS.mutedTracks,
+    ['conga-open', 'conga-slap', 'conga-heel', 'cowbell-low', 'cowbell-high'] as string[],
+    v => JSON.parse(v) as string[],
+  ),
   setMutedTracks: (ids: string[]) => save(KEYS.mutedTracks, JSON.stringify(ids)),
 
   getBackgroundPlay: ()           => load(KEYS.backgroundPlay, false, v => v === 'true'),

@@ -11,6 +11,8 @@ type Props = {
   onFileLoad: (file: File) => void;
   backgroundPlay: boolean;
   onBackgroundPlayChange: (v: boolean) => void;
+  congaMuted: boolean;
+  onCongaMuteToggle: () => void;
   cowbellMuted: boolean;
   onCowbellMuteToggle: () => void;
 };
@@ -24,6 +26,8 @@ export function ControlPanel({
   onFileLoad,
   backgroundPlay,
   onBackgroundPlayChange,
+  congaMuted,
+  onCongaMuteToggle,
   cowbellMuted,
   onCowbellMuteToggle,
 }: Props) {
@@ -113,6 +117,25 @@ export function ControlPanel({
             className={styles.fileInput}
           />
         </label>
+      </div>
+
+      {/* ── Tumbao (Conga) Master Mute ── */}
+      <div className={styles.settingsRow}>
+        <span className={styles.settingsLabel}>
+          Tumbao（コンガ）
+          <span className={styles.settingsSub}>
+            {congaMuted ? 'Open + Slap + Heel ミュート中' : 'Open + Slap + Heel 再生中'}
+          </span>
+        </span>
+        <button
+          role="switch"
+          aria-checked={!congaMuted}
+          aria-label="Tumbao master mute"
+          className={`${styles.toggle} ${!congaMuted ? styles.toggleOn : ''}`}
+          onClick={onCongaMuteToggle}
+        >
+          <span className={styles.toggleThumb} />
+        </button>
       </div>
 
       {/* ── Campana Master Mute ── */}

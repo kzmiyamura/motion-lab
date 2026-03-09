@@ -83,7 +83,7 @@ const REVERB_WET: Record<TrackId, number> = {
 const TRACK_GAIN: Record<TrackId, number> = {
   clave:         0.85,
   'conga-open':  1.40,  // dominant hit
-  'conga-slap':  0.90,  // medium accent
+  'conga-slap':  0.52,  // medium accent
   'conga-heel':  0.35,  // ghost notes — quiet
   'cowbell-low':  0.28,
   'cowbell-high': 0.40,
@@ -457,25 +457,35 @@ export class AudioEngine {
   }
 
   /**
-   * Conga Slap (パシッ): sharp, dry high-frequency crack.
-   * Noise burst + high oscillator, very short decay (~50ms).
+   * Conga Slap (パシッ): organic "crack" — bandpass-filtered white noise.
+   * Avoids the electronic sine-wave quality; noise gives a natural skin snap.
    */
   private synthCongaSlap(ctx: AudioContext, time: number) {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['conga-slap'], time);
 
-    // High-pitched body
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(900, t);
-    osc.frequency.exponentialRampToValueAtTime(400, t + 0.04);
+    const duration = 0.045;
+    const sampleRate = ctx.sampleRate;
+    const buf = ctx.createBuffer(1, Math.floor(sampleRate * duration), sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
 
-    const oscGain = ctx.createGain();
-    oscGain.gain.setValueAtTime(g, t);
-    oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
-    osc.connect(oscGain);
-    osc.start(t);
-    osc.stop(t + 0.07);
-    oscGain.connect(ctx.destination);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+
+    // Bandpass around 2.5kHz — "crack" frequency range of a conga slap
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 2500;
+    filter.Q.value = 1.2;
+
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(g, t);
+    env.gain.exponentialRampToValueAtTime(0.001, t + duration);
+
+    src.connect(filter);
+    filter.connect(env);
+    env.connect(ctx.destination);
+    src.start(t);
   }
 
   /**

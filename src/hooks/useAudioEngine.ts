@@ -13,8 +13,13 @@ export function useAudioEngine() {
   });
   const [currentBeat, setCurrentBeat] = useState(-1);
 
-  // トラックのミュート状態を React state で管理
-  const [mutedTracks, setMutedTracks] = useState<Set<TrackId>>(new Set());
+  // トラックのミュート状態: localStorage から復元してエンジンにも反映
+  const [mutedTracks, setMutedTracks] = useState<Set<TrackId>>(() => {
+    const saved = storage.getMutedTracks() as TrackId[];
+    const muted = new Set<TrackId>(saved);
+    for (const id of muted) audioEngine.setTrackMuted(id, true);
+    return muted;
+  });
 
   const beatHandlerRef = useRef<BeatCallback | null>(null);
   useEffect(() => {
@@ -60,6 +65,7 @@ export function useAudioEngine() {
       const next = new Set(prev);
       if (nowMuted) next.add(id);
       else next.delete(id);
+      storage.setMutedTracks([...next]); // 保存
       return next;
     });
   }, []);

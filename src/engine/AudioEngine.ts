@@ -110,6 +110,10 @@ export class AudioEngine {
     this.tracks.get(id)!.pattern = steps;
   }
 
+  setTrackMuted(id: TrackId, muted: boolean) {
+    this.tracks.get(id)!.muted = muted;
+  }
+
   toggleTrackMute(id: TrackId): boolean {
     const track = this.tracks.get(id)!;
     track.muted = !track.muted;

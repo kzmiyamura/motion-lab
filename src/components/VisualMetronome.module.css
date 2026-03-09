@@ -1,0 +1,15 @@
+.wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  max-width: 480px;
+}
+
+.canvas {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  background: #0d0d1a;
+  border: 1px solid #2a2a4a;
+}

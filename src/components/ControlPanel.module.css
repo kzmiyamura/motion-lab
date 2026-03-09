@@ -1,0 +1,108 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1.5rem 2rem;
+  background: #1a1a2e;
+  border-radius: 12px;
+  border: 1px solid #2a2a4a;
+  width: 100%;
+  max-width: 480px;
+}
+
+.bpmRow {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #a0a0c0;
+  min-width: 3rem;
+}
+
+.slider {
+  flex: 1;
+  accent-color: #7c6bff;
+  cursor: pointer;
+  height: 4px;
+}
+
+.bpmValue {
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #e0e0ff;
+  min-width: 3rem;
+  text-align: right;
+}
+
+.buttonRow {
+  display: flex;
+  justify-content: center;
+}
+
+.btn {
+  padding: 0.75rem 3rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  transition: transform 0.1s, opacity 0.1s;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btnStart {
+  background: #7c6bff;
+  color: #fff;
+}
+
+.btnStart:hover {
+  opacity: 0.9;
+}
+
+.btnStop {
+  background: #ff6b6b;
+  color: #fff;
+}
+
+.btnStop:hover {
+  opacity: 0.9;
+}
+
+.fileRow {
+  display: flex;
+  justify-content: center;
+}
+
+.fileLabel {
+  font-size: 0.8rem;
+  color: #6060a0;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem;
+  border: 1px dashed #3a3a6a;
+  border-radius: 6px;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.fileLabel:hover {
+  border-color: #7c6bff;
+  color: #a0a0e0;
+}
+
+.fileInput {
+  display: none;
+}

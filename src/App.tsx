@@ -1,7 +1,11 @@
+import { useState } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { ControlPanel } from './components/ControlPanel';
 import { StepGrid } from './components/StepGrid';
 import { PresetSelector } from './components/PresetSelector';
+import { ClaveBeatGrid } from './components/ClaveBeatGrid';
+import { ClavePatternSelector } from './components/ClavePatternSelector';
+import { CLAVE_PATTERNS, type ClavePattern } from './engine/salsaPatterns';
 import styles from './App.module.css';
 
 function App() {
@@ -14,6 +18,8 @@ function App() {
     loadAudioFile,
   } = useAudioEngine();
 
+  const [selectedPattern, setSelectedPattern] = useState<ClavePattern>(CLAVE_PATTERNS[0]);
+
   return (
     <main className={styles.main}>
       <header className={styles.header}>
@@ -21,7 +27,22 @@ function App() {
         <p className={styles.subtitle}>High-Precision Dance Training & Motion Analysis</p>
       </header>
 
+      {/* ── Salsa Clave ── */}
       <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Salsa Clave</h2>
+
+        <ClavePatternSelector
+          selectedId={selectedPattern.id}
+          onSelect={setSelectedPattern}
+        />
+
+        <ClaveBeatGrid beatPositions={selectedPattern.beatPositions} />
+      </section>
+
+      {/* ── Metronome ── */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Metronome</h2>
+
         <PresetSelector
           totalSteps={totalSteps}
           preset={preset}

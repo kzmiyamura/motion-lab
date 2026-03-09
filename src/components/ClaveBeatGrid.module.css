@@ -1,0 +1,135 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 600px;
+}
+
+/* ── 8-tile grid ── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+}
+
+.tile {
+  aspect-ratio: 1;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  position: relative;
+  transition: transform 0.12s;
+  padding: 2px 0;
+}
+
+/* ── Hit types ── */
+.empty {
+  background: #0e0e22;
+  border-color: #1e1e3a;
+}
+
+.on {
+  background: #2a2060;
+  border-color: #7c6bff;
+  box-shadow: 0 0 10px 2px rgba(124, 107, 255, 0.3);
+}
+
+.on.downbeat {
+  background: #3a2000;
+  border-color: #ff9f43;
+  box-shadow: 0 0 10px 2px rgba(255, 159, 67, 0.3);
+}
+
+.and {
+  background: #1a1640;
+  border-color: #5a52b0;
+}
+
+.late {
+  background: #2a1e00;
+  border-color: #c07a00;
+}
+
+/* ── Inner elements ── */
+.beatNum {
+  font-size: 0.75rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #8080c0;
+  line-height: 1;
+}
+
+.on .beatNum   { color: #c0b8ff; }
+.on.downbeat .beatNum { color: #ffd09f; }
+.and .beatNum  { color: #9090d0; }
+.late .beatNum { color: #d0a040; }
+
+.hitMark {
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.on .hitMark   { color: #7c6bff; }
+.on.downbeat .hitMark { color: #ff9f43; }
+.and .hitMark  { color: #6c62d0; font-size: 1.1rem; }
+.late .hitMark { color: #c07a00; font-size: 1.1rem; }
+
+.hitCaption {
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  opacity: 0.75;
+}
+
+.on .hitCaption   { color: #9090d0; }
+.on.downbeat .hitCaption { color: #c08050; }
+.and .hitCaption  { color: #7070a0; }
+.late .hitCaption { color: #906020; }
+
+/* ダウンビート（1,5）の下部ドット */
+.downbeatDot {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #6060a0;
+}
+
+.on.downbeat .downbeatDot { background: #c07a00; }
+
+/* ── 凡例 ── */
+.legend {
+  display: flex;
+  gap: 1.25rem;
+  justify-content: center;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: #5050a0;
+}
+
+.legendDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid;
+}
+
+.legendDot.on   { background: #2a2060; border-color: #7c6bff; }
+.legendDot.and  { background: #1a1640; border-color: #5a52b0; }
+.legendDot.late { background: #2a1e00; border-color: #c07a00; }

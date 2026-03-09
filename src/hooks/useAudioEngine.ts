@@ -33,8 +33,13 @@ export function useAudioEngine() {
   const [currentBeat, setCurrentBeat] = useState(-1);
 
   // トラックのミュート状態: localStorage から復元してエンジンにも反映
+  const VALID_TRACK_IDS: TrackId[] = ['clave', 'conga', 'cowbell-low', 'cowbell-high'];
+
   const [mutedTracks, setMutedTracks] = useState<Set<TrackId>>(() => {
-    const saved = storage.getMutedTracks() as TrackId[];
+    // 旧バージョン ('cowbell') などの無効な ID を除外してからエンジンに適用
+    const saved = storage.getMutedTracks().filter(
+      (id): id is TrackId => VALID_TRACK_IDS.includes(id as TrackId)
+    );
     const muted = new Set<TrackId>(saved);
     for (const id of muted) audioEngine.setTrackMuted(id, true);
     return muted;

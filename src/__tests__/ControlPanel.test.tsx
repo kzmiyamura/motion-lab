@@ -11,6 +11,8 @@ const baseProps = {
   onFileLoad: vi.fn(),
   backgroundPlay: false,
   onBackgroundPlayChange: vi.fn(),
+  cowbellMuted: true,
+  onCowbellMuteToggle: vi.fn(),
 };
 
 describe('ControlPanel', () => {

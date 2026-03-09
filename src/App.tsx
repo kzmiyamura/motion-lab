@@ -13,6 +13,7 @@ function App() {
     isPlaying, bpm, setBpm,
     currentBeat,
     mutedTracks, toggleTrackMute,
+    cowbellMuted, toggleCowbellMute,
     backgroundPlay, setBackgroundPlay,
     applyClavePattern,
     start, stop,
@@ -75,6 +76,8 @@ function App() {
           onFileLoad={loadAudioFile}
           backgroundPlay={backgroundPlay}
           onBackgroundPlayChange={setBackgroundPlay}
+          cowbellMuted={cowbellMuted}
+          onCowbellMuteToggle={toggleCowbellMute}
         />
       </section>
     </main>

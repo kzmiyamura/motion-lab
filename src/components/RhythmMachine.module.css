@@ -9,9 +9,39 @@
   width: 100%;
 }
 
+/* ── Campana グループ ── */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 0.75rem 0.75rem 0.75rem;
+  border: 1px solid #2a3a5a;
+  border-radius: 10px;
+  background: #0e1020;
+  position: relative;
+}
+
+.groupLabel {
+  position: absolute;
+  top: -0.55rem;
+  left: 0.9rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #6a8aba;
+  background: #0e1020;
+  padding: 0 0.4rem;
+}
+
 @media (max-width: 480px) {
   .machine {
     padding: 1rem 0.75rem;
     gap: 1rem;
+  }
+
+  .group {
+    gap: 1rem;
+    padding: 0.65rem 0.5rem 0.65rem;
   }
 }

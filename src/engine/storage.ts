@@ -27,7 +27,7 @@ export const storage = {
   getPatternId: ()          => load(KEYS.patternId, 'son-2-3', s => s),
   setPatternId: (id: string) => save(KEYS.patternId, id),
 
-  getMutedTracks: () => load(KEYS.mutedTracks, ['conga', 'cowbell'] as string[], v => JSON.parse(v) as string[]),
+  getMutedTracks: () => load(KEYS.mutedTracks, ['conga', 'cowbell-low', 'cowbell-high'] as string[], v => JSON.parse(v) as string[]),
   setMutedTracks: (ids: string[]) => save(KEYS.mutedTracks, JSON.stringify(ids)),
 
   getBackgroundPlay: ()           => load(KEYS.backgroundPlay, false, v => v === 'true'),

@@ -114,15 +114,37 @@ export function useAudioEngine() {
     });
   }, []);
 
+  /** カウベル両トラックを一括 ON/OFF する Master Mute */
+  const toggleCowbellMute = useCallback(() => {
+    setMutedTracks(prev => {
+      const mute = !(prev.has('cowbell-low') && prev.has('cowbell-high'));
+      audioEngine.setTrackMuted('cowbell-low',  mute);
+      audioEngine.setTrackMuted('cowbell-high', mute);
+      const next = new Set(prev);
+      if (mute) {
+        next.add('cowbell-low');
+        next.add('cowbell-high');
+      } else {
+        next.delete('cowbell-low');
+        next.delete('cowbell-high');
+      }
+      storage.setMutedTracks([...next]);
+      return next;
+    });
+  }, []);
+
   const loadAudioFile = useCallback(async (file: File) => {
     const arrayBuffer = await file.arrayBuffer();
     await audioEngine.loadBuffer(arrayBuffer);
   }, []);
 
+  const cowbellMuted = mutedTracks.has('cowbell-low') && mutedTracks.has('cowbell-high');
+
   return {
     isPlaying, bpm, setBpm,
     currentBeat,
     mutedTracks, toggleTrackMute,
+    cowbellMuted, toggleCowbellMute,
     backgroundPlay, setBackgroundPlay,
     applyClavePattern,
     start, stop,

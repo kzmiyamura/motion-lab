@@ -11,6 +11,8 @@ type Props = {
   onFileLoad: (file: File) => void;
   backgroundPlay: boolean;
   onBackgroundPlayChange: (v: boolean) => void;
+  cowbellMuted: boolean;
+  onCowbellMuteToggle: () => void;
 };
 
 export function ControlPanel({
@@ -22,6 +24,8 @@ export function ControlPanel({
   onFileLoad,
   backgroundPlay,
   onBackgroundPlayChange,
+  cowbellMuted,
+  onCowbellMuteToggle,
 }: Props) {
   const activeCategoryId = getActiveCategoryId(bpm);
 
@@ -109,6 +113,25 @@ export function ControlPanel({
             className={styles.fileInput}
           />
         </label>
+      </div>
+
+      {/* ── Campana Master Mute ── */}
+      <div className={styles.settingsRow}>
+        <span className={styles.settingsLabel}>
+          Campana（カウベル）
+          <span className={styles.settingsSub}>
+            {cowbellMuted ? 'Low + High ミュート中' : 'Low + High 再生中'}
+          </span>
+        </span>
+        <button
+          role="switch"
+          aria-checked={!cowbellMuted}
+          aria-label="Campana master mute"
+          className={`${styles.toggle} ${!cowbellMuted ? styles.toggleOn : ''}`}
+          onClick={onCowbellMuteToggle}
+        >
+          <span className={styles.toggleThumb} />
+        </button>
       </div>
 
       {/* ── 設定 ── */}

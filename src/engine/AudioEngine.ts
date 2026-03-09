@@ -15,7 +15,7 @@
  * Fixed: 16 steps per bar, subdivision=2 (8th notes)
  */
 
-export type TrackId = 'clave' | 'conga' | 'cowbell';
+export type TrackId = 'clave' | 'conga' | 'cowbell-low' | 'cowbell-high';
 
 export type Track = {
   id: TrackId;
@@ -46,30 +46,41 @@ const SAMPLE_URLS: Record<TrackId, string[]> = {
     `${VSCO}/Tumba-HitN_v2_rr1_Sum.wav`,
     `${VSCO}/Tumba-HitN_v2_rr2_Sum.wav`,
   ],
-  cowbell: [
+  // Low (open): v2 = louder velocity layer → fuller resonant tone
+  'cowbell-low': [
     `${VSCO}/Cowbell1_Hit_v2_rr1_Sum.wav`,
     `${VSCO}/Cowbell1_Hit_v2_rr2_Sum.wav`,
+  ],
+  // High (muted): v1 = softer velocity layer → shorter, brighter attack
+  'cowbell-high': [
+    `${VSCO}/Cowbell1_Hit_v1_rr1_Sum.wav`,
+    `${VSCO}/Cowbell1_Hit_v1_rr2_Sum.wav`,
   ],
 };
 
 // Reverb wet level per instrument (clave is traditionally dry)
 const REVERB_WET: Record<TrackId, number> = {
-  clave:   0.08,
-  conga:   0.22,
-  cowbell: 0.18,
+  clave:         0.08,
+  conga:         0.22,
+  'cowbell-low':  0.18,
+  'cowbell-high': 0.10,
 };
 
 // Base gain per instrument — adjust to balance perceived loudness
 const TRACK_GAIN: Record<TrackId, number> = {
-  clave:   0.85,
-  conga:   1.40,  // boost: sounds too quiet vs other tracks
-  cowbell: 0.45,  // cut:   sounds too loud vs other tracks
+  clave:         0.85,
+  conga:         1.40,
+  'cowbell-low':  1.00,
+  'cowbell-high': 0.70,
 };
 
-// Default patterns: Son Clave 2-3, Conga Tumbao, Cowbell
-const DEFAULT_CLAVE_STEPS   = new Set([2, 4, 8, 11, 14]);
-const DEFAULT_CONGA_STEPS   = new Set([6, 14]);
-const DEFAULT_COWBELL_STEPS = new Set([0, 4, 8, 12]);
+// Default patterns (16 steps = 2 bars of 4/4 at 8th-note subdivision)
+// Steps: 0=beat1, 2=beat2, 4=beat3, 6=beat4 (bar1); 8-14 (bar2)
+const DEFAULT_CLAVE_STEPS        = new Set([2, 4, 8, 11, 14]);
+const DEFAULT_CONGA_STEPS        = new Set([6, 14]);
+// Montuno campana: Low on all quarter beats, High on syncopated upbeats
+const DEFAULT_COWBELL_LOW_STEPS  = new Set([0, 2, 4, 6, 8, 10, 12, 14]);
+const DEFAULT_COWBELL_HIGH_STEPS = new Set([3, 5, 11, 13]);
 
 export class AudioEngine {
   private context: AudioContext | null = null;
@@ -81,17 +92,18 @@ export class AudioEngine {
   private _isPlaying = false;
 
   private tracks: Map<TrackId, Track> = new Map([
-    ['clave',   { id: 'clave',   pattern: new Set(DEFAULT_CLAVE_STEPS),   muted: false }],
-    ['conga',   { id: 'conga',   pattern: new Set(DEFAULT_CONGA_STEPS),   muted: true  }],
-    ['cowbell', { id: 'cowbell', pattern: new Set(DEFAULT_COWBELL_STEPS), muted: true  }],
+    ['clave',        { id: 'clave',        pattern: new Set(DEFAULT_CLAVE_STEPS),        muted: false }],
+    ['conga',        { id: 'conga',        pattern: new Set(DEFAULT_CONGA_STEPS),        muted: true  }],
+    ['cowbell-low',  { id: 'cowbell-low',  pattern: new Set(DEFAULT_COWBELL_LOW_STEPS),  muted: true  }],
+    ['cowbell-high', { id: 'cowbell-high', pattern: new Set(DEFAULT_COWBELL_HIGH_STEPS), muted: true  }],
   ]);
 
   // Samples: 2 round-robin buffers per instrument
   private sampleBuffers: Map<TrackId, AudioBuffer[]> = new Map([
-    ['clave', []], ['conga', []], ['cowbell', []],
+    ['clave', []], ['conga', []], ['cowbell-low', []], ['cowbell-high', []],
   ]);
   private rrCounters: Map<TrackId, number> = new Map([
-    ['clave', 0], ['conga', 0], ['cowbell', 0],
+    ['clave', 0], ['conga', 0], ['cowbell-low', 0], ['cowbell-high', 0],
   ]);
 
   // Reverb
@@ -368,9 +380,10 @@ export class AudioEngine {
 
   private playSynth(ctx: AudioContext, id: TrackId, time: number) {
     switch (id) {
-      case 'clave':   return this.synthClave(ctx, time);
-      case 'conga':   return this.synthConga(ctx, time);
-      case 'cowbell': return this.synthCowbell(ctx, time);
+      case 'clave':        return this.synthClave(ctx, time);
+      case 'conga':        return this.synthConga(ctx, time);
+      case 'cowbell-low':  return this.synthCowbellLow(ctx, time);
+      case 'cowbell-high': return this.synthCowbellHigh(ctx, time);
     }
   }
 
@@ -413,26 +426,59 @@ export class AudioEngine {
     if (this.convolver) bodyGain.connect(this.convolver);
   }
 
-  /** Cowbell: classic 562Hz + 845Hz squares through bandpass */
-  private synthCowbell(ctx: AudioContext, time: number) {
-    const { gain: g, time: t } = this.humanize(0.4, time);
+  /**
+   * Cowbell Low (Open): full resonant tone — longer decay, lower dominant pitch.
+   * Represents hitting the mouth of the bell for a sustained "bong".
+   */
+  private synthCowbellLow(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['cowbell-low'], time);
 
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
-    filter.frequency.value = 700;
-    filter.Q.value = 3;
+    filter.frequency.value = 620;
+    filter.Q.value = 4;
 
     const masterGain = ctx.createGain();
     masterGain.gain.setValueAtTime(g, t);
-    masterGain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    masterGain.gain.exponentialRampToValueAtTime(0.001, t + 0.55); // longer tail
 
-    for (const freq of [562, 845]) {
+    for (const freq of [562, 780]) { // lower pair → more open/resonant
       const osc = ctx.createOscillator();
       osc.type = 'square';
       osc.frequency.setValueAtTime(freq, t);
       osc.connect(filter);
       osc.start(t);
-      osc.stop(t + 0.38);
+      osc.stop(t + 0.58);
+    }
+
+    filter.connect(masterGain);
+    masterGain.connect(ctx.destination);
+    if (this.convolver) masterGain.connect(this.convolver);
+  }
+
+  /**
+   * Cowbell High (Muted): bright, short accent — hitting the shoulder of the bell.
+   * Higher frequencies, faster decay for a "chick" or "ting" sound.
+   */
+  private synthCowbellHigh(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['cowbell-high'], time);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 900;
+    filter.Q.value = 5;
+
+    const masterGain = ctx.createGain();
+    masterGain.gain.setValueAtTime(g, t);
+    masterGain.gain.exponentialRampToValueAtTime(0.001, t + 0.15); // short decay
+
+    for (const freq of [845, 1200]) { // higher pair → brighter/muted
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, t);
+      osc.connect(filter);
+      osc.start(t);
+      osc.stop(t + 0.18);
     }
 
     filter.connect(masterGain);

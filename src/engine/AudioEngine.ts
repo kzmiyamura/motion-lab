@@ -59,6 +59,13 @@ const REVERB_WET: Record<TrackId, number> = {
   cowbell: 0.18,
 };
 
+// Base gain per instrument — adjust to balance perceived loudness
+const TRACK_GAIN: Record<TrackId, number> = {
+  clave:   0.85,
+  conga:   1.40,  // boost: sounds too quiet vs other tracks
+  cowbell: 0.45,  // cut:   sounds too loud vs other tracks
+};
+
 // Default patterns: Son Clave 2-3, Conga Tumbao, Cowbell
 const DEFAULT_CLAVE_STEPS   = new Set([2, 4, 8, 11, 14]);
 const DEFAULT_CONGA_STEPS   = new Set([6, 14]);
@@ -328,7 +335,7 @@ export class AudioEngine {
     buffers: AudioBuffer[],
     baseTime: number,
   ) {
-    const { gain, pitch, time } = this.humanize(0.85, baseTime);
+    const { gain, pitch, time } = this.humanize(TRACK_GAIN[id], baseTime);
 
     // Round-robin: alternate between available samples
     const counter = this.rrCounters.get(id)!;

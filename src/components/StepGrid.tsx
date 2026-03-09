@@ -7,12 +7,6 @@ type Props = {
   onToggleStep: (step: number) => void;
 };
 
-/**
- * 16ステップモード: 各ビートを「表拍」と「裏拍(&)」に分割して表示
- *   index 0  → beat 1 (表拍)
- *   index 1  → beat 1 & (裏拍)
- *   index 2  → beat 2 (表拍)  ...
- */
 function getLabel(index: number, totalSteps: number): string {
   if (totalSteps === 16) {
     return index % 2 === 0 ? String(index / 2 + 1) : '&';
@@ -24,18 +18,20 @@ function isAndBeat(index: number, totalSteps: number): boolean {
   return totalSteps === 16 && index % 2 === 1;
 }
 
-export function StepGrid({ totalSteps, activeStep, checkedSteps, onToggleStep }: Props) {
-  const cols = Math.min(totalSteps, 8);
+/** totalSteps に対応するグリッドクラス名を返す */
+function gridClass(totalSteps: number): string {
+  if (totalSteps <= 4)  return styles.cols4;
+  if (totalSteps <= 8)  return styles.cols8;
+  return styles.cols16;
+}
 
+export function StepGrid({ totalSteps, activeStep, checkedSteps, onToggleStep }: Props) {
   return (
-    <div
-      className={styles.grid}
-      style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}
-    >
+    <div className={`${styles.grid} ${gridClass(totalSteps)}`}>
       {Array.from({ length: totalSteps }, (_, i) => {
         const isActive  = i === activeStep;
         const isChecked = checkedSteps.has(i);
-        const isAccent  = i === 0 || i === 8; // beat 1 / beat 5
+        const isAccent  = i === 0 || i === 8;
         const isAnd     = isAndBeat(i, totalSteps);
 
         return (

@@ -6,6 +6,11 @@
   min-width: 0;
 }
 
+/* 列数クラス（インラインスタイル不使用でメディアクエリが効くように） */
+.cols4  { grid-template-columns: repeat(4, 1fr); }
+.cols8  { grid-template-columns: repeat(8, 1fr); }
+.cols16 { grid-template-columns: repeat(8, 1fr); } /* デスクトップ: 2行×8列 */
+
 .step {
   aspect-ratio: 1;
   border-radius: 10px;
@@ -109,6 +114,10 @@
   .grid {
     gap: 4px;
   }
+
+  /* 4列に絞って画面内に収める */
+  .cols8  { grid-template-columns: repeat(4, 1fr); } /* 4+4 の2段 */
+  .cols16 { grid-template-columns: repeat(4, 1fr); } /* 1拍+and ×4行 */
 
   .step {
     border-radius: 7px;

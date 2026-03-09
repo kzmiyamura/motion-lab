@@ -138,6 +138,7 @@
 @media (max-width: 480px) {
   .grid {
     gap: 4px;
+    grid-template-columns: repeat(4, 1fr); /* 1小節目(1-4) / 2小節目(5-8) の2段 */
   }
 
   .tile {

@@ -28,6 +28,8 @@ export class AudioEngine {
   private beatCallbacks: Set<BeatCallback> = new Set();
   private _bpm = 120;
   private _beatsPerBar = 4;
+  /** 1ステップ = 1拍音符の何分の1か。16ステップ(8分音符)なら 2 */
+  private _subdivision = 1;
   private _isPlaying = false;
   private customBuffer: AudioBuffer | null = null;
   /** 音を鳴らす 0-indexed ステップ番号。null = 全ステップ再生 */
@@ -39,7 +41,11 @@ export class AudioEngine {
   set bpm(value: number) { this._bpm = Math.max(20, Math.min(300, value)); }
 
   get beatsPerBar() { return this._beatsPerBar; }
-  set beatsPerBar(value: number) { this._beatsPerBar = Math.max(1, Math.min(16, value)); }
+  set beatsPerBar(value: number) { this._beatsPerBar = Math.max(1, Math.min(32, value)); }
+
+  /** 1ステップが何分音符かを設定 (1=4分, 2=8分, 4=16分) */
+  get subdivision() { return this._subdivision; }
+  set subdivision(value: number) { this._subdivision = Math.max(1, value); }
 
   get isPlaying() { return this._isPlaying; }
 
@@ -151,8 +157,8 @@ export class AudioEngine {
   }
 
   private advanceBeat() {
-    const secondsPerBeat = 60 / this._bpm;
-    this.nextBeatTime += secondsPerBeat;
+    const secondsPerStep = (60 / this._bpm) / this._subdivision;
+    this.nextBeatTime += secondsPerStep;
     this.currentBeat = (this.currentBeat + 1) % this._beatsPerBar;
   }
 }

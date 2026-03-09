@@ -47,6 +47,7 @@ export function useAudioEngine() {
 
   const setTotalSteps = useCallback((steps: TotalSteps) => {
     audioEngine.beatsPerBar = steps;
+    audioEngine.subdivision = 1;   // 通常は4分音符
     setTotalStepsState(steps);
     setPresetState('Standard');
     const allSteps = new Set(Array.from({ length: steps }, (_, i) => i));
@@ -75,10 +76,11 @@ export function useAudioEngine() {
     setPresetState('Standard');
   }, []);
 
-  /** Salsa Clave パターンを選んだとき AudioEngine にも反映する (16ステップグリッド) */
+  /** Salsa Clave パターンを選んだとき AudioEngine にも反映する (16ステップ = 8分音符) */
   const applyClavePattern = useCallback((pattern: ClavePattern) => {
     const steps = toEngineSteps(pattern.beatPositions);
     audioEngine.beatsPerBar = 16;
+    audioEngine.subdivision = 2;   // 1ステップ = 8分音符 (BPM=4分音符基準のまま)
     setTotalStepsState(16);
     setCheckedSteps(steps);
     audioEngine.setActiveSteps(steps);

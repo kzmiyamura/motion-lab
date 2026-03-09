@@ -1,0 +1,17 @@
+.machine {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  background: #1a1a2e;
+  border-radius: 12px;
+  border: 1px solid #2a2a4a;
+  width: 100%;
+}
+
+@media (max-width: 480px) {
+  .machine {
+    padding: 1rem 0.75rem;
+    gap: 1rem;
+  }
+}

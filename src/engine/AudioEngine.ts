@@ -1,24 +1,38 @@
 /**
- * AudioEngine.ts
+ * AudioEngine.ts — Multi-track rhythm machine
  *
- * Singleton audio engine that runs the scheduler loop independent of React's
- * render cycle. Uses a look-ahead scheduler (~100ms) to achieve 1-sample
- * precision timing.
+ * Singleton audio engine with look-ahead scheduler (~100ms) for
+ * 1-sample precision timing. Supports 3 synthesized instrument tracks.
  *
- * Architecture:
- *   JS thread  → scheduling, UI state
- *   C++ thread → AudioContext worklet (real-time audio)
+ * Fixed: 16 steps per bar, subdivision=2 (8th notes at BPM quarter-note rate)
  */
 
+export type TrackId = 'clave' | 'conga' | 'cowbell';
+
+export type Track = {
+  id: TrackId;
+  pattern: Set<number>;
+  muted: boolean;
+};
+
 export type Beat = {
-  beat: number;       // 0-indexed beat number within the bar
-  time: number;       // audioContext.currentTime of the beat
+  beat: number;   // 0-indexed step within the 16-step bar
+  time: number;   // audioContext.currentTime of the step
 };
 
 export type BeatCallback = (beat: Beat) => void;
 
 const SCHEDULE_AHEAD_TIME = 0.1; // seconds to schedule ahead
 const LOOKAHEAD_MS = 25;          // scheduler interval in ms
+const BEATS_PER_BAR = 16;
+const SUBDIVISION = 2;            // 8th notes (2 per quarter note)
+
+/** Default Son Clave 2-3 pattern: beat positions [2,3,5,6.5,8] → 16-step indices */
+const DEFAULT_CLAVE_STEPS = new Set([2, 4, 8, 11, 14]);
+/** Conga Tumbao: beats 4 and 8 (quarter notes) → 8th-note steps 6,14 */
+const DEFAULT_CONGA_STEPS = new Set([6, 14]);
+/** Cowbell: beats 1,3,5,7 (quarter notes) → 8th-note steps 0,4,8,12 */
+const DEFAULT_COWBELL_STEPS = new Set([0, 4, 8, 12]);
 
 export class AudioEngine {
   private context: AudioContext | null = null;
@@ -27,40 +41,47 @@ export class AudioEngine {
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
   private beatCallbacks: Set<BeatCallback> = new Set();
   private _bpm = 120;
-  private _beatsPerBar = 4;
-  /** 1ステップ = 1拍音符の何分の1か。16ステップ(8分音符)なら 2 */
-  private _subdivision = 1;
   private _isPlaying = false;
   private customBuffer: AudioBuffer | null = null;
-  /** 音を鳴らす 0-indexed ステップ番号。null = 全ステップ再生 */
-  private activeSteps: Set<number> | null = null;
+
+  private tracks: Map<TrackId, Track> = new Map([
+    ['clave',   { id: 'clave',   pattern: new Set(DEFAULT_CLAVE_STEPS),   muted: false }],
+    ['conga',   { id: 'conga',   pattern: new Set(DEFAULT_CONGA_STEPS),   muted: false }],
+    ['cowbell', { id: 'cowbell', pattern: new Set(DEFAULT_COWBELL_STEPS), muted: false }],
+  ]);
 
   // ── Public API ────────────────────────────────────────────────────────────
 
   get bpm() { return this._bpm; }
   set bpm(value: number) { this._bpm = Math.max(20, Math.min(300, value)); }
 
-  get beatsPerBar() { return this._beatsPerBar; }
-  set beatsPerBar(value: number) { this._beatsPerBar = Math.max(1, Math.min(32, value)); }
-
-  /** 1ステップが何分音符かを設定 (1=4分, 2=8分, 4=16分) */
-  get subdivision() { return this._subdivision; }
-  set subdivision(value: number) { this._subdivision = Math.max(1, value); }
-
   get isPlaying() { return this._isPlaying; }
 
-  /** Registers a callback to be fired on each scheduled beat. */
+  /** Registers a callback fired on each scheduled step. */
   onBeat(cb: BeatCallback) {
     this.beatCallbacks.add(cb);
     return () => this.beatCallbacks.delete(cb);
   }
 
-  /** どのステップで音を鳴らすかを設定する。null を渡すと全ステップ再生。 */
-  setActiveSteps(steps: Set<number> | null) {
-    this.activeSteps = steps;
+  getTrack(id: TrackId): Track {
+    return this.tracks.get(id)!;
   }
 
-  /** Load a WAV/audio file as the click sound. Falls back to SynthClave. */
+  setTrackPattern(id: TrackId, steps: Set<number>) {
+    this.tracks.get(id)!.pattern = steps;
+  }
+
+  setTrackMuted(id: TrackId, muted: boolean) {
+    this.tracks.get(id)!.muted = muted;
+  }
+
+  toggleTrackMute(id: TrackId) {
+    const track = this.tracks.get(id)!;
+    track.muted = !track.muted;
+    return track.muted;
+  }
+
+  /** Load a WAV/audio file as the Clave sound. Falls back to synth. */
   async loadBuffer(arrayBuffer: ArrayBuffer) {
     const ctx = this.getContext();
     this.customBuffer = await ctx.decodeAudioData(arrayBuffer);
@@ -72,7 +93,7 @@ export class AudioEngine {
     if (ctx.state === 'suspended') ctx.resume();
     this._isPlaying = true;
     this.currentBeat = 0;
-    this.nextBeatTime = ctx.currentTime + 0.05; // tiny initial delay
+    this.nextBeatTime = ctx.currentTime + 0.05;
     this.schedulerTimer = setInterval(() => this.schedule(), LOOKAHEAD_MS);
   }
 
@@ -102,52 +123,60 @@ export class AudioEngine {
     return this.context;
   }
 
-  /** Core look-ahead scheduler: called every LOOKAHEAD_MS milliseconds. */
   private schedule() {
     const ctx = this.getContext();
     const horizon = ctx.currentTime + SCHEDULE_AHEAD_TIME;
 
     while (this.nextBeatTime < horizon) {
-      this.scheduleBeat(this.nextBeatTime, this.currentBeat);
+      this.scheduleBeat(ctx, this.nextBeatTime, this.currentBeat);
       this.advanceBeat();
     }
   }
 
-  private scheduleBeat(time: number, beat: number) {
-    const ctx = this.getContext();
-    const shouldPlay = this.activeSteps === null || this.activeSteps.has(beat);
-
-    if (shouldPlay) {
-      if (this.customBuffer) {
-        const src = ctx.createBufferSource();
-        src.buffer = this.customBuffer;
-        src.connect(ctx.destination);
-        src.start(time);
-      } else {
-        this.playSynthClave(ctx, time, beat === 0);
+  private scheduleBeat(ctx: AudioContext, time: number, beat: number) {
+    // Play each non-muted track if current step is in its pattern
+    for (const track of this.tracks.values()) {
+      if (!track.muted && track.pattern.has(beat)) {
+        this.playTrack(ctx, track.id, time);
       }
     }
 
-    // Notify callbacks (fire from JS thread at the scheduled wall-clock time)
+    // Notify UI callbacks with appropriate delay
     const delay = (time - ctx.currentTime) * 1000;
     setTimeout(() => {
       this.beatCallbacks.forEach(cb => cb({ beat, time }));
     }, Math.max(0, delay));
   }
 
+  private playTrack(ctx: AudioContext, id: TrackId, time: number) {
+    switch (id) {
+      case 'clave':   return this.playClave(ctx, time);
+      case 'conga':   return this.playConga(ctx, time);
+      case 'cowbell': return this.playCowbell(ctx, time);
+    }
+  }
+
   /**
-   * SynthClave — an oscillator-based percussive click.
-   * Accent (beat 0) uses a slightly lower frequency.
+   * Clave — high percussive click (wood sticks).
+   * Uses custom buffer if loaded, otherwise synthesized.
    */
-  private playSynthClave(ctx: AudioContext, time: number, accent: boolean) {
+  private playClave(ctx: AudioContext, time: number) {
+    if (this.customBuffer) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.customBuffer;
+      src.connect(ctx.destination);
+      src.start(time);
+      return;
+    }
+
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(accent ? 880 : 1200, time);
-    osc.frequency.exponentialRampToValueAtTime(accent ? 440 : 600, time + 0.03);
+    osc.frequency.setValueAtTime(1200, time);
+    osc.frequency.exponentialRampToValueAtTime(600, time + 0.03);
 
-    gain.gain.setValueAtTime(accent ? 0.6 : 0.35, time);
+    gain.gain.setValueAtTime(0.5, time);
     gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
 
     osc.connect(gain);
@@ -156,10 +185,60 @@ export class AudioEngine {
     osc.stop(time + 0.06);
   }
 
+  /**
+   * Conga Tumbao — low drum thud.
+   * Sine oscillator pitched down with a pitch envelope.
+   */
+  private playConga(ctx: AudioContext, time: number) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(180, time);
+    osc.frequency.exponentialRampToValueAtTime(60, time + 0.12);
+
+    gain.gain.setValueAtTime(0.7, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.18);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(time);
+    osc.stop(time + 0.2);
+  }
+
+  /**
+   * Cowbell — metallic clang.
+   * Two detuned square oscillators through a bandpass filter.
+   */
+  private playCowbell(ctx: AudioContext, time: number) {
+    const freqs = [562, 845]; // classic cowbell frequencies
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+
+    filter.type = 'bandpass';
+    filter.frequency.value = 700;
+    filter.Q.value = 2;
+
+    gain.gain.setValueAtTime(0.4, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.3);
+
+    for (const freq of freqs) {
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, time);
+      osc.connect(filter);
+      osc.start(time);
+      osc.stop(time + 0.35);
+    }
+
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+  }
+
   private advanceBeat() {
-    const secondsPerStep = (60 / this._bpm) / this._subdivision;
+    const secondsPerStep = (60 / this._bpm) / SUBDIVISION;
     this.nextBeatTime += secondsPerStep;
-    this.currentBeat = (this.currentBeat + 1) % this._beatsPerBar;
+    this.currentBeat = (this.currentBeat + 1) % BEATS_PER_BAR;
   }
 }
 

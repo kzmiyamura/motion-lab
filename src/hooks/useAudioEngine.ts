@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { audioEngine, type BeatCallback } from '../engine/AudioEngine';
-import { PRESETS, type PresetName, type TotalSteps } from '../engine/presets';
+import { audioEngine, type BeatCallback, type TrackId } from '../engine/AudioEngine';
 import { toEngineSteps, type ClavePattern } from '../engine/salsaPatterns';
 import { storage } from '../engine/storage';
 
@@ -13,11 +12,9 @@ export function useAudioEngine() {
     return saved;
   });
   const [currentBeat, setCurrentBeat] = useState(-1);
-  const [totalSteps, setTotalStepsState] = useState<TotalSteps>(16);
-  const [checkedSteps, setCheckedSteps] = useState<Set<number>>(
-    new Set(PRESETS['Standard'].pattern)
-  );
-  const [preset, setPresetState] = useState<PresetName>('Standard');
+
+  // トラックのミュート状態を React state で管理
+  const [mutedTracks, setMutedTracks] = useState<Set<TrackId>>(new Set());
 
   const beatHandlerRef = useRef<BeatCallback | null>(null);
   useEffect(() => {
@@ -27,10 +24,6 @@ export function useAudioEngine() {
   useEffect(() => {
     const unsubscribe = audioEngine.onBeat((b) => beatHandlerRef.current?.(b));
     return () => { unsubscribe(); };
-  }, []);
-
-  useEffect(() => {
-    audioEngine.setActiveSteps(new Set(PRESETS['Standard'].pattern));
   }, []);
 
   const start = useCallback(() => {
@@ -47,48 +40,23 @@ export function useAudioEngine() {
   const setBpm = useCallback((value: number) => {
     audioEngine.bpm = value;
     setBpmState(value);
-    storage.setBpm(value);       // 保存
+    storage.setBpm(value);
   }, []);
 
-  const setTotalSteps = useCallback((steps: TotalSteps) => {
-    audioEngine.beatsPerBar = steps;
-    audioEngine.subdivision = 1;
-    setTotalStepsState(steps);
-    setPresetState('Standard');
-    const allSteps = new Set(Array.from({ length: steps }, (_, i) => i));
-    setCheckedSteps(allSteps);
-    audioEngine.setActiveSteps(allSteps);
-  }, []);
-
-  const applyPreset = useCallback((name: PresetName) => {
-    const p = PRESETS[name];
-    audioEngine.beatsPerBar = p.totalSteps;
-    setTotalStepsState(p.totalSteps);
-    setPresetState(name);
-    const steps = new Set(p.pattern);
-    setCheckedSteps(steps);
-    audioEngine.setActiveSteps(steps);
-  }, []);
-
-  const toggleStep = useCallback((step: number) => {
-    setCheckedSteps(prev => {
-      const next = new Set(prev);
-      if (next.has(step)) next.delete(step);
-      else next.add(step);
-      audioEngine.setActiveSteps(next);
-      return next;
-    });
-    setPresetState('Standard');
-  }, []);
-
+  /** Salsa Clave パターンを Clave トラックに適用 */
   const applyClavePattern = useCallback((pattern: ClavePattern) => {
     const steps = toEngineSteps(pattern.beatPositions);
-    audioEngine.beatsPerBar = 16;
-    audioEngine.subdivision = 2;
-    setTotalStepsState(16);
-    setCheckedSteps(steps);
-    audioEngine.setActiveSteps(steps);
-    setPresetState('Standard');
+    audioEngine.setTrackPattern('clave', steps);
+  }, []);
+
+  const toggleTrackMute = useCallback((id: TrackId) => {
+    const nowMuted = audioEngine.toggleTrackMute(id);
+    setMutedTracks(prev => {
+      const next = new Set(prev);
+      if (nowMuted) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   }, []);
 
   const loadAudioFile = useCallback(async (file: File) => {
@@ -98,9 +66,8 @@ export function useAudioEngine() {
 
   return {
     isPlaying, bpm, setBpm,
-    currentBeat, totalSteps, setTotalSteps,
-    checkedSteps, toggleStep,
-    preset, applyPreset,
+    currentBeat,
+    mutedTracks, toggleTrackMute,
     applyClavePattern,
     start, stop,
     loadAudioFile,

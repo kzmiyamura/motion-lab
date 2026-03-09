@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { ControlPanel } from './components/ControlPanel';
-import { StepGrid } from './components/StepGrid';
+import { RhythmMachine } from './components/RhythmMachine';
 import { ClaveBeatGrid } from './components/ClaveBeatGrid';
 import { ClavePatternSelector } from './components/ClavePatternSelector';
 import { CLAVE_PATTERNS, type ClavePattern } from './engine/salsaPatterns';
@@ -11,8 +11,8 @@ import styles from './App.module.css';
 function App() {
   const {
     isPlaying, bpm, setBpm,
-    currentBeat, totalSteps,
-    checkedSteps, toggleStep,
+    currentBeat,
+    mutedTracks, toggleTrackMute,
     applyClavePattern,
     start, stop,
     loadAudioFile,
@@ -33,7 +33,7 @@ function App() {
   const handlePatternSelect = useCallback((pattern: ClavePattern) => {
     setSelectedPattern(pattern);
     applyClavePattern(pattern);
-    storage.setPatternId(pattern.id);  // 保存
+    storage.setPatternId(pattern.id);
   }, [applyClavePattern]);
 
   return (
@@ -55,15 +55,14 @@ function App() {
         <ClaveBeatGrid beatPositions={selectedPattern.beatPositions} />
       </section>
 
-      {/* ── Metronome ── */}
+      {/* ── Rhythm Machine ── */}
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Metronome</h2>
+        <h2 className={styles.sectionTitle}>Rhythm Machine</h2>
 
-        <StepGrid
-          totalSteps={totalSteps}
-          activeStep={currentBeat}
-          checkedSteps={checkedSteps}
-          onToggleStep={toggleStep}
+        <RhythmMachine
+          currentBeat={currentBeat}
+          mutedTracks={mutedTracks}
+          onToggleMute={toggleTrackMute}
         />
 
         <ControlPanel

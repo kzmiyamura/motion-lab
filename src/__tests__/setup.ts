@@ -27,6 +27,15 @@ class MockAudioContext {
     return { buffer: null, connect: vi.fn(), start: vi.fn() };
   }
 
+  createBiquadFilter() {
+    return {
+      type: 'bandpass',
+      frequency: { value: 0 },
+      Q: { value: 0 },
+      connect: vi.fn(),
+    };
+  }
+
   decodeAudioData(_: ArrayBuffer) {
     return Promise.resolve({} as AudioBuffer);
   }

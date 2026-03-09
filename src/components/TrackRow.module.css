@@ -1,0 +1,176 @@
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.nameBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.name {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #c0b8ff;
+  line-height: 1;
+}
+
+.sub {
+  font-size: 0.65rem;
+  color: #5050a0;
+  line-height: 1;
+}
+
+.muteBtn {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0.25rem 0.6rem;
+  border-radius: 5px;
+  border: 1.5px solid #3a3a6a;
+  background: #0e0e22;
+  color: #7c6bff;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+.muteBtn:hover {
+  border-color: #7c6bff;
+}
+
+.mutedActive {
+  background: #2a1a1a;
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+}
+
+/* ── Beat grid ── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+  gap: 3px;
+}
+
+.step {
+  aspect-ratio: 1;
+  border-radius: 4px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 2px;
+  transition: background 0.05s, box-shadow 0.05s;
+  min-height: 28px;
+}
+
+.stepLabel {
+  font-size: 0.45rem;
+  font-weight: 600;
+  color: #303060;
+  line-height: 1;
+  user-select: none;
+}
+
+/* Step states */
+.stepOff {
+  background: #0e0e22;
+  border: 1px solid #1e1e3a;
+}
+
+.stepOff.stepDown {
+  background: #12122a;
+}
+
+.stepOn {
+  background: #2a2060;
+  border: 1px solid #4a3eb0;
+}
+
+.stepOn.stepDown {
+  background: #322880;
+  border-color: #6a5edd;
+}
+
+/* Active (currently playing) step */
+.stepCurrent.stepOn {
+  background: #7c6bff;
+  border-color: #9d90ff;
+  box-shadow: 0 0 8px rgba(124, 107, 255, 0.6);
+}
+
+.stepCurrent.stepOff {
+  background: #1e1e42;
+  border-color: #3a3870;
+  box-shadow: 0 0 4px rgba(124, 107, 255, 0.2);
+}
+
+/* Muted track — desaturate */
+.stepMuted.stepOn {
+  background: #2a2a3a;
+  border-color: #3a3a50;
+}
+
+.stepMuted.stepCurrent.stepOn {
+  background: #383848;
+  box-shadow: none;
+}
+
+/* Track-specific colors for ON steps */
+[data-track='conga'] .stepOn {
+  background: #1a2a20;
+  border-color: #3a7050;
+}
+
+[data-track='conga'] .stepOn.stepDown {
+  background: #1e3228;
+  border-color: #4a8860;
+}
+
+[data-track='conga'] .stepCurrent.stepOn {
+  background: #40c070;
+  border-color: #60d890;
+  box-shadow: 0 0 8px rgba(64, 192, 112, 0.5);
+}
+
+[data-track='cowbell'] .stepOn {
+  background: #2a2210;
+  border-color: #706030;
+}
+
+[data-track='cowbell'] .stepOn.stepDown {
+  background: #322a14;
+  border-color: #887840;
+}
+
+[data-track='cowbell'] .stepCurrent.stepOn {
+  background: #d0a030;
+  border-color: #e8c050;
+  box-shadow: 0 0 8px rgba(208, 160, 48, 0.5);
+}
+
+/* ── Mobile ── */
+@media (max-width: 480px) {
+  .grid {
+    grid-template-columns: repeat(8, 1fr);
+    gap: 3px;
+  }
+
+  .step {
+    min-height: 24px;
+  }
+
+  .stepLabel {
+    font-size: 0.4rem;
+  }
+}

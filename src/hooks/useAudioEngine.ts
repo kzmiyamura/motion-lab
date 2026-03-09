@@ -2,18 +2,23 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { audioEngine, type BeatCallback } from '../engine/AudioEngine';
 import { PRESETS, type PresetName, type TotalSteps } from '../engine/presets';
 import { toEngineSteps, type ClavePattern } from '../engine/salsaPatterns';
+import { storage } from '../engine/storage';
 
 export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [bpm, setBpmState] = useState(audioEngine.bpm);
+  // BPM: localStorage から復元。なければデフォルト 180（ミディアム）
+  const [bpm, setBpmState] = useState<number>(() => {
+    const saved = storage.getBpm();
+    audioEngine.bpm = saved;
+    return saved;
+  });
   const [currentBeat, setCurrentBeat] = useState(-1);
-  const [totalSteps, setTotalStepsState] = useState<TotalSteps>(4);
+  const [totalSteps, setTotalStepsState] = useState<TotalSteps>(16);
   const [checkedSteps, setCheckedSteps] = useState<Set<number>>(
     new Set(PRESETS['Standard'].pattern)
   );
   const [preset, setPresetState] = useState<PresetName>('Standard');
 
-  // Beat コールバックを最新の状態に保つ（再購読を回避）
   const beatHandlerRef = useRef<BeatCallback | null>(null);
   useEffect(() => {
     beatHandlerRef.current = ({ beat }) => setCurrentBeat(beat);
@@ -24,7 +29,6 @@ export function useAudioEngine() {
     return () => { unsubscribe(); };
   }, []);
 
-  // 初期状態をエンジンに反映
   useEffect(() => {
     audioEngine.setActiveSteps(new Set(PRESETS['Standard'].pattern));
   }, []);
@@ -43,11 +47,12 @@ export function useAudioEngine() {
   const setBpm = useCallback((value: number) => {
     audioEngine.bpm = value;
     setBpmState(value);
+    storage.setBpm(value);       // 保存
   }, []);
 
   const setTotalSteps = useCallback((steps: TotalSteps) => {
     audioEngine.beatsPerBar = steps;
-    audioEngine.subdivision = 1;   // 通常は4分音符
+    audioEngine.subdivision = 1;
     setTotalStepsState(steps);
     setPresetState('Standard');
     const allSteps = new Set(Array.from({ length: steps }, (_, i) => i));
@@ -76,11 +81,10 @@ export function useAudioEngine() {
     setPresetState('Standard');
   }, []);
 
-  /** Salsa Clave パターンを選んだとき AudioEngine にも反映する (16ステップ = 8分音符) */
   const applyClavePattern = useCallback((pattern: ClavePattern) => {
     const steps = toEngineSteps(pattern.beatPositions);
     audioEngine.beatsPerBar = 16;
-    audioEngine.subdivision = 2;   // 1ステップ = 8分音符 (BPM=4分音符基準のまま)
+    audioEngine.subdivision = 2;
     setTotalStepsState(16);
     setCheckedSteps(steps);
     audioEngine.setActiveSteps(steps);

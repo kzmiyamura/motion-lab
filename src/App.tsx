@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { ControlPanel } from './components/ControlPanel';
 import { StepGrid } from './components/StepGrid';
 import { ClaveBeatGrid } from './components/ClaveBeatGrid';
 import { ClavePatternSelector } from './components/ClavePatternSelector';
 import { CLAVE_PATTERNS, type ClavePattern } from './engine/salsaPatterns';
+import { storage } from './engine/storage';
 import styles from './App.module.css';
 
 function App() {
@@ -17,12 +18,22 @@ function App() {
     loadAudioFile,
   } = useAudioEngine();
 
-  const [selectedPattern, setSelectedPattern] = useState<ClavePattern>(CLAVE_PATTERNS[0]);
+  // パターン: localStorage から復元。なければ Son Clave 2-3
+  const [selectedPattern, setSelectedPattern] = useState<ClavePattern>(() => {
+    const savedId = storage.getPatternId();
+    return CLAVE_PATTERNS.find(p => p.id === savedId) ?? CLAVE_PATTERNS[0];
+  });
 
-  // Clave パターン選択 → ビジュアルと音を同時に更新
+  // マウント時に保存済みパターンをエンジンに適用
+  useEffect(() => {
+    applyClavePattern(selectedPattern);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handlePatternSelect = useCallback((pattern: ClavePattern) => {
     setSelectedPattern(pattern);
     applyClavePattern(pattern);
+    storage.setPatternId(pattern.id);  // 保存
   }, [applyClavePattern]);
 
   return (

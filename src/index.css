@@ -11,4 +11,8 @@ body {
   -moz-osx-font-smoothing: grayscale;
   background: #080814;
   color: #e0e0ff;
+  overflow-x: hidden;
+  /* iOSの安全領域（ノッチ・ホームバー）対応 */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }

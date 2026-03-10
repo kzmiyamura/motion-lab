@@ -1,43 +1,25 @@
-import { useState, useCallback, useEffect } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { ControlPanel } from './components/ControlPanel';
 import { RhythmMachine } from './components/RhythmMachine';
 import { ClaveBeatGrid } from './components/ClaveBeatGrid';
 import { ClavePatternSelector } from './components/ClavePatternSelector';
-import { CLAVE_PATTERNS, type ClavePattern } from './engine/salsaPatterns';
-import { storage } from './engine/storage';
+import { FlipIndicator } from './components/FlipIndicator';
 import styles from './App.module.css';
 
 function App() {
   const {
     isPlaying, bpm, setBpm,
     currentBeat,
+    selectedPattern, handlePatternSelect,
+    flipPending, flipTarget, requestFlip,
+    randomFlipMode, setRandomFlipMode,
     mutedTracks, toggleTrackMute,
     congaMuted,   toggleCongaMute,
     cowbellMuted, toggleCowbellMute,
     backgroundPlay, setBackgroundPlay,
-    applyClavePattern,
     start, stop,
     loadAudioFile,
   } = useAudioEngine();
-
-  // パターン: localStorage から復元。なければ Son Clave 2-3
-  const [selectedPattern, setSelectedPattern] = useState<ClavePattern>(() => {
-    const savedId = storage.getPatternId();
-    return CLAVE_PATTERNS.find(p => p.id === savedId) ?? CLAVE_PATTERNS[0];
-  });
-
-  // マウント時に保存済みパターンをエンジンに適用
-  useEffect(() => {
-    applyClavePattern(selectedPattern);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handlePatternSelect = useCallback((pattern: ClavePattern) => {
-    setSelectedPattern(pattern);
-    applyClavePattern(pattern);
-    storage.setPatternId(pattern.id);
-  }, [applyClavePattern]);
 
   return (
     <main className={styles.main}>
@@ -56,6 +38,19 @@ function App() {
         />
 
         <ClaveBeatGrid beatPositions={selectedPattern.beatPositions} />
+
+        {/* Flip Clave button */}
+        <div className={styles.flipRow}>
+          <button
+            className={`${styles.flipBtn} ${flipPending ? styles.flipBtnPending : ''}`}
+            onClick={requestFlip}
+            disabled={!isPlaying || flipPending}
+            title={!isPlaying ? '再生中のみ使用可能' : flipPending ? '反転待機中…' : 'クラーベを次の小節で反転'}
+          >
+            ⚡ Flip Clave
+          </button>
+          <FlipIndicator flipPending={flipPending} flipTarget={flipTarget} />
+        </div>
       </section>
 
       {/* ── Rhythm Machine ── */}
@@ -81,6 +76,8 @@ function App() {
           onCongaMuteToggle={toggleCongaMute}
           cowbellMuted={cowbellMuted}
           onCowbellMuteToggle={toggleCowbellMute}
+          randomFlipMode={randomFlipMode}
+          onRandomFlipModeChange={setRandomFlipMode}
         />
       </section>
     </main>

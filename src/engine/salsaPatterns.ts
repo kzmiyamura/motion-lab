@@ -81,3 +81,13 @@ export const CLAVE_PATTERNS: ClavePattern[] = [
     beatPositions: [1, 2.5, 4.3, 6, 7],
   },
 ];
+
+/**
+ * 2-3 ↔ 3-2 のペアマッピング。Flip Clave 機能で使用。
+ */
+export const CLAVE_FLIP_MAP: Record<string, string> = {
+  'son-2-3':   'son-3-2',
+  'son-3-2':   'son-2-3',
+  'rumba-2-3': 'rumba-3-2',
+  'rumba-3-2': 'rumba-2-3',
+};

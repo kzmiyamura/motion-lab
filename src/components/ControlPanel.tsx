@@ -15,6 +15,8 @@ type Props = {
   onCongaMuteToggle: () => void;
   cowbellMuted: boolean;
   onCowbellMuteToggle: () => void;
+  randomFlipMode: boolean;
+  onRandomFlipModeChange: (v: boolean) => void;
 };
 
 export function ControlPanel({
@@ -30,6 +32,8 @@ export function ControlPanel({
   onCongaMuteToggle,
   cowbellMuted,
   onCowbellMuteToggle,
+  randomFlipMode,
+  onRandomFlipModeChange,
 }: Props) {
   const activeCategoryId = getActiveCategoryId(bpm);
 
@@ -152,6 +156,25 @@ export function ControlPanel({
           aria-label="Campana master mute"
           className={`${styles.toggle} ${!cowbellMuted ? styles.toggleOn : ''}`}
           onClick={onCowbellMuteToggle}
+        >
+          <span className={styles.toggleThumb} />
+        </button>
+      </div>
+
+      {/* ── Random Flip Mode ── */}
+      <div className={styles.settingsRow}>
+        <span className={styles.settingsLabel}>
+          Random Flip Mode
+          <span className={styles.settingsSub}>
+            {randomFlipMode ? '自動でクラーベを反転' : '手動フリップのみ'}
+          </span>
+        </span>
+        <button
+          role="switch"
+          aria-checked={randomFlipMode}
+          aria-label="Random Flip Mode"
+          className={`${styles.toggle} ${randomFlipMode ? styles.toggleOn : ''}`}
+          onClick={() => onRandomFlipModeChange(!randomFlipMode)}
         >
           <span className={styles.toggleThumb} />
         </button>

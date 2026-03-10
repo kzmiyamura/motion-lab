@@ -15,6 +15,8 @@ const baseProps = {
   onCongaMuteToggle: vi.fn(),
   cowbellMuted: true,
   onCowbellMuteToggle: vi.fn(),
+  randomFlipMode: false,
+  onRandomFlipModeChange: vi.fn(),
 };
 
 describe('ControlPanel', () => {

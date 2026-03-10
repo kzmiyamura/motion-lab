@@ -1,0 +1,35 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 1rem;
+  background: #1a1040;
+  border: 1px solid #7c6bff;
+  border-radius: 8px;
+  width: 100%;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #c0b0ff;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.next {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e0d8ff;
+}
+
+@keyframes pulse {
+  0%, 100% { border-color: #7c6bff; box-shadow: none; }
+  50%       { border-color: #b09fff; box-shadow: 0 0 8px rgba(124,107,255,0.4); }
+}
+
+@media (max-width: 480px) {
+  .bar { padding: 0.5rem 0.75rem; }
+  .next { font-size: 0.78rem; }
+}

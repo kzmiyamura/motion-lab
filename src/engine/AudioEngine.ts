@@ -134,12 +134,42 @@ export class AudioEngine {
   // visibilitychange リスナー（一度だけ登録）
   private visibilityHandler: (() => void) | null = null;
 
+  // ── Clave Flip ─────────────────────────────────────────────────────────────
+  private _flipPhase: 'idle' | 'announced' | 'ready' = 'idle';
+  private _pendingFlipPattern: Set<number> | null = null;
+  private flipCallbacks: Set<() => void> = new Set();
+
   // ── Public API ────────────────────────────────────────────────────────────
 
   get bpm() { return this._bpm; }
   set bpm(value: number) { this._bpm = Math.max(20, Math.min(300, value)); }
 
   get isPlaying() { return this._isPlaying; }
+
+  get flipPhase() { return this._flipPhase; }
+  get pendingFlip() { return this._flipPhase !== 'idle'; }
+
+  /**
+   * フリップをリクエスト。
+   * Beat 13 でアバニコ再生 → Beat 0 で反転適用。
+   * 既にペンディング中、または再生中でない場合は無視。
+   */
+  requestFlip(newClaveSteps: Set<number>) {
+    if (this._flipPhase !== 'idle') return;
+    if (!this._isPlaying) return;
+    this._pendingFlipPattern = newClaveSteps;
+    this._flipPhase = 'announced';
+  }
+
+  cancelFlip() {
+    this._pendingFlipPattern = null;
+    this._flipPhase = 'idle';
+  }
+
+  onFlip(cb: () => void) {
+    this.flipCallbacks.add(cb);
+    return () => this.flipCallbacks.delete(cb);
+  }
 
   onBeat(cb: BeatCallback) {
     this.beatCallbacks.add(cb);
@@ -221,6 +251,8 @@ export class AudioEngine {
       clearInterval(this.schedulerTimer);
       this.schedulerTimer = null;
     }
+    this._pendingFlipPattern = null;
+    this._flipPhase = 'idle';
     this.stopSilentLoop();
   }
 
@@ -339,6 +371,22 @@ export class AudioEngine {
   }
 
   private scheduleBeat(ctx: AudioContext, time: number, beat: number) {
+    // Beat 13: アバニコを鳴らし、フリップ準備完了へ
+    if (beat === 13 && this._flipPhase === 'announced') {
+      const stepDuration = (60 / this._bpm) / SUBDIVISION;
+      this.playAbanico(ctx, time, stepDuration * 3);
+      this._flipPhase = 'ready';
+    }
+
+    // Beat 0: フリップを適用
+    if (beat === 0 && this._flipPhase === 'ready') {
+      this.applyFlip();
+      this._flipPhase = 'idle';
+      this._pendingFlipPattern = null;
+      const cbs = [...this.flipCallbacks];
+      setTimeout(() => cbs.forEach(cb => cb()), 0);
+    }
+
     for (const track of this.tracks.values()) {
       if (!track.muted && track.pattern.has(beat)) {
         this.playTrack(ctx, track.id, time);
@@ -574,6 +622,72 @@ export class AudioEngine {
     filter.connect(masterGain);
     masterGain.connect(ctx.destination);
     if (this.convolver) masterGain.connect(this.convolver);
+  }
+
+  /**
+   * アバニコ: ティンバレスによる加速するロール音。
+   * 「カラカラカラッ！」— バンドパスノイズが加速・クレッシェンドしてフィナーレへ。
+   */
+  private playAbanico(ctx: AudioContext, startTime: number, duration: number) {
+    const hits = 10;
+    for (let i = 0; i < hits; i++) {
+      const progress = i / hits;
+      // 加速する間隔: 等差から徐々に縮む
+      const t = startTime + duration * (1 - Math.pow(1 - progress, 2));
+      const hitDuration = Math.max(0.008, 0.018 - progress * 0.010);
+      const bufLen = Math.floor(ctx.sampleRate * hitDuration);
+      const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let j = 0; j < bufLen; j++) data[j] = Math.random() * 2 - 1;
+
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 3000 + progress * 2000; // 3→5kHz 上昇スウィープ
+      filter.Q.value = 3;
+
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = (0.25 + progress * 0.55) * 0.5; // クレッシェンド
+
+      src.connect(filter);
+      filter.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      src.start(t);
+    }
+
+    // 最後のアクセント (三角波)
+    const finalT = startTime + duration * 0.92;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(900, finalT);
+    const finalGain = ctx.createGain();
+    finalGain.gain.setValueAtTime(0.5, finalT);
+    finalGain.gain.exponentialRampToValueAtTime(0.001, finalT + 0.1);
+    osc.connect(finalGain);
+    finalGain.connect(ctx.destination);
+    osc.start(finalT);
+    osc.stop(finalT + 0.12);
+  }
+
+  /**
+   * フリップ適用: クラーベを newPattern に更新し、他の全トラックのバーA↔Bを入れ替え。
+   */
+  private applyFlip() {
+    // クラーベを新パターンに
+    if (this._pendingFlipPattern) {
+      this.tracks.get('clave')!.pattern = this._pendingFlipPattern;
+    }
+    // 他トラック: step 0-7 ↔ step 8-15
+    for (const [id, track] of this.tracks) {
+      if (id === 'clave') continue;
+      const flipped = new Set<number>();
+      for (const step of track.pattern) {
+        flipped.add(step < 8 ? step + 8 : step - 8);
+      }
+      track.pattern = flipped;
+    }
   }
 
   private advanceBeat() {

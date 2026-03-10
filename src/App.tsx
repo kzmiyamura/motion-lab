@@ -25,14 +25,13 @@ function App() {
   } = useAudioEngine();
 
   return (
-    <>
-    <InstallPrompt />
     <main className={styles.main}>
       <header className={styles.header}>
         <h1 className={styles.title}>MotionLab</h1>
         <p className={styles.subtitle}>High-Precision Dance Training & Motion Analysis</p>
       </header>
 
+      <InstallPrompt />
       <SamplesStatus samplesReady={samplesReady} samplesOffline={samplesOffline} />
 
       {/* ── Salsa Clave ── */}
@@ -96,7 +95,6 @@ function App() {
         />
       </section>
     </main>
-    </>
   );
 }
 

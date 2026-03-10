@@ -9,22 +9,18 @@ export function InstallPrompt() {
 
   return (
     <>
-      {/* Floating install banner */}
+      {/* Inline install banner — appears in page flow below header */}
       <div className={styles.banner} role="complementary" aria-label="インストール案内">
-        <div className={styles.bannerContent}>
-          <span className={styles.bannerIcon}>📲</span>
-          <span className={styles.bannerText}>
-            ホーム画面に追加してオフラインで使う
-          </span>
-        </div>
-        <div className={styles.bannerActions}>
-          <button className={styles.installBtn} onClick={handleInstall}>
-            追加
-          </button>
-          <button className={styles.closeBtn} onClick={dismiss} aria-label="閉じる">
-            ✕
-          </button>
-        </div>
+        <span className={styles.bannerIcon}>📲</span>
+        <span className={styles.bannerText}>
+          ホーム画面に追加してオフラインで使う
+        </span>
+        <button className={styles.installBtn} onClick={handleInstall}>
+          追加
+        </button>
+        <button className={styles.closeBtn} onClick={dismiss} aria-label="閉じる">
+          ✕
+        </button>
       </div>
 
       {/* iOS guide modal */}
@@ -39,9 +35,8 @@ export function InstallPrompt() {
               <li>
                 <span className={styles.stepIcon}>1</span>
                 <span>
-                  Safari 下部のツールバーにある{' '}
+                  Safari 下部ツールバーの{' '}
                   <span className={styles.shareIcon} aria-label="共有">
-                    {/* iOS share icon */}
                     <svg width="16" height="20" viewBox="0 0 16 20" fill="none" aria-hidden="true">
                       <path
                         d="M8 13V1M8 1L4 5M8 1l4 4"

@@ -1,0 +1,202 @@
+/* ── Floating install banner ── */
+.banner {
+  position: fixed;
+  bottom: env(safe-area-inset-bottom, 0px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  background: #0e0e24;
+  border-top: 1px solid #2a2a50;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+.bannerContent {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.bannerIcon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.bannerText {
+  font-size: 0.8rem;
+  color: #a0a0d0;
+  line-height: 1.35;
+}
+
+.bannerActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.installBtn {
+  padding: 0.45rem 1rem;
+  border: 1.5px solid #7c6bff;
+  border-radius: 20px;
+  background: transparent;
+  color: #a090ff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.installBtn:active {
+  background: rgba(124, 107, 255, 0.2);
+  color: #c0b0ff;
+}
+
+.closeBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: #4040a0;
+  font-size: 0.75rem;
+  cursor: pointer;
+  border-radius: 50%;
+  transition: color 0.15s;
+  padding: 0;
+}
+
+.closeBtn:active {
+  color: #8080c0;
+}
+
+/* ── iOS guide modal ── */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.modal {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  background: #13132a;
+  border-top: 1px solid #2a2a50;
+  border-radius: 20px 20px 0 0;
+  padding: 1.5rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom, 0px));
+  animation: slideUp 0.25s ease-out;
+}
+
+.modalClose {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: #1e1e40;
+  color: #6060a0;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.modalTitle {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #c0b0ff;
+  margin: 0 0 1.25rem;
+}
+
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: #9090c0;
+  line-height: 1.5;
+}
+
+.stepIcon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(124, 107, 255, 0.2);
+  border: 1px solid #4a42a0;
+  color: #9080e0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.steps li strong {
+  color: #c0b0ff;
+  font-weight: 700;
+}
+
+.shareIcon {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  color: #5b8ef5;
+  margin: 0 1px;
+}
+
+.modalOk {
+  width: 100%;
+  padding: 0.7rem;
+  border: 1.5px solid #4a42a0;
+  border-radius: 10px;
+  background: rgba(124, 107, 255, 0.1);
+  color: #a090e0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.modalOk:active {
+  background: rgba(124, 107, 255, 0.2);
+}

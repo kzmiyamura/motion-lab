@@ -18,19 +18,17 @@ function createSilentWavUrl(): string {
   const str = (off: number, s: string) =>
     [...s].forEach((c, i) => view.setUint8(off + i, c.charCodeAt(0)));
 
-  // RIFF/WAVE ヘッダー
   str(0,  'RIFF'); view.setUint32(4, 36 + dataSize, true);
   str(8,  'WAVE');
   str(12, 'fmt '); view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);              // PCM
-  view.setUint16(22, 1, true);              // mono
-  view.setUint32(24, sampleRate, true);     // sample rate
-  view.setUint32(28, sampleRate * 2, true); // byte rate
-  view.setUint16(32, 2, true);              // block align
-  view.setUint16(34, 16, true);             // bits/sample
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
   str(36, 'data'); view.setUint32(40, dataSize, true);
 
-  // ±1 LSB ディザ（-96 dB 相当、人間には完全に聴こえない）
   for (let i = 44; i < buf.byteLength; i += 2) {
     view.setInt16(i, Math.round((Math.random() - 0.5) * 2), true);
   }
@@ -43,54 +41,59 @@ function createSilentWavUrl(): string {
  *
  * バックグラウンド再生を維持するための3層防衛:
  *   1. <audio> 要素で無音 WAV をループ再生
- *      → ブラウザ/OS が「メディア再生中」と認識する
- *   2. navigator.mediaSession の metadata + action handler を設定
- *      → ロック画面・コントロールセンターに再生コントロールを表示
+ *   2. Media Session API でロック画面コントロール設定
  *   3. visibilitychange → visible 時に AudioContext.resume() を明示呼び出し
- *      → iOS Safari による強制 suspend から復帰
+ *
+ * ⚠️ visibilitychange ハンドラは一度だけ登録し、ref 経由で現在値を参照する。
+ *    依存配列に isPlaying を入れて毎回再登録すると「hidden → visible」間の
+ *    React コミット遅延でスタールクロージャが残り、停止済みの音声を
+ *    誤って resume してしまうため。
  */
 export function useSilentAudio(
   isPlaying: boolean,
   onPlay:   () => void,
   onStop:   () => void,
 ) {
-  const audioRef   = useRef<HTMLAudioElement | null>(null);
-  const blobUrlRef = useRef<string | null>(null);
+  const audioRef    = useRef<HTMLAudioElement | null>(null);
+  const blobUrlRef  = useRef<string | null>(null);
 
-  // ── マウント時に audio 要素を生成 ────────────────────────────────────────
+  // ── 常に最新の値を保持する ref（ハンドラ内のスタールクロージャを防ぐ）──
+  const isPlayingRef = useRef(isPlaying);
+  const onPlayRef    = useRef(onPlay);
+  const onStopRef    = useRef(onStop);
+  isPlayingRef.current = isPlaying;
+  onPlayRef.current    = onPlay;
+  onStopRef.current    = onStop;
+
+  // ── マウント時に audio 要素を生成（一度のみ）───────────────────────────
   useEffect(() => {
-    const url   = createSilentWavUrl();
+    const url  = createSilentWavUrl();
     blobUrlRef.current = url;
 
     const audio = new Audio(url);
     audio.loop  = true;
-    // volume はデフォルト(1.0)のまま。WAV データ自体が無音なので出力は 0。
-    // volume=0 にするとブラウザが "muted media" と判断し Media Session を
-    // 無効化するブラウザがあるため設定しない。
     audioRef.current = audio;
 
     return () => {
       audio.pause();
       URL.revokeObjectURL(url);
-      audioRef.current  = null;
+      audioRef.current   = null;
       blobUrlRef.current = null;
     };
   }, []);
 
-  // ── isPlaying に連動して再生/一時停止 ─────────────────────────────────────
+  // ── isPlaying に連動して再生 / 一時停止 ─────────────────────────────────
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-
     if (isPlaying) {
-      // ユーザー操作(Start クリック)後なので autoplay ポリシーは通過する
       audio.play().catch(() => {});
     } else {
       audio.pause();
     }
   }, [isPlaying]);
 
-  // ── Media Session: OS に「再生中」を通知 + ロック画面コントロール設定 ─────
+  // ── Media Session: OS に「再生中」を通知 ─────────────────────────────────
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
 
@@ -101,32 +104,33 @@ export function useSilentAudio(
         album:  'MotionLab',
       });
       navigator.mediaSession.playbackState = 'playing';
-
-      // ロック画面の再生/停止ボタンと AudioEngine を紐付け
-      navigator.mediaSession.setActionHandler('play',  () => onPlay());
-      navigator.mediaSession.setActionHandler('pause', () => onStop());
-      navigator.mediaSession.setActionHandler('stop',  () => onStop());
+      navigator.mediaSession.setActionHandler('play',  () => onPlayRef.current());
+      navigator.mediaSession.setActionHandler('pause', () => onStopRef.current());
+      navigator.mediaSession.setActionHandler('stop',  () => onStopRef.current());
     } else {
       navigator.mediaSession.playbackState = 'paused';
     }
-  }, [isPlaying, onPlay, onStop]);
+  }, [isPlaying]);
 
-  // ── visibilitychange: 復帰時に AudioContext を明示 resume ─────────────────
+  // ── visibilitychange: マウント時に一度だけ登録、ref で最新値を参照 ───────
+  // [isPlaying] に依存させると hidden→visible 間の React コミット遅延で
+  // 古いクロージャが残り、停止済みエンジンを誤って resume してしまう。
   useEffect(() => {
     const handler = () => {
       if (document.visibilityState !== 'visible') return;
-      if (!isPlaying) return;
+      // ref で現在値を確認（スタールクロージャ回避）
+      if (!isPlayingRef.current) return;
+      // audioEngine.isPlaying も確認：
+      // React state が true でもエンジンが既に停止していれば何もしない
+      if (!audioEngine.isPlaying) return;
 
-      // 1. <audio> が iOS で止まっていれば再開
       audioRef.current?.play().catch(() => {});
-
-      // 2. AudioContext が OS に suspend させられていれば resume
       audioEngine.resumeIfSuspended();
     };
 
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
-  }, [isPlaying]);
+  }, []); // 意図的に空 — ref 経由で常に最新値を参照する
 
   // ── アンマウント時に Media Session をクリア ─────────────────────────────
   useEffect(() => {

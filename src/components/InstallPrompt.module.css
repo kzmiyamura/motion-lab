@@ -166,6 +166,13 @@
   font-weight: 700;
 }
 
+.hint {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.75rem;
+  color: #6060a0;
+}
+
 .shareIcon {
   display: inline-flex;
   align-items: center;

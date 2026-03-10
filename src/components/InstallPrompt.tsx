@@ -64,8 +64,12 @@ export function InstallPrompt() {
               <li>
                 <span className={styles.stepIcon}>2</span>
                 <span>
-                  メニューをスクロールして{' '}
+                  シートを下にスクロールして{' '}
                   <strong>「ホーム画面に追加」</strong> をタップ
+                  <br />
+                  <span className={styles.hint}>
+                    ※ 見当たらない場合は一覧末尾の「編集」から追加できます
+                  </span>
                 </span>
               </li>
               <li>

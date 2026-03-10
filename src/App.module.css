@@ -60,7 +60,36 @@
   align-self: flex-start;
 }
 
-/* ── Flip Clave row ── */
+/* ── Flip Clave section ── */
+.flipSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.9rem 1rem;
+  background: #0e0e1e;
+  border: 1px solid #1e1e3a;
+  border-radius: 10px;
+}
+
+.flipHelp {
+  font-size: 0.75rem;
+  line-height: 1.7;
+  color: #5858a0;
+  margin: 0;
+}
+
+.flipHelp strong {
+  color: #8878d0;
+  font-weight: 700;
+}
+
+.flipHelp em {
+  font-style: normal;
+  color: #7c6bff;
+  font-weight: 600;
+}
+
 .flipRow {
   display: flex;
   align-items: center;

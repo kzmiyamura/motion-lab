@@ -39,17 +39,25 @@ function App() {
 
         <ClaveBeatGrid beatPositions={selectedPattern.beatPositions} />
 
-        {/* Flip Clave button */}
-        <div className={styles.flipRow}>
-          <button
-            className={`${styles.flipBtn} ${flipPending ? styles.flipBtnPending : ''}`}
-            onClick={requestFlip}
-            disabled={!isPlaying || flipPending}
-            title={!isPlaying ? '再生中のみ使用可能' : flipPending ? '反転待機中…' : 'クラーベを次の小節で反転'}
-          >
-            ⚡ Flip Clave
-          </button>
-          <FlipIndicator flipPending={flipPending} flipTarget={flipTarget} />
+        {/* Flip Clave button + 説明 */}
+        <div className={styles.flipSection}>
+          <p className={styles.flipHelp}>
+            <strong>Flip Clave</strong> — サルサの曲中でリズムの向きが切り替わる瞬間を練習するための機能。
+            再生中にボタンを押すと、現在の2小節サイクルの終わりにアバニコ（合図音）が鳴り、
+            次の1拍目から <em>2-3 ↔ 3-2</em> が反転します。
+            Random Flip Mode をオンにすると自動でランダムに反転します。
+          </p>
+          <div className={styles.flipRow}>
+            <button
+              className={`${styles.flipBtn} ${flipPending ? styles.flipBtnPending : ''}`}
+              onClick={requestFlip}
+              disabled={!isPlaying || flipPending}
+              title={!isPlaying ? '再生中のみ使用可能' : flipPending ? '反転待機中…' : 'クラーベを次の小節で反転'}
+            >
+              ⚡ Flip Clave
+            </button>
+            <FlipIndicator flipPending={flipPending} flipTarget={flipTarget} />
+          </div>
         </div>
       </section>
 

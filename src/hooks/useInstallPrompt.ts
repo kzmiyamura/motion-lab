@@ -2,10 +2,19 @@ import { useEffect, useState, useCallback } from 'react';
 
 type Platform = 'android' | 'ios' | 'other';
 
-/** LINE / Instagram / Facebook 等のアプリ内ブラウザかどうか */
-function detectInAppBrowser(): boolean {
+/**
+ * Safari 以外の iOS ブラウザかどうか。
+ * - LINE / Instagram / Facebook などのアプリ内ブラウザ
+ * - Chrome iOS (CriOS) / Firefox iOS (FxiOS) など
+ * これらは iOS の制限により「ホーム画面に追加」ができない。
+ */
+function detectNonSafariBrowser(): boolean {
   const ua = navigator.userAgent;
-  return /Line\//i.test(ua) || /Instagram/i.test(ua) || /FBAN|FBAV/i.test(ua);
+  // アプリ内ブラウザ
+  if (/Line\//i.test(ua) || /Instagram/i.test(ua) || /FBAN|FBAV/i.test(ua)) return true;
+  // iOS 上の Chrome / Firefox / Edge / その他 Chromium 系
+  if (/CriOS/i.test(ua) || /FxiOS/i.test(ua) || /EdgiOS/i.test(ua)) return true;
+  return false;
 }
 
 function detectPlatform(): Platform {
@@ -35,7 +44,7 @@ interface BeforeInstallPromptEvent extends Event {
 export function useInstallPrompt() {
   const [visible, setVisible] = useState(false);
   const [platform, setPlatform] = useState<Platform>('other');
-  const [inAppBrowser, setInAppBrowser] = useState(false);
+  const [nonSafari, setNonSafari] = useState(false);
   const [iosGuideOpen, setIosGuideOpen] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
 
@@ -43,12 +52,12 @@ export function useInstallPrompt() {
     if (!isMobile() || isStandalone()) return;
 
     const p = detectPlatform();
-    const inApp = detectInAppBrowser();
+    const notSafari = detectNonSafariBrowser();
     setPlatform(p);
-    setInAppBrowser(inApp);
+    setNonSafari(notSafari);
 
-    if (inApp) {
-      // アプリ内ブラウザ: Safari で開くよう誘導するバナーを表示
+    if (notSafari) {
+      // Safari 以外（Chrome iOS / LINE など）: Safari で開くよう誘導
       setVisible(true);
       return;
     }
@@ -82,7 +91,7 @@ export function useInstallPrompt() {
   }, []);
 
   const handleInstall = useCallback(async () => {
-    if (inAppBrowser) {
+    if (nonSafari) {
       openInSafari();
       return;
     }
@@ -95,7 +104,7 @@ export function useInstallPrompt() {
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') setVisible(false);
     setDeferredPrompt(null);
-  }, [inAppBrowser, platform, deferredPrompt, openInSafari]);
+  }, [nonSafari, platform, deferredPrompt, openInSafari]);
 
   const dismiss = useCallback(() => {
     setVisible(false);
@@ -106,5 +115,5 @@ export function useInstallPrompt() {
     setIosGuideOpen(false);
   }, []);
 
-  return { visible, platform, inAppBrowser, iosGuideOpen, handleInstall, dismiss, closeIosGuide };
+  return { visible, platform, nonSafari, iosGuideOpen, handleInstall, dismiss, closeIosGuide };
 }

@@ -83,8 +83,8 @@ const REVERB_WET: Record<TrackId, number> = {
 const TRACK_GAIN: Record<TrackId, number> = {
   clave:         0.85,
   'conga-open':  1.40,  // dominant hit
-  'conga-slap':  0.52,  // medium accent
-  'conga-heel':  0.85,  // ghost notes — audible but softer
+  'conga-slap':  0.40,  // medium accent
+  'conga-heel':  2.00,  // v1 sample is very quiet; boost to compensate
   'cowbell-low':  0.28,
   'cowbell-high': 0.40,
 };
@@ -502,7 +502,7 @@ export class AudioEngine {
 
     const envGain = ctx.createGain();
     envGain.gain.setValueAtTime(0, t);
-    envGain.gain.linearRampToValueAtTime(g, t + 0.02);   // slow attack
+    envGain.gain.linearRampToValueAtTime(g, t + 0.008);  // faster attack
     envGain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
     osc.connect(envGain);
     osc.start(t);

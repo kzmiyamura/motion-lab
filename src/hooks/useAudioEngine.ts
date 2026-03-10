@@ -49,7 +49,12 @@ export function useAudioEngine() {
       (id): id is TrackId => (VALID_TRACK_IDS as string[]).includes(id),
     );
     const muted = new Set<TrackId>(saved);
-    for (const id of muted) audioEngine.setTrackMuted(id, true);
+    // 全トラックを明示的に同期する（muted/unmuted 両方）。
+    // muted だけ設定すると、エンジンデフォルト=true のトラックを
+    // localStorage で ON にしてリロードした際に unmute が伝わらない。
+    for (const id of VALID_TRACK_IDS) {
+      audioEngine.setTrackMuted(id, muted.has(id));
+    }
     return muted;
   });
 

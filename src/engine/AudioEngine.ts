@@ -47,11 +47,8 @@ const SAMPLE_URLS: Record<TrackId, string[]> = {
     `${VSCO}/Tumba-HitN_v2_rr1_Sum.wav`,
     `${VSCO}/Tumba-HitN_v2_rr2_Sum.wav`,
   ],
-  // Conga Slap: sharp dry accent (slap variant; falls back to synth if absent)
-  'conga-slap': [
-    `${VSCO}/Tumba-Slap_v2_rr1_Sum.wav`,
-    `${VSCO}/Tumba-Slap_v2_rr2_Sum.wav`,
-  ],
+  // Conga Slap: Tumba-Slap does not exist in VSCO-2-CE — always use synth
+  'conga-slap': [],
   // Conga Heel/Toe: always use synth — v1 sample sounds like a small open hit,
   // not the muffled "gosogoso" character we need.
   'conga-heel': [],

@@ -82,7 +82,7 @@ const TRACK_GAIN: Record<TrackId, number> = {
   clave:         0.85,
   'conga-open':  1.40,  // dominant hit
   'conga-slap':  0.30,  // medium accent
-  'conga-heel':  1.10,  // synth-only; bandpass noise "gosogoso"
+  'conga-heel':  0.70,  // synth-only; lowpass noise "gosogoso"
   'cowbell-low':  0.28,
   'cowbell-high': 0.40,
 };
@@ -494,7 +494,7 @@ export class AudioEngine {
   private synthCongaHeel(ctx: AudioContext, time: number) {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['conga-heel'], time);
 
-    const duration = 0.055;
+    const duration = 0.035;
     const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
@@ -502,11 +502,12 @@ export class AudioEngine {
     const src = ctx.createBufferSource();
     src.buffer = buf;
 
-    // Low-mid bandpass → muffled thud, no resonant boom
+    // Lowpass at 200Hz — removes all high-freq "shaker" character,
+    // leaving only the low "thud" of a palm pressed on the drumhead
     const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = 350;
-    filter.Q.value = 0.8;
+    filter.type = 'lowpass';
+    filter.frequency.value = 200;
+    filter.Q.value = 1.0;
 
     const env = ctx.createGain();
     env.gain.setValueAtTime(g, t);

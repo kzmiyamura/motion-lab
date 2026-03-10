@@ -2,29 +2,31 @@ import { useInstallPrompt } from '../hooks/useInstallPrompt';
 import styles from './InstallPrompt.module.css';
 
 export function InstallPrompt() {
-  const { visible, platform, iosGuideOpen, handleInstall, dismiss, closeIosGuide } =
+  const { visible, platform, inAppBrowser, iosGuideOpen, handleInstall, dismiss, closeIosGuide } =
     useInstallPrompt();
 
   if (!visible) return null;
 
   return (
     <>
-      {/* Inline install banner — appears in page flow below header */}
+      {/* Inline install banner */}
       <div className={styles.banner} role="complementary" aria-label="インストール案内">
-        <span className={styles.bannerIcon}>📲</span>
+        <span className={styles.bannerIcon}>{inAppBrowser ? '🌐' : '📲'}</span>
         <span className={styles.bannerText}>
-          ホーム画面に追加してオフラインで使う
+          {inAppBrowser
+            ? 'Safari で開くとホーム画面に追加してオフラインで使えます'
+            : 'ホーム画面に追加してオフラインで使う'}
         </span>
         <button className={styles.installBtn} onClick={handleInstall}>
-          追加
+          {inAppBrowser ? 'Safariで開く' : '追加'}
         </button>
         <button className={styles.closeBtn} onClick={dismiss} aria-label="閉じる">
           ✕
         </button>
       </div>
 
-      {/* iOS guide modal */}
-      {platform === 'ios' && iosGuideOpen && (
+      {/* iOS guide modal (Safari のみ) */}
+      {platform === 'ios' && !inAppBrowser && iosGuideOpen && (
         <div className={styles.overlay} onClick={closeIosGuide} role="dialog" aria-modal="true">
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
             <button className={styles.modalClose} onClick={closeIosGuide} aria-label="閉じる">

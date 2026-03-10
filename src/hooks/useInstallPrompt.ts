@@ -2,6 +2,12 @@ import { useEffect, useState, useCallback } from 'react';
 
 type Platform = 'android' | 'ios' | 'other';
 
+/** LINE / Instagram / Facebook 等のアプリ内ブラウザかどうか */
+function detectInAppBrowser(): boolean {
+  const ua = navigator.userAgent;
+  return /Line\//i.test(ua) || /Instagram/i.test(ua) || /FBAN|FBAV/i.test(ua);
+}
+
 function detectPlatform(): Platform {
   const ua = navigator.userAgent;
   if (/iphone|ipad|ipod/i.test(ua)) return 'ios';
@@ -12,7 +18,6 @@ function detectPlatform(): Platform {
 function isStandalone(): boolean {
   return (
     window.matchMedia('(display-mode: standalone)').matches ||
-    // iOS Safari sets this when launched from home screen
     (navigator as { standalone?: boolean }).standalone === true
   );
 }
@@ -28,9 +33,9 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 export function useInstallPrompt() {
-  // Show only on mobile, not in standalone mode
   const [visible, setVisible] = useState(false);
   const [platform, setPlatform] = useState<Platform>('other');
+  const [inAppBrowser, setInAppBrowser] = useState(false);
   const [iosGuideOpen, setIosGuideOpen] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
 
@@ -38,10 +43,17 @@ export function useInstallPrompt() {
     if (!isMobile() || isStandalone()) return;
 
     const p = detectPlatform();
+    const inApp = detectInAppBrowser();
     setPlatform(p);
+    setInAppBrowser(inApp);
+
+    if (inApp) {
+      // アプリ内ブラウザ: Safari で開くよう誘導するバナーを表示
+      setVisible(true);
+      return;
+    }
 
     if (p === 'ios') {
-      // iOS: always show banner (no beforeinstallprompt)
       setVisible(true);
     }
 
@@ -53,7 +65,6 @@ export function useInstallPrompt() {
     };
     window.addEventListener('beforeinstallprompt', handler);
 
-    // Hide if installed
     const appInstalled = () => setVisible(false);
     window.addEventListener('appinstalled', appInstalled);
 
@@ -63,7 +74,18 @@ export function useInstallPrompt() {
     };
   }, []);
 
+  const openInSafari = useCallback(() => {
+    // LINE: ?openExternalBrowser=1 を付けると Safari で直接開く
+    const url = new URL(location.href);
+    url.searchParams.set('openExternalBrowser', '1');
+    location.href = url.toString();
+  }, []);
+
   const handleInstall = useCallback(async () => {
+    if (inAppBrowser) {
+      openInSafari();
+      return;
+    }
     if (platform === 'ios') {
       setIosGuideOpen(true);
       return;
@@ -73,7 +95,7 @@ export function useInstallPrompt() {
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') setVisible(false);
     setDeferredPrompt(null);
-  }, [platform, deferredPrompt]);
+  }, [inAppBrowser, platform, deferredPrompt, openInSafari]);
 
   const dismiss = useCallback(() => {
     setVisible(false);
@@ -84,5 +106,5 @@ export function useInstallPrompt() {
     setIosGuideOpen(false);
   }, []);
 
-  return { visible, platform, iosGuideOpen, handleInstall, dismiss, closeIosGuide };
+  return { visible, platform, inAppBrowser, iosGuideOpen, handleInstall, dismiss, closeIosGuide };
 }

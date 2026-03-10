@@ -52,11 +52,9 @@ const SAMPLE_URLS: Record<TrackId, string[]> = {
     `${VSCO}/Tumba-Slap_v2_rr1_Sum.wav`,
     `${VSCO}/Tumba-Slap_v2_rr2_Sum.wav`,
   ],
-  // Conga Heel/Toe: ghost note (v1 = softer velocity layer)
-  'conga-heel': [
-    `${VSCO}/Tumba-HitN_v1_rr1_Sum.wav`,
-    `${VSCO}/Tumba-HitN_v1_rr2_Sum.wav`,
-  ],
+  // Conga Heel/Toe: always use synth — v1 sample sounds like a small open hit,
+  // not the muffled "gosogoso" character we need.
+  'conga-heel': [],
   // Cowbell Low (open): v2 = fuller resonant tone
   'cowbell-low': [
     `${VSCO}/Cowbell1_Hit_v2_rr1_Sum.wav`,
@@ -83,8 +81,8 @@ const REVERB_WET: Record<TrackId, number> = {
 const TRACK_GAIN: Record<TrackId, number> = {
   clave:         0.85,
   'conga-open':  1.40,  // dominant hit
-  'conga-slap':  0.40,  // medium accent
-  'conga-heel':  2.00,  // v1 sample is very quiet; boost to compensate
+  'conga-slap':  0.30,  // medium accent
+  'conga-heel':  1.10,  // synth-only; bandpass noise "gosogoso"
   'cowbell-low':  0.28,
   'cowbell-high': 0.40,
 };
@@ -489,25 +487,35 @@ export class AudioEngine {
   }
 
   /**
-   * Conga Heel/Toe (ゴソゴソ): muffled ghost note.
-   * Slow attack simulates palm pressed on drumhead, low freq, quiet.
+   * Conga Heel/Toe (ゴソゴソ): muffled dampened thud — palm pressed on drumhead.
+   * Uses low-mid bandpass noise (350Hz) so it has no resonant "bom" tail.
+   * Short and dry — no pitch, no sustain.
    */
   private synthCongaHeel(ctx: AudioContext, time: number) {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['conga-heel'], time);
 
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(180, t);
-    osc.frequency.exponentialRampToValueAtTime(120, t + 0.08);
+    const duration = 0.055;
+    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
 
-    const envGain = ctx.createGain();
-    envGain.gain.setValueAtTime(0, t);
-    envGain.gain.linearRampToValueAtTime(g, t + 0.008);  // faster attack
-    envGain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
-    osc.connect(envGain);
-    osc.start(t);
-    osc.stop(t + 0.16);
-    envGain.connect(ctx.destination);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+
+    // Low-mid bandpass → muffled thud, no resonant boom
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 350;
+    filter.Q.value = 0.8;
+
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(g, t);
+    env.gain.exponentialRampToValueAtTime(0.001, t + duration);
+
+    src.connect(filter);
+    filter.connect(env);
+    env.connect(ctx.destination);
+    src.start(t);
   }
 
   /**

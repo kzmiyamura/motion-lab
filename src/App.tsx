@@ -4,6 +4,7 @@ import { RhythmMachine } from './components/RhythmMachine';
 import { ClaveBeatGrid } from './components/ClaveBeatGrid';
 import { ClavePatternSelector } from './components/ClavePatternSelector';
 import { FlipIndicator } from './components/FlipIndicator';
+import { SamplesStatus } from './components/SamplesStatus';
 import styles from './App.module.css';
 
 function App() {
@@ -17,6 +18,7 @@ function App() {
     congaMuted,   toggleCongaMute,
     cowbellMuted, toggleCowbellMute,
     backgroundPlay, setBackgroundPlay,
+    samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,
   } = useAudioEngine();
@@ -27,6 +29,8 @@ function App() {
         <h1 className={styles.title}>MotionLab</h1>
         <p className={styles.subtitle}>High-Precision Dance Training & Motion Analysis</p>
       </header>
+
+      <SamplesStatus samplesReady={samplesReady} samplesOffline={samplesOffline} />
 
       {/* ── Salsa Clave ── */}
       <section className={styles.section}>

@@ -1,0 +1,46 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  margin-bottom: 0.5rem;
+}
+
+.loading {
+  background: rgba(124, 107, 255, 0.12);
+  border: 1px solid rgba(124, 107, 255, 0.3);
+  color: #a89fff;
+}
+
+.offline {
+  background: rgba(255, 160, 50, 0.12);
+  border: 1px solid rgba(255, 160, 50, 0.35);
+  color: #ffcc80;
+}
+
+.icon {
+  flex-shrink: 0;
+  font-size: 1rem;
+}
+
+.text {
+  flex: 1;
+}
+
+/* Simple CSS spinner */
+.spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(124, 107, 255, 0.25);
+  border-top-color: #7c6bff;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

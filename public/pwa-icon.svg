@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7c6bff"/>
+      <stop offset="100%" stop-color="#ff6bcd"/>
+    </linearGradient>
+    <clipPath id="clip">
+      <rect width="512" height="512" rx="96"/>
+    </clipPath>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#080814"/>
+  <!-- Subtle inner glow -->
+  <rect width="512" height="512" rx="96" fill="url(#g)" opacity="0.08"/>
+  <!-- Clave stick left -->
+  <rect x="108" y="148" width="36" height="172" rx="18" fill="url(#g)" opacity="0.9"/>
+  <!-- Clave stick right -->
+  <rect x="172" y="192" width="36" height="128" rx="18" fill="url(#g)" opacity="0.7"/>
+  <!-- M letterform -->
+  <text x="260" y="360" font-family="system-ui,-apple-system,sans-serif"
+        font-size="300" font-weight="900" fill="url(#g)"
+        text-anchor="middle" clip-path="url(#clip)">M</text>
+</svg>

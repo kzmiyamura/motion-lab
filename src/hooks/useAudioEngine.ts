@@ -94,9 +94,18 @@ export function useAudioEngine() {
     return () => { unsubscribe(); };
   }, []);
 
-  // サンプルをプリロード
+  // サンプル読み込み状態
+  const [samplesReady, setSamplesReady] = useState(false);
+  const [samplesOffline, setSamplesOffline] = useState(false);
+
+  // サンプルをプリロード — 結果に応じてオフライン通知を出す
   useEffect(() => {
-    audioEngine.loadSamples().catch(() => {});
+    audioEngine.loadSamples()
+      .then(() => {
+        setSamplesReady(audioEngine.samplesReady);
+        if (!audioEngine.samplesReady) setSamplesOffline(true);
+      })
+      .catch(() => setSamplesOffline(true));
   }, []);
 
   // バックグラウンド制御
@@ -257,6 +266,7 @@ export function useAudioEngine() {
     congaMuted,   toggleCongaMute,
     cowbellMuted, toggleCowbellMute,
     backgroundPlay, setBackgroundPlay,
+    samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,
   };

@@ -126,6 +126,10 @@ export class AudioEngine {
     ['cowbell-low', 0], ['cowbell-high', 0],
   ]);
 
+  // Sample loading state
+  private _samplesReady = false;
+  private _samplesLoadAttempted = false;
+
   // Reverb
   private convolver: ConvolverNode | null = null;
 
@@ -148,6 +152,11 @@ export class AudioEngine {
 
   get flipPhase() { return this._flipPhase; }
   get pendingFlip() { return this._flipPhase !== 'idle'; }
+
+  /** 少なくとも一部のサンプルが正常にデコードされたか */
+  get samplesReady() { return this._samplesReady; }
+  /** ネットワーク取得を試みたか（オフライン判定に使用） */
+  get samplesLoadAttempted() { return this._samplesLoadAttempted; }
 
   /**
    * フリップをリクエスト。
@@ -223,6 +232,10 @@ export class AudioEngine {
         )
       )
     );
+
+    this._samplesLoadAttempted = true;
+    // 1つ以上のバッファがデコードされていれば「サンプル準備完了」
+    this._samplesReady = [...this.sampleBuffers.values()].some(arr => arr.length > 0);
   }
 
   /** Load a WAV/audio file as the Clave sound (user upload). */

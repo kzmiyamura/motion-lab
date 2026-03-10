@@ -84,7 +84,7 @@ const TRACK_GAIN: Record<TrackId, number> = {
   clave:         0.85,
   'conga-open':  1.40,  // dominant hit
   'conga-slap':  0.52,  // medium accent
-  'conga-heel':  0.35,  // ghost notes — quiet
+  'conga-heel':  0.85,  // ghost notes — audible but softer
   'cowbell-low':  0.28,
   'cowbell-high': 0.40,
 };

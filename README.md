@@ -1,73 +1,67 @@
-# React + TypeScript + Vite
+# Motion Lab — Salsa Rhythm Trainer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**本番URL:** https://motion-lab-apa.pages.dev/
 
-Currently, two official plugins are available:
+**デプロイ環境:** Cloudflare Pages（GitHub `main` ブランチ連携・自動ビルド）
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+**Cloudflare Pages 管理画面:** https://dash.cloudflare.com/ → Workers & Pages → motion-lab-apa
 
-## React Compiler
+**技術スタック:** React 19 / TypeScript 5.9 / Vite 7 / PWA (vite-plugin-pwa + Workbox) / Vitest 4
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+## 概要
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+サルサダンス向けのリズムトレーナー PWA。
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- **Salsa Clave** — Son / Rumba の 2-3 / 3-2 パターン表示・再生
+- **Flip Clave** — 次のバー境界でクラーベを即時反転（アバニコ合図付き）
+- **Rhythm Machine** — Conga Tumbao（Open / Slap / Heel）+ Cowbell（Low / High）
+- **オフライン対応** — Service Worker で音源・UIをキャッシュ
+- **PWA インストール** — iOS Safari / Android Chrome からホーム画面に追加可能
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+---
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## 開発
+
+```bash
+npm install
+npm run dev        # Vite dev server
+npm test           # Vitest（--run で単発実行）
+npm run build      # 本番ビルド → dist/
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## デプロイ
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+`main` ブランチへ push すると Cloudflare Pages が自動ビルド・デプロイします。
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+git push origin main
 ```
+
+手動デプロイ（wrangler）:
+```bash
+npm run cf:deploy
+```
+
+---
+
+## ディレクトリ構成（src/）
+
+```
+src/
+├── App.tsx
+├── components/      # UI コンポーネント + CSS Modules
+├── engine/          # AudioEngine（Web Audio API）、salsaPatterns、storage
+└── hooks/           # useAudioEngine、useInstallPrompt、useWakeLock 等
+```
+
+---
+
+## PWA 設定メモ
+
+- `registerType: 'autoUpdate'` + `skipWaiting: true` + `clientsClaim: true`
+  → 新バージョン検知後、即座に旧キャッシュを上書き
+- VSCO-2-CE サンプル音源（GitHub raw CDN）は `CacheFirst` でキャッシュ（30日）
+- iOS Safari では `navigator.standalone` でスタンドアロン判定
+- デバッグ: `?debug_pwa=true` を URL に付けるとインストール誘導UIを強制表示

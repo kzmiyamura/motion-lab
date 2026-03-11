@@ -10,9 +10,7 @@ type Platform = 'android' | 'ios' | 'other';
  */
 function detectNonSafariBrowser(): boolean {
   const ua = navigator.userAgent;
-  // アプリ内ブラウザ
   if (/Line\//i.test(ua) || /Instagram/i.test(ua) || /FBAN|FBAV/i.test(ua)) return true;
-  // iOS 上の Chrome / Firefox / Edge / その他 Chromium 系
   if (/CriOS/i.test(ua) || /FxiOS/i.test(ua) || /EdgiOS/i.test(ua)) return true;
   return false;
 }
@@ -32,8 +30,15 @@ function isStandalone(): boolean {
 }
 
 function isMobile(): boolean {
-  const platform = detectPlatform();
-  return platform === 'ios' || platform === 'android';
+  return detectPlatform() !== 'other';
+}
+
+/** localhost または ?debug_pwa=true の場合にデバッグ表示を強制する */
+function isDebugMode(): boolean {
+  return (
+    location.hostname === 'localhost' ||
+    new URLSearchParams(location.search).has('debug_pwa')
+  );
 }
 
 interface BeforeInstallPromptEvent extends Event {
@@ -49,7 +54,17 @@ export function useInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
 
   useEffect(() => {
-    if (!isMobile() || isStandalone()) return;
+    const debug = isDebugMode();
+
+    // デバッグモード: モバイル判定・スタンドアロン判定をスキップして強制表示
+    if (debug) {
+      const p = detectPlatform();
+      setPlatform(p === 'other' ? 'ios' : p); // PCデバッグ時は ios として扱う
+      setNonSafari(false);
+      setVisible(true);
+    }
+
+    if (!debug && (!isMobile() || isStandalone())) return;
 
     const p = detectPlatform();
     const notSafari = detectNonSafariBrowser();
@@ -57,7 +72,6 @@ export function useInstallPrompt() {
     setNonSafari(notSafari);
 
     if (notSafari) {
-      // Safari 以外（Chrome iOS / LINE など）: Safari で開くよう誘導
       setVisible(true);
       return;
     }
@@ -66,7 +80,7 @@ export function useInstallPrompt() {
       setVisible(true);
     }
 
-    // Android: wait for beforeinstallprompt
+    // Android: beforeinstallprompt を待つ
     const handler = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
@@ -84,9 +98,10 @@ export function useInstallPrompt() {
   }, []);
 
   const openInSafari = useCallback(() => {
-    // LINE: ?openExternalBrowser=1 を付けると Safari で直接開く
     const url = new URL(location.href);
     url.searchParams.set('openExternalBrowser', '1');
+    // デバッグパラメータは引き継がない
+    url.searchParams.delete('debug_pwa');
     location.href = url.toString();
   }, []);
 

@@ -12,8 +12,12 @@ export default defineConfig({
       includeAssets: ['pwa-icon.svg'],
 
       workbox: {
-        // ビルド成果物（JS/CSS/HTML/画像）をプリキャッシュ
-        globPatterns: ['**/*.{js,css,html,svg,ico,png,webp}'],
+        // 新しい SW が検知されたら即座にアクティブ化（キャッシュ待ちなし）
+        skipWaiting: true,
+        clientsClaim: true,
+
+        // ビルド成果物（JS/CSS/HTML/画像/音声）をプリキャッシュ
+        globPatterns: ['**/*.{js,css,html,svg,ico,png,webp,wav,ogg,mp3}'],
 
         // VSCO サンプル音源: GitHub raw からの取得を CacheFirst でキャッシュ
         // → 一度ダウンロードすれば地下のスタジオでもオフライン再生可能

@@ -1,0 +1,59 @@
+.toast {
+  position: fixed;
+  top: env(safe-area-inset-top, 0px);
+  left: 0;
+  right: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem calc(0.65rem + env(safe-area-inset-top, 0px));
+  background: #13132a;
+  border-bottom: 1px solid rgba(124, 107, 255, 0.3);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+.text {
+  flex: 1;
+  font-size: 0.8rem;
+  color: #a090e0;
+}
+
+.reloadBtn {
+  flex-shrink: 0;
+  padding: 0.35rem 0.8rem;
+  border: 1.5px solid #7c6bff;
+  border-radius: 20px;
+  background: rgba(124, 107, 255, 0.15);
+  color: #c0b0ff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.reloadBtn:active {
+  background: rgba(124, 107, 255, 0.3);
+}
+
+.closeBtn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: #4040a0;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0;
+}

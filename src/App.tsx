@@ -6,6 +6,7 @@ import { ClavePatternSelector } from './components/ClavePatternSelector';
 import { FlipIndicator } from './components/FlipIndicator';
 import { SamplesStatus } from './components/SamplesStatus';
 import { InstallPrompt } from './components/InstallPrompt';
+import { UpdateToast } from './components/UpdateToast';
 import styles from './App.module.css';
 
 function App() {
@@ -25,6 +26,8 @@ function App() {
   } = useAudioEngine();
 
   return (
+    <>
+    <UpdateToast />
     <main className={styles.main}>
       <header className={styles.header}>
         <h1 className={styles.title}>MotionLab</h1>
@@ -95,6 +98,7 @@ function App() {
         />
       </section>
     </main>
+    </>
   );
 }
 

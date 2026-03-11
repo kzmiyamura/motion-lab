@@ -19,8 +19,7 @@ export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
 
   const start = useCallback(() => {
-    audioEngine.start();
-    setIsPlaying(true);
+    audioEngine.start().then(() => setIsPlaying(true));
   }, []);
 
   const stop = useCallback(() => {

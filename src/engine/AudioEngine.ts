@@ -199,8 +199,15 @@ export class AudioEngine {
 
   /** OS による強制 suspend からの復帰用。useSilentAudio の visibilitychange から呼ぶ。 */
   resumeIfSuspended() {
-    if (this.context && this.context.state === 'suspended') {
-      this.context.resume().catch(() => {});
+    if (!this.context) return;
+    if (this.context.state === 'suspended') {
+      this.context.resume().then(() => {
+        // resume 後にスケジューラが止まっていれば再起動
+        if (this._isPlaying && this.schedulerTimer === null) {
+          this.nextBeatTime = this.context!.currentTime + 0.05;
+          this.schedulerTimer = setInterval(() => this.schedule(), LOOKAHEAD_MS);
+        }
+      }).catch(() => {});
     }
   }
 
@@ -245,10 +252,14 @@ export class AudioEngine {
     this.sampleBuffers.set('clave', [decoded]);
   }
 
-  start() {
+  async start(): Promise<void> {
     if (this._isPlaying) return;
     const ctx = this.getContext();
-    if (ctx.state === 'suspended') ctx.resume();
+    // iOS では resume() が非同期。await しないと suspended のまま
+    // scheduler が走り音が鳴らないケースが発生する。
+    if (ctx.state === 'suspended') {
+      try { await ctx.resume(); } catch { /* ignore */ }
+    }
     this._isPlaying = true;
     this.currentBeat = 0;
     this.nextBeatTime = ctx.currentTime + 0.05;

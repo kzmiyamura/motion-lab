@@ -1,4 +1,4 @@
-/* ── Inline install banner ── */
+/* ── インラインバナー ─────────────────────────────────────────────────────── */
 .banner {
   display: flex;
   align-items: center;
@@ -44,10 +44,7 @@
   white-space: nowrap;
   transition: background 0.15s;
 }
-
-.installBtn:active {
-  background: rgba(124, 107, 255, 0.2);
-}
+.installBtn:active { background: rgba(124, 107, 255, 0.2); }
 
 .closeBtn {
   flex-shrink: 0;
@@ -63,22 +60,19 @@
   cursor: pointer;
   border-radius: 50%;
   padding: 0;
-  transition: color 0.15s;
 }
+.closeBtn:active { color: #8080c0; }
 
-.closeBtn:active {
-  color: #8080c0;
-}
-
-/* ── iOS guide modal ── */
+/* ── ガイドモーダル (画面中央) ───────────────────────────────────────────── */
 .overlay {
   position: fixed;
   inset: 0;
-  z-index: 200;
-  background: rgba(0, 0, 0, 0.7);
+  z-index: 300;
+  background: rgba(0, 0, 8, 0.82);
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
+  padding: 1rem;
   animation: overlayIn 0.2s ease-out;
 }
 
@@ -90,23 +84,25 @@
 .modal {
   position: relative;
   width: 100%;
-  max-width: 480px;
+  max-width: 360px;
   background: #13132a;
-  border-top: 1px solid #2a2a50;
-  border-radius: 20px 20px 0 0;
-  padding: 1.5rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom, 16px));
-  animation: slideUp 0.25s ease-out;
+  border: 1px solid #2a2a50;
+  border-radius: 20px;
+  padding: 1.5rem 1.25rem 1.25rem;
+  animation: popIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  max-height: 90dvh;
+  overflow-y: auto;
 }
 
-@keyframes slideUp {
-  from { transform: translateY(100%); }
-  to   { transform: translateY(0); }
+@keyframes popIn {
+  from { transform: scale(0.9); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
 }
 
 .modalClose {
   position: absolute;
-  top: 1rem;
-  right: 1rem;
+  top: 0.9rem;
+  right: 0.9rem;
   width: 28px;
   height: 28px;
   border: none;
@@ -122,70 +118,160 @@
 }
 
 .modalTitle {
-  font-size: 1rem;
-  font-weight: 700;
-  color: #c0b0ff;
-  margin: 0 0 1.25rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #d0c0ff;
+  margin: 0 0 0.2rem;
+  padding-right: 2rem;
 }
 
-.steps {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
+.modalSub {
+  font-size: 0.75rem;
+  color: #5858a0;
+  margin: 0 0 1.2rem;
 }
 
-.steps li {
+/* ── ステップ ─────────────────────────────────────────────────────────────── */
+.step {
   display: flex;
-  align-items: flex-start;
   gap: 0.75rem;
-  font-size: 0.85rem;
-  color: #9090c0;
-  line-height: 1.5;
+  margin-bottom: 1rem;
 }
 
-.stepIcon {
+.stepNum {
   flex-shrink: 0;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: rgba(124, 107, 255, 0.2);
   border: 1px solid #4a42a0;
   color: #9080e0;
-  font-size: 0.7rem;
-  font-weight: 700;
+  font-size: 0.72rem;
+  font-weight: 800;
   display: flex;
   align-items: center;
   justify-content: center;
+  margin-top: 2px;
 }
 
-.steps li strong {
+.stepBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.stepText {
+  font-size: 0.82rem;
+  color: #9090c0;
+  margin: 0 0 0.6rem;
+  line-height: 1.5;
+}
+.stepText strong { color: #c0b0ff; }
+
+/* ── Safari ツールバー イメージ ───────────────────────────────────────────── */
+.safariBar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #1a1a30;
+  border: 1px solid #2a2a50;
+  border-radius: 10px;
+  padding: 0.45rem 0.7rem;
+}
+
+.safariDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2a2a50;
+  flex-shrink: 0;
+}
+
+.safariBarCenter {
+  flex: 1;
+  font-size: 0.65rem;
+  color: #3a3a60;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.safariShareHighlight {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(124, 107, 255, 0.2);
+  border: 1.5px solid #7c6bff;
+  color: #a090ff;
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(124,107,255,0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(124,107,255,0); }
+}
+
+.shareIconSvg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ── メニュープレビュー ────────────────────────────────────────────────────── */
+.menuPreview {
+  background: #1a1a30;
+  border: 1px solid #2a2a50;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.menuItem {
+  font-size: 0.75rem;
+  color: #5050a0;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid #22223a;
+}
+.menuItem:last-child { border-bottom: none; }
+
+.menuItemHighlight {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   color: #c0b0ff;
+  background: rgba(124, 107, 255, 0.12);
   font-weight: 700;
 }
 
-.hint {
-  display: block;
-  margin-top: 0.3rem;
-  font-size: 0.75rem;
-  color: #6060a0;
-}
-
-.shareIcon {
+.menuAddIcon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: rgba(124, 107, 255, 0.3);
   display: inline-flex;
   align-items: center;
-  vertical-align: middle;
-  color: #5b8ef5;
-  margin: 0 1px;
+  justify-content: center;
+  font-size: 0.9rem;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
+.hint {
+  font-size: 0.68rem;
+  color: #40406a;
+  line-height: 1.5;
+}
+
+/* ── OK ボタン ────────────────────────────────────────────────────────────── */
 .modalOk {
   width: 100%;
+  margin-top: 0.5rem;
   padding: 0.7rem;
   border: 1.5px solid #4a42a0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: rgba(124, 107, 255, 0.1);
   color: #a090e0;
   font-size: 0.9rem;
@@ -193,7 +279,4 @@
   cursor: pointer;
   transition: background 0.15s;
 }
-
-.modalOk:active {
-  background: rgba(124, 107, 255, 0.2);
-}
+.modalOk:active { background: rgba(124, 107, 255, 0.25); }

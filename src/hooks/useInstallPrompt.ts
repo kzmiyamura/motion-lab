@@ -2,18 +2,14 @@ import { useEffect, useState, useCallback } from 'react';
 
 type Platform = 'android' | 'ios' | 'other';
 
-/**
- * Safari 以外の iOS ブラウザかどうか。
- * - LINE / Instagram / Facebook などのアプリ内ブラウザ
- * - Chrome iOS (CriOS) / Firefox iOS (FxiOS) など
- * これらは iOS の制限により「ホーム画面に追加」ができない。
- */
-function detectNonSafariBrowser(): boolean {
-  const ua = navigator.userAgent;
-  if (/Line\//i.test(ua) || /Instagram/i.test(ua) || /FBAN|FBAV/i.test(ua)) return true;
-  if (/CriOS/i.test(ua) || /FxiOS/i.test(ua) || /EdgiOS/i.test(ua)) return true;
-  return false;
+const DISMISSED_KEY = 'pwa_install_dismissed';
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  readonly userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
+
+// ─── 判定ユーティリティ ───────────────────────────────────────────────────────
 
 function detectPlatform(): Platform {
   const ua = navigator.userAgent;
@@ -22,18 +18,28 @@ function detectPlatform(): Platform {
   return 'other';
 }
 
+/**
+ * iOS でも Safari 以外のブラウザ（Chrome iOS / LINE 等）かどうか。
+ * これらは iOS の制限で「ホーム画面に追加」ができないため Safari へ誘導する。
+ */
+function detectNonSafariBrowser(): boolean {
+  const ua = navigator.userAgent;
+  // アプリ内ブラウザ
+  if (/Line\//i.test(ua) || /Instagram/i.test(ua) || /FBAN|FBAV/i.test(ua)) return true;
+  // Chrome / Firefox / Edge iOS
+  if (/CriOS/i.test(ua) || /FxiOS/i.test(ua) || /EdgiOS/i.test(ua)) return true;
+  return false;
+}
+
+/** PWA としてホーム画面から起動中かどうか */
 function isStandalone(): boolean {
-  return (
-    window.matchMedia('(display-mode: standalone)').matches ||
-    (navigator as { standalone?: boolean }).standalone === true
-  );
+  // iOS Safari: navigator.standalone が最も信頼性が高い
+  if ((navigator as { standalone?: boolean }).standalone === true) return true;
+  // Android / その他
+  return window.matchMedia('(display-mode: standalone)').matches;
 }
 
-function isMobile(): boolean {
-  return detectPlatform() !== 'other';
-}
-
-/** localhost または ?debug_pwa=true の場合にデバッグ表示を強制する */
+/** localhost または ?debug_pwa=true で強制表示するデバッグモード */
 function isDebugMode(): boolean {
   return (
     location.hostname === 'localhost' ||
@@ -41,10 +47,21 @@ function isDebugMode(): boolean {
   );
 }
 
-interface BeforeInstallPromptEvent extends Event {
-  prompt(): Promise<void>;
-  readonly userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+function wasDismissed(): boolean {
+  try {
+    return sessionStorage.getItem(DISMISSED_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
+
+function saveDismissed(): void {
+  try {
+    sessionStorage.setItem(DISMISSED_KEY, '1');
+  } catch { /* ignore */ }
+}
+
+// ─── フック ──────────────────────────────────────────────────────────────────
 
 export function useInstallPrompt() {
   const [visible, setVisible] = useState(false);
@@ -56,51 +73,61 @@ export function useInstallPrompt() {
   useEffect(() => {
     const debug = isDebugMode();
 
-    // デバッグモード: モバイル判定・スタンドアロン判定をスキップして強制表示
+    // デバッグモード: 条件を全スキップして強制表示（UI確認用）
     if (debug) {
       const p = detectPlatform();
-      setPlatform(p === 'other' ? 'ios' : p); // PCデバッグ時は ios として扱う
+      setPlatform(p === 'other' ? 'ios' : p);
       setNonSafari(false);
       setVisible(true);
+      return; // ← debug の場合はここで終了
     }
 
-    if (!debug && (!isMobile() || isStandalone())) return;
+    // すでに今セッションで閉じた場合は表示しない
+    if (wasDismissed()) return;
 
     const p = detectPlatform();
     const notSafari = detectNonSafariBrowser();
     setPlatform(p);
     setNonSafari(notSafari);
 
-    if (notSafari) {
+    // ── iOS ──────────────────────────────────────────────────────────────────
+    if (p === 'ios') {
+      // スタンドアロン（ホーム画面から起動中）は表示不要
+      if (isStandalone()) return;
+
+      // Safari 以外（Chrome iOS / LINE 等）→ Safari で開くよう誘導
+      // Safari → ホーム画面追加手順を案内（即時表示）
       setVisible(true);
       return;
     }
 
-    if (p === 'ios') {
-      setVisible(true);
+    // ── Android ──────────────────────────────────────────────────────────────
+    if (p === 'android') {
+      if (isStandalone()) return;
+
+      const handler = (e: Event) => {
+        e.preventDefault();
+        setDeferredPrompt(e as BeforeInstallPromptEvent);
+        setVisible(true);
+      };
+      window.addEventListener('beforeinstallprompt', handler);
+
+      const appInstalled = () => {
+        setVisible(false);
+        saveDismissed();
+      };
+      window.addEventListener('appinstalled', appInstalled);
+
+      return () => {
+        window.removeEventListener('beforeinstallprompt', handler);
+        window.removeEventListener('appinstalled', appInstalled);
+      };
     }
-
-    // Android: beforeinstallprompt を待つ
-    const handler = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-      setVisible(true);
-    };
-    window.addEventListener('beforeinstallprompt', handler);
-
-    const appInstalled = () => setVisible(false);
-    window.addEventListener('appinstalled', appInstalled);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handler);
-      window.removeEventListener('appinstalled', appInstalled);
-    };
   }, []);
 
   const openInSafari = useCallback(() => {
     const url = new URL(location.href);
     url.searchParams.set('openExternalBrowser', '1');
-    // デバッグパラメータは引き継がない
     url.searchParams.delete('debug_pwa');
     location.href = url.toString();
   }, []);
@@ -114,16 +141,21 @@ export function useInstallPrompt() {
       setIosGuideOpen(true);
       return;
     }
+    // Android
     if (!deferredPrompt) return;
     await deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') setVisible(false);
+    if (outcome === 'accepted') {
+      setVisible(false);
+      saveDismissed();
+    }
     setDeferredPrompt(null);
   }, [nonSafari, platform, deferredPrompt, openInSafari]);
 
   const dismiss = useCallback(() => {
     setVisible(false);
     setIosGuideOpen(false);
+    saveDismissed();
   }, []);
 
   const closeIosGuide = useCallback(() => {

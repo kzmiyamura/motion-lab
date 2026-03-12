@@ -180,6 +180,11 @@ export class AudioEngine {
   // visibilitychange リスナー（一度だけ登録）
   private visibilityHandler: (() => void) | null = null;
 
+  // ── Studio ambience delay (15ms, feedback 0.1) ───────────────────────────
+  private studioDelayNode: DelayNode | null = null;
+  private studioDelayFeedback: GainNode | null = null;
+  private studioDelayWet: GainNode | null = null;
+
   // ── Bongo articulation map (open vs muffled per step) ────────────────────
   private bongoArticulation: Map<'bongo-low' | 'bongo-high', Map<number, Articulation>> = new Map([
     ['bongo-low',  new Map()],
@@ -403,6 +408,9 @@ export class AudioEngine {
       this.compressor = null;
       this.highShelfNode = null;
       this.outputGainNode = null;
+      this.studioDelayNode = null;
+      this.studioDelayFeedback = null;
+      this.studioDelayWet = null;
     }
   }
 
@@ -438,6 +446,27 @@ export class AudioEngine {
       this.noiseGateNode.gain.value = 0; // 初期状態：閉じている
       this.noiseGateNode.connect(this.compressor);
       this.masterGainNode.connect(this.noiseGateNode);
+
+      // ── Studio ambience: 15ms pre-delay + 0.1 feedback ──────────────────
+      // Tap from masterGainNode → delayNode; wet output bypasses the noise gate
+      // so room reflections sustain naturally after gate closes.
+      // Signal chain: masterGainNode → studioDelayNode ⟲(feedback 0.1)
+      //                                               → studioDelayWet → compressor
+      this.studioDelayNode = this.context.createDelay(0.1);
+      this.studioDelayNode.delayTime.value = 0.015; // 15ms room reflection
+      this.studioDelayFeedback = this.context.createGain();
+      this.studioDelayFeedback.gain.value = 0.1;
+      this.studioDelayWet = this.context.createGain();
+      this.studioDelayWet.gain.value = 0.14; // subtle ambience level
+      // Send: masterGainNode → delay input
+      this.masterGainNode.connect(this.studioDelayNode);
+      // Feedback loop (valid in Web Audio because DelayNode breaks the cycle)
+      this.studioDelayNode.connect(this.studioDelayFeedback);
+      this.studioDelayFeedback.connect(this.studioDelayNode);
+      // Wet: delay output → compressor (room tail unaffected by noise gate)
+      this.studioDelayNode.connect(this.studioDelayWet);
+      this.studioDelayWet.connect(this.compressor);
+
       // 初期状態を反映
       this.loudness = this._loudness;
       // iOS が AudioContext を interrupt/suspend したとき自動で resume を試みる。
@@ -498,13 +527,16 @@ export class AudioEngine {
     if (this.context) {
       try { await this.context.close(); } catch { /* ignore */ }
     }
-    this.context        = null;
-    this.masterGainNode = null;
-    this.noiseGateNode  = null;
-    this.compressor     = null;
-    this.highShelfNode  = null;
-    this.outputGainNode = null;
-    this.convolver      = null;
+    this.context             = null;
+    this.masterGainNode      = null;
+    this.noiseGateNode       = null;
+    this.compressor          = null;
+    this.highShelfNode       = null;
+    this.outputGainNode      = null;
+    this.convolver           = null;
+    this.studioDelayNode     = null;
+    this.studioDelayFeedback = null;
+    this.studioDelayWet      = null;
     this.stopSilentLoop();
     // 新コンテキスト生成（user gesture 内 → iOS でも即 running）
     const ctx = this.getContext();
@@ -667,6 +699,54 @@ export class AudioEngine {
       wetGain.connect(this.convolver);
     }
 
+    src.start(time);
+  }
+
+  // ── Audio realism helpers ─────────────────────────────────────────────────
+
+  /**
+   * Soft tanh saturation curve — adds odd harmonics (3rd, 5th…) to a sine wave,
+   * giving the "woody" character of a real drumhead without audible clipping.
+   * amount=2.5 is subtle; increase for more distortion.
+   */
+  private createSaturationCurve(): Float32Array<ArrayBuffer> {
+    const samples = 512;
+    const curve = new Float32Array(new ArrayBuffer(samples * 4));
+    for (let i = 0; i < samples; i++) {
+      const x = (i * 2) / samples - 1;
+      curve[i] = Math.tanh(2.5 * x) * 0.82;
+    }
+    return curve;
+  }
+
+  /**
+   * Physical contact transient: 1ms attack + 7ms HPF white-noise burst.
+   * Simulates the fingertip or beater briefly touching the drumhead / scraper.
+   * @param hpFreq   High-pass cutoff — higher for harder surfaces (metal > skin)
+   * @param level    Peak gain (proportional to TRACK_GAIN of the instrument)
+   */
+  private playAttackNoise(ctx: AudioContext, time: number, level: number, hpFreq: number) {
+    const duration = 0.008;
+    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+
+    const hpf = ctx.createBiquadFilter();
+    hpf.type = 'highpass';
+    hpf.frequency.value = hpFreq;
+    hpf.Q.value = 0.5;
+
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, time);
+    env.gain.linearRampToValueAtTime(level, time + 0.001);         // 1ms attack
+    env.gain.exponentialRampToValueAtTime(0.001, time + duration); // 7ms decay
+
+    src.connect(hpf);
+    hpf.connect(env);
+    env.connect(this.masterGainNode!);
     src.start(time);
   }
 
@@ -867,9 +947,12 @@ export class AudioEngine {
   }
 
   /**
-   * Bongo Low (Macho): deep warm punch.
-   *   open    — 200Hz→70Hz (0.12s), peaking +3dB@150Hz, full resonance
-   *   muffled — 180Hz→100Hz (0.05s), peaking +1dB, bandpass@300Hz damps tail
+   * Bongo Low (Macho): deep warm punch with physical realism.
+   *   open    — 200Hz→70Hz (0.12s)
+   *             WaveShaperNode tanh saturation adds odd harmonics ("wooden" body tone)
+   *             Peaking 200Hz Q=8 +5dB: strong drum-body resonance simulation
+   *             Attack noise layer (HPF 1.8kHz, 8ms): fingertip-on-skin transient
+   *   muffled — 180Hz→100Hz (0.05s), tighter peaking, bandpass dampens resonant tail
    * Panned left 20%.
    */
   private synthBongoLow(ctx: AudioContext, time: number, articulation: Articulation = 'open') {
@@ -879,7 +962,6 @@ export class AudioEngine {
     osc.type = 'sine';
 
     if (articulation === 'muffled') {
-      // Tight pitch: less resonant tail
       osc.frequency.setValueAtTime(180, t);
       osc.frequency.exponentialRampToValueAtTime(100, t + 0.05);
       gainNode.gain.setValueAtTime(0.0001, t);
@@ -892,16 +974,22 @@ export class AudioEngine {
       gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
       gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
     }
-    osc.connect(gainNode);
 
-    // Peaking EQ: body resonance boost (reduced for muffled)
+    // WaveShaper: tanh saturation — adds odd harmonics for natural drum timbre
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = this.createSaturationCurve();
+    shaper.oversample = '2x';
+    osc.connect(shaper);
+    shaper.connect(gainNode);
+
+    // Peaking EQ: 200Hz drum-body resonance (tighter Q for more pronounced ring)
     const peaking = ctx.createBiquadFilter();
     peaking.type = 'peaking';
-    peaking.frequency.value = 150;
-    peaking.Q.value = 5;
-    peaking.gain.value = articulation === 'muffled' ? 1 : 3;
+    peaking.frequency.value = 200;
+    peaking.Q.value = articulation === 'muffled' ? 4 : 8;
+    peaking.gain.value = articulation === 'muffled' ? 1.5 : 5;
 
-    // Muffled: add bandpass to cut the resonant tail
+    // Muffled: bandpass damps the resonant tail
     if (articulation === 'muffled') {
       const damp = ctx.createBiquadFilter();
       damp.type = 'bandpass';
@@ -921,12 +1009,16 @@ export class AudioEngine {
     if (this.convolver && articulation === 'open') gainNode.connect(this.convolver);
     osc.start(t);
     osc.stop(t + (articulation === 'muffled' ? 0.07 : 0.14));
+
+    // Attack transient noise: fingertip-on-skin contact sound
+    this.playAttackNoise(ctx, t, g * (articulation === 'muffled' ? 0.2 : 0.35), 1800);
   }
 
   /**
-   * Bongo High (Hembra): physical skin-stretch pitch drop.
-   *   open    — 800Hz→400Hz in 10ms, 70ms decay ("カンッ")
-   *   muffled — 600Hz→350Hz in 8ms, 40ms decay, lowpass@800Hz softens
+   * Bongo High (Hembra): skin-stretch pitch drop with physical realism.
+   *   open    — 800Hz→400Hz in 10ms ("カンッ"), WaveShaper harmonics
+   *             Attack noise (HPF 2.5kHz, 8ms): sharp fingertip impact
+   *   muffled — 600Hz→350Hz in 8ms, LPF@800Hz softens, lighter attack noise
    * Panned left 20%.
    */
   private synthBongoHigh(ctx: AudioContext, time: number, articulation: Articulation = 'open') {
@@ -948,9 +1040,14 @@ export class AudioEngine {
       gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
       gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
     }
-    osc.connect(gainNode);
 
-    // Muffled: lowpass at 800Hz softens the attack edge
+    // WaveShaper: odd harmonic content → "wooden" skin character
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = this.createSaturationCurve();
+    shaper.oversample = '2x';
+    osc.connect(shaper);
+    shaper.connect(gainNode);
+
     const panner = ctx.createStereoPanner();
     panner.pan.value = -0.2;
 
@@ -968,6 +1065,9 @@ export class AudioEngine {
     panner.connect(this.masterGainNode!);
     osc.start(t);
     osc.stop(t + (articulation === 'muffled' ? 0.05 : 0.08));
+
+    // Attack transient: harder material → higher HPF cutoff than bongo low
+    this.playAttackNoise(ctx, t, g * (articulation === 'muffled' ? 0.15 : 0.4), 2500);
   }
 
   /**
@@ -1004,6 +1104,10 @@ export class AudioEngine {
     env.connect(panner);
     panner.connect(this.masterGainNode!);
     src.start(t);
+
+    // Metal contact transient: sharp "チッ" click of fingernail on metal scraper
+    // Higher HPF (5kHz) than bongo — harder surface material
+    this.playAttackNoise(ctx, t, g * 0.5, 5000);
   }
 
   /**

@@ -88,6 +88,21 @@ class MockAudioContext {
     };
   }
 
+  createDelay(_?: number) {
+    return {
+      delayTime: { value: 0 },
+      connect: vi.fn(),
+    };
+  }
+
+  createWaveShaper() {
+    return {
+      curve: null as Float32Array | null,
+      oversample: '2x' as OverSampleType,
+      connect: vi.fn(),
+    };
+  }
+
   addEventListener(_: string, __: EventListenerOrEventListenerObject) {}
   removeEventListener(_: string, __: EventListenerOrEventListenerObject) {}
   resume() { return Promise.resolve(); }

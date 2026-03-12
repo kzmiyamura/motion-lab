@@ -15,7 +15,8 @@
  * Fixed: 16 steps per bar, subdivision=2 (8th notes)
  */
 
-export type TrackId = 'clave' | 'conga-open' | 'conga-slap' | 'conga-heel' | 'cowbell-low' | 'cowbell-high';
+export type TrackId = 'clave' | 'conga-open' | 'conga-slap' | 'conga-heel' | 'cowbell-low' | 'cowbell-high'
+  | 'bongo-low' | 'bongo-high' | 'guira' | 'bass';
 
 export type Track = {
   id: TrackId;
@@ -62,6 +63,10 @@ const SAMPLE_URLS: Record<TrackId, string[]> = {
     `${VSCO}/Cowbell1_Hit_v1_rr1_Sum.wav`,
     `${VSCO}/Cowbell1_Hit_v1_rr2_Sum.wav`,
   ],
+  'bongo-low':  [],
+  'bongo-high': [],
+  'guira':      [],
+  'bass':       [],
 };
 
 // Reverb wet level per instrument (clave is traditionally dry)
@@ -72,6 +77,10 @@ const REVERB_WET: Record<TrackId, number> = {
   'conga-heel':  0.06,
   'cowbell-low':  0.18,
   'cowbell-high': 0.10,
+  'bongo-low':  0.15,
+  'bongo-high': 0.10,
+  'guira':      0.04,
+  'bass':       0.20,
 };
 
 // Base gain per instrument — 0dBFS を超えないよう 0.7 以下に抑える。
@@ -85,6 +94,11 @@ const TRACK_GAIN: Record<TrackId, number> = {
   'conga-heel':  0.42,  // synth-only; lowpass noise "gosogoso"
   'cowbell-low':  0.30,
   'cowbell-high': 0.35,
+  // Bachata instruments
+  'bongo-low':  0.60,
+  'bongo-high': 0.35,
+  'guira':      0.20,
+  'bass':       0.65,
 };
 
 // Default patterns (16 steps = 2 bars of 4/4 at 8th-note subdivision)
@@ -100,6 +114,12 @@ const DEFAULT_CONGA_OPEN_STEPS   = new Set([5, 6, 13, 14]);
 // Montuno campana: Low on all quarter beats, High on syncopated upbeats
 const DEFAULT_COWBELL_LOW_STEPS  = new Set([0, 2, 4, 6, 8, 10, 12, 14]);
 const DEFAULT_COWBELL_HIGH_STEPS = new Set([3, 5, 11, 13]);
+// Bachata patterns (16 steps = 2 bars of 4/4 at 8th-note subdivision)
+// Characteristic: accent (tap/hip) on beat 4 (step 6) and beat 8 (step 14)
+const DEFAULT_BONGO_LOW_STEPS  = new Set([0, 2, 4, 6, 8, 10, 12, 14]); // every quarter beat
+const DEFAULT_BONGO_HIGH_STEPS = new Set([1, 3, 9, 11]);               // syncopated upbeats
+const DEFAULT_GUIRA_STEPS      = new Set([0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]); // constant
+const DEFAULT_BASS_STEPS       = new Set([6, 14]);                     // beat 4 and 8 (tap accent)
 
 export class AudioEngine {
   private context: AudioContext | null = null;
@@ -128,16 +148,22 @@ export class AudioEngine {
     ['conga-heel',   { id: 'conga-heel',   pattern: new Set(DEFAULT_CONGA_HEEL_STEPS),   muted: true  }],
     ['cowbell-low',  { id: 'cowbell-low',  pattern: new Set(DEFAULT_COWBELL_LOW_STEPS),  muted: true  }],
     ['cowbell-high', { id: 'cowbell-high', pattern: new Set(DEFAULT_COWBELL_HIGH_STEPS), muted: true  }],
+    ['bongo-low',  { id: 'bongo-low',  pattern: new Set(DEFAULT_BONGO_LOW_STEPS),  muted: true }],
+    ['bongo-high', { id: 'bongo-high', pattern: new Set(DEFAULT_BONGO_HIGH_STEPS), muted: true }],
+    ['guira',      { id: 'guira',      pattern: new Set(DEFAULT_GUIRA_STEPS),      muted: true }],
+    ['bass',       { id: 'bass',       pattern: new Set(DEFAULT_BASS_STEPS),       muted: true }],
   ]);
 
   // Samples: 2 round-robin buffers per instrument
   private sampleBuffers: Map<TrackId, AudioBuffer[]> = new Map([
     ['clave', []], ['conga-open', []], ['conga-slap', []], ['conga-heel', []],
     ['cowbell-low', []], ['cowbell-high', []],
+    ['bongo-low', []], ['bongo-high', []], ['guira', []], ['bass', []],
   ]);
   private rrCounters: Map<TrackId, number> = new Map([
     ['clave', 0], ['conga-open', 0], ['conga-slap', 0], ['conga-heel', 0],
     ['cowbell-low', 0], ['cowbell-high', 0],
+    ['bongo-low', 0], ['bongo-high', 0], ['guira', 0], ['bass', 0],
   ]);
 
   // Sample loading state
@@ -634,6 +660,10 @@ export class AudioEngine {
       case 'conga-heel':   return this.synthCongaHeel(ctx, time);
       case 'cowbell-low':  return this.synthCowbellLow(ctx, time);
       case 'cowbell-high': return this.synthCowbellHigh(ctx, time);
+      case 'bongo-low':    return this.synthBongoLow(ctx, time);
+      case 'bongo-high':   return this.synthBongoHigh(ctx, time);
+      case 'guira':        return this.synthGuira(ctx, time);
+      case 'bass':         return this.synthBass(ctx, time);
     }
   }
 
@@ -808,6 +838,82 @@ export class AudioEngine {
     filter.connect(masterGain);
     masterGain.connect(this.masterGainNode!);
     if (this.convolver) masterGain.connect(this.convolver);
+  }
+
+  /** Bongo Low (Macho): warm, deep punch — pitch drop 200Hz → 70Hz */
+  private synthBongoLow(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-low'], time);
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(200, t);
+    osc.frequency.exponentialRampToValueAtTime(70, t + 0.08);
+    gainNode.gain.setValueAtTime(0.0001, t);
+    gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    osc.connect(gainNode);
+    gainNode.connect(this.masterGainNode!);
+    if (this.convolver) gainNode.connect(this.convolver);
+    osc.start(t);
+    osc.stop(t + 0.14);
+  }
+
+  /** Bongo High (Hembra): bright snappy hit — pitch drop 320Hz → 130Hz */
+  private synthBongoHigh(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-high'], time);
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(320, t);
+    osc.frequency.exponentialRampToValueAtTime(130, t + 0.05);
+    gainNode.gain.setValueAtTime(0.0001, t);
+    gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+    osc.connect(gainNode);
+    gainNode.connect(this.masterGainNode!);
+    osc.start(t);
+    osc.stop(t + 0.08);
+  }
+
+  /** Güira: metallic scraper — bandpass noise burst at 5kHz */
+  private synthGuira(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['guira'], time);
+    const duration = 0.035;
+    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 5000;
+    filter.Q.value = 0.8;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(g, t + 0.002);
+    env.gain.exponentialRampToValueAtTime(0.001, t + duration);
+    src.connect(filter);
+    filter.connect(env);
+    env.connect(this.masterGainNode!);
+    src.start(t);
+  }
+
+  /** Bass accent (beat 4 & 8): deep sine punch 80Hz → 50Hz */
+  private synthBass(ctx: AudioContext, time: number) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bass'], time);
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(80, t);
+    osc.frequency.exponentialRampToValueAtTime(50, t + 0.15);
+    gainNode.gain.setValueAtTime(0.0001, t);
+    gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    osc.connect(gainNode);
+    gainNode.connect(this.masterGainNode!);
+    if (this.convolver) gainNode.connect(this.convolver);
+    osc.start(t);
+    osc.stop(t + 0.28);
   }
 
   /**

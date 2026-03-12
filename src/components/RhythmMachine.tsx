@@ -1,8 +1,10 @@
 import { audioEngine, type TrackId } from '../engine/AudioEngine';
+import { type Genre } from '../hooks/useAudioEngine';
 import { TrackRow } from './TrackRow';
 import styles from './RhythmMachine.module.css';
 
 type Props = {
+  genre: Genre;
   currentBeat: number;
   mutedTracks: Set<TrackId>;
   onToggleMute: (id: TrackId) => void;
@@ -19,7 +21,36 @@ const COWBELL_TRACKS: { id: TrackId; label: string; sublabel: string }[] = [
   { id: 'cowbell-high', label: 'Cowbell High', sublabel: 'Muted / Accent'  },
 ];
 
-export function RhythmMachine({ currentBeat, mutedTracks, onToggleMute }: Props) {
+const BACHATA_TRACKS: { id: TrackId; label: string; sublabel: string }[] = [
+  { id: 'bongo-low',  label: 'Bongo Low',  sublabel: 'Macho / ドン' },
+  { id: 'bongo-high', label: 'Bongo High', sublabel: 'Hembra / タン' },
+  { id: 'guira',      label: 'Güira',      sublabel: 'Scraper / シャッ' },
+  { id: 'bass',       label: 'Bass',       sublabel: 'Beat 4 & 8 accent' },
+];
+
+export function RhythmMachine({ genre, currentBeat, mutedTracks, onToggleMute }: Props) {
+  if (genre === 'bachata') {
+    return (
+      <div className={styles.machine}>
+        <div className={styles.group}>
+          <span className={styles.groupLabel}>Bachata</span>
+          {BACHATA_TRACKS.map(({ id, label, sublabel }) => (
+            <TrackRow
+              key={id}
+              id={id}
+              label={label}
+              sublabel={sublabel}
+              pattern={audioEngine.getTrack(id).pattern}
+              currentBeat={currentBeat}
+              muted={mutedTracks.has(id)}
+              onToggleMute={() => onToggleMute(id)}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.machine}>
       {/* ── Clave ── */}

@@ -3,21 +3,20 @@
   flex-direction: column;
   gap: 1.25rem;
   padding: 1.25rem 1.5rem;
-  background: #1a1a2e;
+  background: var(--color-machine, #1a1a2e);
   border-radius: 12px;
-  border: 1px solid #2a2a4a;
+  border: 1px solid var(--color-border2, #2a2a4a);
   width: 100%;
 }
 
-/* ── Campana グループ ── */
 .group {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
   padding: 0.75rem 0.75rem 0.75rem;
-  border: 1px solid #2a3a5a;
+  border: 1px solid var(--color-border2, #2a2a4a);
   border-radius: 10px;
-  background: #0e1020;
+  background: var(--color-surface, #0e1020);
   position: relative;
 }
 
@@ -29,8 +28,8 @@
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #6a8aba;
-  background: #0e1020;
+  color: var(--color-fg-dim, #6a8aba);
+  background: var(--color-surface, #0e1020);
   padding: 0 0.4rem;
 }
 

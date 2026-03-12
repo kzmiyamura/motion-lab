@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { BPM_CATEGORIES, getActiveCategoryId } from '../engine/bpmCategories';
+import { type Genre } from '../hooks/useAudioEngine';
 import styles from './ControlPanel.module.css';
 
 type Props = {
@@ -21,6 +22,11 @@ type Props = {
   onRandomFlipModeChange: (v: boolean) => void;
   loudness: boolean;
   onLoudnessChange: (v: boolean) => void;
+  genre: Genre;
+  bongoMuted: boolean;
+  onBongoMuteToggle: () => void;
+  guiraMuted: boolean;
+  onGuiraMuteToggle: () => void;
 };
 
 export function ControlPanel({
@@ -42,6 +48,11 @@ export function ControlPanel({
   onRandomFlipModeChange,
   loudness,
   onLoudnessChange,
+  genre,
+  bongoMuted,
+  onBongoMuteToggle,
+  guiraMuted,
+  onGuiraMuteToggle,
 }: Props) {
   const activeCategoryId = getActiveCategoryId(bpm);
 
@@ -147,62 +158,108 @@ export function ControlPanel({
         </label>
       </div>
 
-      {/* ── Tumbao (Conga) Master Mute ── */}
-      <div className={styles.settingsRow}>
-        <span className={styles.settingsLabel}>
-          Tumbao（コンガ）
-          <span className={styles.settingsSub}>
-            {congaMuted ? 'Open + Slap + Heel ミュート中' : 'Open + Slap + Heel 再生中'}
-          </span>
-        </span>
-        <button
-          role="switch"
-          aria-checked={!congaMuted}
-          aria-label="Tumbao master mute"
-          className={`${styles.toggle} ${!congaMuted ? styles.toggleOn : ''}`}
-          onClick={onCongaMuteToggle}
-        >
-          <span className={styles.toggleThumb} />
-        </button>
-      </div>
+      {genre === 'salsa' && (
+        <>
+          {/* ── Tumbao (Conga) Master Mute ── */}
+          <div className={styles.settingsRow}>
+            <span className={styles.settingsLabel}>
+              Tumbao（コンガ）
+              <span className={styles.settingsSub}>
+                {congaMuted ? 'Open + Slap + Heel ミュート中' : 'Open + Slap + Heel 再生中'}
+              </span>
+            </span>
+            <button
+              role="switch"
+              aria-checked={!congaMuted}
+              aria-label="Tumbao master mute"
+              className={`${styles.toggle} ${!congaMuted ? styles.toggleOn : ''}`}
+              onClick={onCongaMuteToggle}
+            >
+              <span className={styles.toggleThumb} />
+            </button>
+          </div>
 
-      {/* ── Campana Master Mute ── */}
-      <div className={styles.settingsRow}>
-        <span className={styles.settingsLabel}>
-          Campana（カウベル）
-          <span className={styles.settingsSub}>
-            {cowbellMuted ? 'Low + High ミュート中' : 'Low + High 再生中'}
-          </span>
-        </span>
-        <button
-          role="switch"
-          aria-checked={!cowbellMuted}
-          aria-label="Campana master mute"
-          className={`${styles.toggle} ${!cowbellMuted ? styles.toggleOn : ''}`}
-          onClick={onCowbellMuteToggle}
-        >
-          <span className={styles.toggleThumb} />
-        </button>
-      </div>
+          {/* ── Campana Master Mute ── */}
+          <div className={styles.settingsRow}>
+            <span className={styles.settingsLabel}>
+              Campana（カウベル）
+              <span className={styles.settingsSub}>
+                {cowbellMuted ? 'Low + High ミュート中' : 'Low + High 再生中'}
+              </span>
+            </span>
+            <button
+              role="switch"
+              aria-checked={!cowbellMuted}
+              aria-label="Campana master mute"
+              className={`${styles.toggle} ${!cowbellMuted ? styles.toggleOn : ''}`}
+              onClick={onCowbellMuteToggle}
+            >
+              <span className={styles.toggleThumb} />
+            </button>
+          </div>
 
-      {/* ── Random Flip Mode ── */}
-      <div className={styles.settingsRow}>
-        <span className={styles.settingsLabel}>
-          Random Flip Mode
-          <span className={styles.settingsSub}>
-            {randomFlipMode ? '自動でクラーベを反転' : '手動フリップのみ'}
-          </span>
-        </span>
-        <button
-          role="switch"
-          aria-checked={randomFlipMode}
-          aria-label="Random Flip Mode"
-          className={`${styles.toggle} ${randomFlipMode ? styles.toggleOn : ''}`}
-          onClick={() => onRandomFlipModeChange(!randomFlipMode)}
-        >
-          <span className={styles.toggleThumb} />
-        </button>
-      </div>
+          {/* ── Random Flip Mode ── */}
+          <div className={styles.settingsRow}>
+            <span className={styles.settingsLabel}>
+              Random Flip Mode
+              <span className={styles.settingsSub}>
+                {randomFlipMode ? '自動でクラーベを反転' : '手動フリップのみ'}
+              </span>
+            </span>
+            <button
+              role="switch"
+              aria-checked={randomFlipMode}
+              aria-label="Random Flip Mode"
+              className={`${styles.toggle} ${randomFlipMode ? styles.toggleOn : ''}`}
+              onClick={() => onRandomFlipModeChange(!randomFlipMode)}
+            >
+              <span className={styles.toggleThumb} />
+            </button>
+          </div>
+        </>
+      )}
+
+      {genre === 'bachata' && (
+        <>
+          {/* ── Bongo Master Mute ── */}
+          <div className={styles.settingsRow}>
+            <span className={styles.settingsLabel}>
+              Bongo
+              <span className={styles.settingsSub}>
+                {bongoMuted ? 'Low + High ミュート中' : 'Low + High 再生中'}
+              </span>
+            </span>
+            <button
+              role="switch"
+              aria-checked={!bongoMuted}
+              aria-label="Bongo master mute"
+              className={`${styles.toggle} ${!bongoMuted ? styles.toggleOn : ''}`}
+              onClick={onBongoMuteToggle}
+            >
+              <span className={styles.toggleThumb} />
+            </button>
+          </div>
+
+          {/* ── Güira Master Mute ── */}
+          <div className={styles.settingsRow}>
+            <span className={styles.settingsLabel}>
+              Güira
+              <span className={styles.settingsSub}>
+                {guiraMuted ? 'ミュート中' : '再生中'}
+              </span>
+            </span>
+            <button
+              role="switch"
+              aria-checked={!guiraMuted}
+              aria-label="Güira master mute"
+              className={`${styles.toggle} ${!guiraMuted ? styles.toggleOn : ''}`}
+              onClick={onGuiraMuteToggle}
+            >
+              <span className={styles.toggleThumb} />
+            </button>
+          </div>
+        </>
+      )}
 
       {/* ── LOUDNESS ── */}
       <div className={styles.settingsRow}>

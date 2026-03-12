@@ -21,6 +21,11 @@ const baseProps = {
   onRandomFlipModeChange: vi.fn(),
   loudness: true,
   onLoudnessChange: vi.fn(),
+  genre: 'salsa' as const,
+  bongoMuted: false,
+  onBongoMuteToggle: vi.fn(),
+  guiraMuted: false,
+  onGuiraMuteToggle: vi.fn(),
 };
 
 describe('ControlPanel', () => {

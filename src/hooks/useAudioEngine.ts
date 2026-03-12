@@ -5,15 +5,30 @@ import { storage } from '../engine/storage';
 import { useWakeLock } from './useWakeLock';
 import { useSilentAudio } from './useSilentAudio';
 
+export type Genre = 'salsa' | 'bachata';
+
 /** 現在のスキーマで有効な TrackId 一覧 */
 const VALID_TRACK_IDS: readonly TrackId[] = [
   'clave',
   'conga-open', 'conga-slap', 'conga-heel',
   'cowbell-low', 'cowbell-high',
+  'bongo-low', 'bongo-high', 'guira', 'bass',
 ];
 
 const CONGA_IDS:   readonly TrackId[] = ['conga-open', 'conga-slap', 'conga-heel'];
 const COWBELL_IDS: readonly TrackId[] = ['cowbell-low', 'cowbell-high'];
+const BONGO_IDS:   readonly TrackId[] = ['bongo-low', 'bongo-high'];
+
+const GENRE_DEFAULT_BPM: Record<Genre, number> = { salsa: 180, bachata: 120 };
+
+// ジャンル切替時のデフォルトミュート
+const SALSA_DEFAULT_MUTED:   TrackId[] = [
+  'conga-open', 'conga-slap', 'conga-heel', 'cowbell-low', 'cowbell-high',
+  'bongo-low', 'bongo-high', 'guira', 'bass',
+];
+const BACHATA_DEFAULT_MUTED: TrackId[] = [
+  'clave', 'conga-open', 'conga-slap', 'conga-heel', 'cowbell-low', 'cowbell-high',
+];
 
 export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -53,14 +68,27 @@ export function useAudioEngine() {
 
   // Muted tracks
   const [mutedTracks, setMutedTracks] = useState<Set<TrackId>>(() => {
+    const savedGenre = storage.getGenre();
     const saved = storage.getMutedTracks().filter(
       (id): id is TrackId => (VALID_TRACK_IDS as string[]).includes(id),
     );
     const muted = new Set<TrackId>(saved);
+    // 新規追加トラック（保存済みリストにないもの）はデフォルトをジャンル別に適用
+    const genreDefaults = savedGenre === 'salsa' ? SALSA_DEFAULT_MUTED : BACHATA_DEFAULT_MUTED;
+    for (const id of genreDefaults) {
+      if (!saved.includes(id)) muted.add(id);
+    }
     for (const id of VALID_TRACK_IDS) {
       audioEngine.setTrackMuted(id, muted.has(id));
     }
     return muted;
+  });
+
+  // Genre
+  const [genre, setGenreState] = useState<Genre>(() => {
+    const g = storage.getGenre();
+    document.documentElement.setAttribute('data-genre', g);
+    return g;
   });
 
   // Master volume
@@ -260,6 +288,47 @@ export function useAudioEngine() {
     });
   }, []);
 
+  const toggleBongoMute = useCallback(() => {
+    setMutedTracks(prev => {
+      const mute = !BONGO_IDS.every(id => prev.has(id));
+      for (const id of BONGO_IDS) audioEngine.setTrackMuted(id, mute);
+      const next = new Set(prev);
+      for (const id of BONGO_IDS) {
+        if (mute) next.add(id); else next.delete(id);
+      }
+      storage.setMutedTracks([...next]);
+      return next;
+    });
+  }, []);
+
+  const toggleGuiraMute = useCallback(() => {
+    const nowMuted = audioEngine.toggleTrackMute('guira');
+    setMutedTracks(prev => {
+      const next = new Set(prev);
+      if (nowMuted) next.add('guira'); else next.delete('guira');
+      storage.setMutedTracks([...next]);
+      return next;
+    });
+  }, []);
+
+  const setGenre = useCallback((g: Genre) => {
+    const muted = g === 'salsa' ? SALSA_DEFAULT_MUTED : BACHATA_DEFAULT_MUTED;
+    const mutedSet = new Set<TrackId>(muted);
+    for (const id of VALID_TRACK_IDS) {
+      audioEngine.setTrackMuted(id, mutedSet.has(id));
+    }
+    setMutedTracks(mutedSet);
+    storage.setMutedTracks([...mutedSet]);
+    // BPM をジャンルデフォルトに変更
+    const newBpm = GENRE_DEFAULT_BPM[g];
+    audioEngine.bpm = newBpm;
+    setBpmState(newBpm);
+    storage.setBpm(newBpm);
+    document.documentElement.setAttribute('data-genre', g);
+    setGenreState(g);
+    storage.setGenre(g);
+  }, []);
+
   const loadAudioFile = useCallback(async (file: File) => {
     const arrayBuffer = await file.arrayBuffer();
     await audioEngine.loadBuffer(arrayBuffer);
@@ -280,6 +349,8 @@ export function useAudioEngine() {
 
   const congaMuted   = CONGA_IDS.every(id => mutedTracks.has(id));
   const cowbellMuted = COWBELL_IDS.every(id => mutedTracks.has(id));
+  const bongoMuted   = BONGO_IDS.every(id => mutedTracks.has(id));
+  const guiraMuted   = mutedTracks.has('guira');
 
   return {
     isPlaying, bpm, setBpm,
@@ -291,8 +362,11 @@ export function useAudioEngine() {
     mutedTracks, toggleTrackMute,
     congaMuted,   toggleCongaMute,
     cowbellMuted, toggleCowbellMute,
+    bongoMuted,   toggleBongoMute,
+    guiraMuted,   toggleGuiraMute,
     backgroundPlay, setBackgroundPlay,
     loudness, setLoudness,
+    genre, setGenre,
     samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,

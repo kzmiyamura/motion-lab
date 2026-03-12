@@ -5,8 +5,8 @@
   flex-direction: column;
   align-items: center;
   padding: 2rem 1rem 3rem;
-  background: #080814;
-  color: #e0e0ff;
+  background: var(--color-bg, #080814);
+  color: var(--color-fg, #e0e0ff);
   font-family: system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
 }
@@ -20,7 +20,7 @@
   font-size: 2.5rem;
   font-weight: 800;
   letter-spacing: -0.02em;
-  background: linear-gradient(135deg, #7c6bff 0%, #ff6bcd 100%);
+  background: linear-gradient(135deg, var(--color-accent, #7c6bff) 0%, var(--color-accent2, #ff6bcd) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -46,7 +46,7 @@
 }
 
 .section + .section {
-  border-top: 1px solid #1e1e3a;
+  border-top: 1px solid var(--color-border, #1e1e3a);
   padding-top: 2rem;
 }
 
@@ -55,7 +55,7 @@
   font-weight: 700;
   letter-spacing: 0.15em;
   text-transform: uppercase;
-  color: #4040a0;
+  color: var(--color-section-title, #4040a0);
   margin: 0;
   align-self: flex-start;
 }
@@ -67,8 +67,8 @@
   gap: 0.75rem;
   width: 100%;
   padding: 0.9rem 1rem;
-  background: #0e0e1e;
-  border: 1px solid #1e1e3a;
+  background: var(--color-surface, #0e0e1e);
+  border: 1px solid var(--color-border, #1e1e3a);
   border-radius: 10px;
 }
 
@@ -132,6 +132,100 @@
 @keyframes flipPulse {
   0%, 100% { box-shadow: none; }
   50%       { box-shadow: 0 0 8px rgba(124,107,255,0.5); }
+}
+
+/* ── Genre Selector ── */
+.genreSelector {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  justify-content: center;
+}
+
+.genreBtn {
+  padding: 0.45rem 1.2rem;
+  border: 1.5px solid var(--color-border, #1e1e3a);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-fg-dim, #6060a0);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+
+.genreBtn:hover {
+  border-color: var(--color-accent, #7c6bff);
+  color: var(--color-fg, #e0e0ff);
+}
+
+.genreBtnActive {
+  border-color: var(--color-accent, #7c6bff);
+  background: color-mix(in srgb, var(--color-accent, #7c6bff) 15%, transparent);
+  color: var(--color-accent, #7c6bff);
+}
+
+/* ── Bachata Info ── */
+.bachataInfo {
+  width: 100%;
+  padding: 1rem;
+  background: var(--color-surface, #0e0e1e);
+  border: 1px solid var(--color-border, #1e1e3a);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.bachataDesc {
+  font-size: 0.8rem;
+  line-height: 1.8;
+  color: var(--color-fg-dim, #6060a0);
+  margin: 0;
+}
+
+.bachataDesc strong {
+  color: var(--color-accent, #7c6bff);
+}
+
+.bachataBeats {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: center;
+}
+
+.bachataBeat {
+  position: relative;
+  width: 2.4rem;
+  height: 2.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border2, #2a2a4a);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-fg-dim, #6060a0);
+}
+
+.bachataBeatAccent {
+  border-color: var(--color-accent, #7c6bff);
+  color: var(--color-accent, #7c6bff);
+  background: color-mix(in srgb, var(--color-accent, #7c6bff) 12%, transparent);
+}
+
+.bachataTap {
+  position: absolute;
+  bottom: -1.1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-accent, #7c6bff);
+  white-space: nowrap;
 }
 
 @media (max-width: 480px) {

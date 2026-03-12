@@ -3,9 +3,10 @@
 /**
  * スキーマバージョン — トラック構成が変わるたびにインクリメント。
  *   v1: cowbell を low/high に分割
- *   v2: conga を open/slap/heel に分割（現在）
+ *   v2: conga を open/slap/heel に分割
+ *   v3: Bachata トラック追加（bongo/guira/bass）
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const KEYS = {
   schemaVersion:  'motionlab:schemaVersion',
@@ -15,6 +16,7 @@ const KEYS = {
   backgroundPlay: 'motionlab:backgroundPlay',
   masterVolume:   'motionlab:masterVolume',
   loudness:       'motionlab:loudness',
+  genre:          'motionlab:genre',
 } as const;
 
 function load<T>(key: string, fallback: T, parse: (v: string) => T): T {
@@ -55,7 +57,8 @@ export const storage = {
   // デフォルト: clave のみ ON、残り全トラック OFF
   getMutedTracks: () => load(
     KEYS.mutedTracks,
-    ['conga-open', 'conga-slap', 'conga-heel', 'cowbell-low', 'cowbell-high'] as string[],
+    ['conga-open', 'conga-slap', 'conga-heel', 'cowbell-low', 'cowbell-high',
+     'bongo-low', 'bongo-high', 'guira', 'bass'] as string[],
     v => JSON.parse(v) as string[],
   ),
   setMutedTracks: (ids: string[]) => save(KEYS.mutedTracks, JSON.stringify(ids)),
@@ -68,4 +71,7 @@ export const storage = {
 
   getLoudness: ()           => load(KEYS.loudness, true, v => v === 'true'),
   setLoudness: (v: boolean) => save(KEYS.loudness, String(v)),
+
+  getGenre: () => load(KEYS.genre, 'salsa' as 'salsa' | 'bachata', s => s as 'salsa' | 'bachata'),
+  setGenre: (v: 'salsa' | 'bachata') => save(KEYS.genre, v),
 };

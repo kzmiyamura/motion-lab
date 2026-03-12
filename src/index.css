@@ -2,6 +2,34 @@
   box-sizing: border-box;
 }
 
+/* ── Design tokens ── */
+:root {
+  --color-bg:            #080814;
+  --color-fg:            #e0e0ff;
+  --color-fg-dim:        #6060a0;
+  --color-accent:        #7c6bff;
+  --color-accent2:       #ff6bcd;
+  --color-border:        #1e1e3a;
+  --color-border2:       #2a2a4a;
+  --color-surface:       #0e0e1e;
+  --color-machine:       #1a1a2e;
+  --color-section-title: #4040a0;
+}
+
+/* ── Bachata theme (rose / pink) ── */
+:root[data-genre="bachata"] {
+  --color-bg:            #14080e;
+  --color-fg:            #ffe0e8;
+  --color-fg-dim:        #a06070;
+  --color-accent:        #ff4f8b;
+  --color-accent2:       #ffb5c8;
+  --color-border:        #3a1020;
+  --color-border2:       #4a2030;
+  --color-surface:       #1e0812;
+  --color-machine:       #2a0e18;
+  --color-section-title: #a04060;
+}
+
 body {
   margin: 0;
   font-family: system-ui, -apple-system, Avenir, Helvetica, Arial, sans-serif;
@@ -9,10 +37,11 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #080814;
-  color: #e0e0ff;
+  background: var(--color-bg);
+  color: var(--color-fg);
   overflow-x: hidden;
   /* iOSの安全領域（ノッチ・ホームバー）対応 */
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
+  transition: background 0.3s ease, color 0.3s ease;
 }

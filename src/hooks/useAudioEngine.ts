@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { audioEngine, type BeatCallback, type TrackId } from '../engine/AudioEngine';
 import { CLAVE_PATTERNS, CLAVE_FLIP_MAP, toEngineSteps, type ClavePattern } from '../engine/salsaPatterns';
+import { BACHATA_PATTERNS } from '../engine/bachataPatterns';
 import { storage } from '../engine/storage';
 import { useWakeLock } from './useWakeLock';
 import { useSilentAudio } from './useSilentAudio';
@@ -90,6 +91,35 @@ export function useAudioEngine() {
     document.documentElement.setAttribute('data-genre', g);
     return g;
   });
+
+  // Bachata complexity (0-based index into BACHATA_PATTERNS)
+  const DEFAULT_BACHATA_COMPLEXITY = 2; // Doble
+  const [bachataComplexity, setBachataComplexityState] = useState(DEFAULT_BACHATA_COMPLEXITY);
+
+  /** Apply a Bachata pattern by its 0-based index and update engine tracks. */
+  const applyBachataPattern = useCallback((index: number) => {
+    const p = BACHATA_PATTERNS[index];
+    if (!p) return;
+    audioEngine.setTrackPattern('bongo-low',  new Set(p.bongoLow));
+    audioEngine.setTrackPattern('bongo-high', new Set(p.bongoHigh));
+    audioEngine.setTrackPattern('guira',      new Set(p.guira));
+    audioEngine.setTrackPattern('bass',       new Set(p.bass));
+    audioEngine.setTrackArticulation('bongo-low',  p.bongoLowArticulation);
+    audioEngine.setTrackArticulation('bongo-high', p.bongoHighArticulation);
+  }, []);
+
+  // Apply default pattern once on mount (when genre === 'bachata')
+  useEffect(() => {
+    if (storage.getGenre() === 'bachata') {
+      applyBachataPattern(DEFAULT_BACHATA_COMPLEXITY);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setBachataComplexity = useCallback((index: number) => {
+    setBachataComplexityState(index);
+    applyBachataPattern(index);
+  }, [applyBachataPattern]);
 
   // Master volume
   const [masterVolume, setMasterVolumeState] = useState<number>(() => {
@@ -327,7 +357,12 @@ export function useAudioEngine() {
     document.documentElement.setAttribute('data-genre', g);
     setGenreState(g);
     storage.setGenre(g);
-  }, []);
+    // Bachata に切り替えたときはデフォルトパターンを適用してスライダーをリセット
+    if (g === 'bachata') {
+      setBachataComplexityState(DEFAULT_BACHATA_COMPLEXITY);
+      applyBachataPattern(DEFAULT_BACHATA_COMPLEXITY);
+    }
+  }, [applyBachataPattern]);
 
   const loadAudioFile = useCallback(async (file: File) => {
     const arrayBuffer = await file.arrayBuffer();
@@ -367,6 +402,7 @@ export function useAudioEngine() {
     backgroundPlay, setBackgroundPlay,
     loudness, setLoudness,
     genre, setGenre,
+    bachataComplexity, setBachataComplexity,
     samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,

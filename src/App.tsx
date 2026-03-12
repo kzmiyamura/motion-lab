@@ -25,6 +25,7 @@ function App() {
     backgroundPlay, setBackgroundPlay,
     loudness, setLoudness,
     genre, setGenre,
+    bachataComplexity, setBachataComplexity,
     samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,
@@ -152,6 +153,8 @@ function App() {
           onBongoMuteToggle={toggleBongoMute}
           guiraMuted={guiraMuted}
           onGuiraMuteToggle={toggleGuiraMute}
+          bachataComplexity={bachataComplexity}
+          onBachataComplexityChange={setBachataComplexity}
         />
       </section>
     </main>

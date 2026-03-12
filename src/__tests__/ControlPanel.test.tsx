@@ -26,6 +26,8 @@ const baseProps = {
   onBongoMuteToggle: vi.fn(),
   guiraMuted: false,
   onGuiraMuteToggle: vi.fn(),
+  bachataComplexity: 2,
+  onBachataComplexityChange: vi.fn(),
 };
 
 describe('ControlPanel', () => {

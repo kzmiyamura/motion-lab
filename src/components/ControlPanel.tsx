@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { BPM_CATEGORIES, getActiveCategoryId } from '../engine/bpmCategories';
+import { BACHATA_PATTERNS } from '../engine/bachataPatterns';
 import { type Genre } from '../hooks/useAudioEngine';
 import styles from './ControlPanel.module.css';
 
@@ -27,6 +28,8 @@ type Props = {
   onBongoMuteToggle: () => void;
   guiraMuted: boolean;
   onGuiraMuteToggle: () => void;
+  bachataComplexity: number;
+  onBachataComplexityChange: (v: number) => void;
 };
 
 export function ControlPanel({
@@ -53,6 +56,8 @@ export function ControlPanel({
   onBongoMuteToggle,
   guiraMuted,
   onGuiraMuteToggle,
+  bachataComplexity,
+  onBachataComplexityChange,
 }: Props) {
   const activeCategoryId = getActiveCategoryId(bpm);
 
@@ -221,6 +226,34 @@ export function ControlPanel({
 
       {genre === 'bachata' && (
         <>
+          {/* ── Complexity スライダー ── */}
+          {(() => {
+            const pattern = BACHATA_PATTERNS[bachataComplexity];
+            return (
+              <div className={styles.complexitySection}>
+                <div className={styles.complexityHeader}>
+                  <span className={styles.complexityTitle}>Complexity</span>
+                  <span className={styles.complexityBadge}>
+                    {pattern.complexity} — {pattern.name}
+                  </span>
+                </div>
+                <input
+                  aria-label="Bachata Complexity"
+                  type="range"
+                  min={0}
+                  max={BACHATA_PATTERNS.length - 1}
+                  step={1}
+                  value={bachataComplexity}
+                  onChange={(e) => onBachataComplexityChange(Number(e.target.value))}
+                  className={styles.complexitySlider}
+                />
+                <div className={styles.complexityDesc}>
+                  {pattern.nameJa}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* ── Bongo Master Mute ── */}
           <div className={styles.settingsRow}>
             <span className={styles.settingsLabel}>

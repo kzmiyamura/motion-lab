@@ -18,6 +18,8 @@
 export type TrackId = 'clave' | 'conga-open' | 'conga-slap' | 'conga-heel' | 'cowbell-low' | 'cowbell-high'
   | 'bongo-low' | 'bongo-high' | 'guira' | 'bass';
 
+import { type Articulation } from './bachataPatterns';
+
 export type Track = {
   id: TrackId;
   pattern: Set<number>;
@@ -178,6 +180,12 @@ export class AudioEngine {
   // visibilitychange リスナー（一度だけ登録）
   private visibilityHandler: (() => void) | null = null;
 
+  // ── Bongo articulation map (open vs muffled per step) ────────────────────
+  private bongoArticulation: Map<'bongo-low' | 'bongo-high', Map<number, Articulation>> = new Map([
+    ['bongo-low',  new Map()],
+    ['bongo-high', new Map()],
+  ]);
+
   // ── Clave Flip ─────────────────────────────────────────────────────────────
   private _flipPhase: 'idle' | 'announced' | 'ready' = 'idle';
   private _pendingFlipPattern: Set<number> | null = null;
@@ -266,6 +274,18 @@ export class AudioEngine {
 
   setTrackMuted(id: TrackId, muted: boolean) {
     this.tracks.get(id)!.muted = muted;
+  }
+
+  /** Set per-step articulation for bongo tracks. */
+  setTrackArticulation(
+    id: 'bongo-low' | 'bongo-high',
+    artMap: Partial<Record<number, Articulation>>,
+  ) {
+    const m = new Map<number, Articulation>();
+    for (const [k, v] of Object.entries(artMap)) {
+      if (v) m.set(Number(k), v);
+    }
+    this.bongoArticulation.set(id, m);
   }
 
   /** OS による強制 suspend からの復帰用。useSilentAudio の visibilitychange から呼ぶ。 */
@@ -590,7 +610,7 @@ export class AudioEngine {
     let hasNotes = false;
     for (const track of this.tracks.values()) {
       if (!track.muted && track.pattern.has(beat)) {
-        this.playTrack(ctx, track.id, time);
+        this.playTrack(ctx, track.id, time, beat);
         hasNotes = true;
       }
     }
@@ -603,13 +623,13 @@ export class AudioEngine {
     }, Math.max(0, delay));
   }
 
-  private playTrack(ctx: AudioContext, id: TrackId, baseTime: number) {
+  private playTrack(ctx: AudioContext, id: TrackId, baseTime: number, beat: number) {
     const buffers = this.sampleBuffers.get(id)!;
     if (buffers.length > 0) {
       this.playSampleBuffer(ctx, id, buffers, baseTime);
     } else {
       // Synthesis fallback while samples are loading or on network failure
-      this.playSynth(ctx, id, baseTime);
+      this.playSynth(ctx, id, baseTime, beat);
     }
   }
 
@@ -652,7 +672,7 @@ export class AudioEngine {
 
   // ── Synthesis fallbacks ───────────────────────────────────────────────────
 
-  private playSynth(ctx: AudioContext, id: TrackId, time: number) {
+  private playSynth(ctx: AudioContext, id: TrackId, time: number, beat: number) {
     switch (id) {
       case 'clave':        return this.synthClave(ctx, time);
       case 'conga-open':   return this.synthCongaOpen(ctx, time);
@@ -660,8 +680,14 @@ export class AudioEngine {
       case 'conga-heel':   return this.synthCongaHeel(ctx, time);
       case 'cowbell-low':  return this.synthCowbellLow(ctx, time);
       case 'cowbell-high': return this.synthCowbellHigh(ctx, time);
-      case 'bongo-low':    return this.synthBongoLow(ctx, time);
-      case 'bongo-high':   return this.synthBongoHigh(ctx, time);
+      case 'bongo-low': {
+        const art = this.bongoArticulation.get('bongo-low')?.get(beat) ?? 'open';
+        return this.synthBongoLow(ctx, time, art);
+      }
+      case 'bongo-high': {
+        const art = this.bongoArticulation.get('bongo-high')?.get(beat) ?? 'open';
+        return this.synthBongoHigh(ctx, time, art);
+      }
       case 'guira':        return this.synthGuira(ctx, time);
       case 'bass':         return this.synthBass(ctx, time);
     }
@@ -841,67 +867,107 @@ export class AudioEngine {
   }
 
   /**
-   * Bongo Low (Macho): deep warm punch — pitch drop 200Hz → 70Hz
-   * + Peaking filter at 150Hz (+3dB, Q=5) for drum body resonance
-   * + Panned left 20% to widen the stereo image
+   * Bongo Low (Macho): deep warm punch.
+   *   open    — 200Hz→70Hz (0.12s), peaking +3dB@150Hz, full resonance
+   *   muffled — 180Hz→100Hz (0.05s), peaking +1dB, bandpass@300Hz damps tail
+   * Panned left 20%.
    */
-  private synthBongoLow(ctx: AudioContext, time: number) {
+  private synthBongoLow(ctx: AudioContext, time: number, articulation: Articulation = 'open') {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-low'], time);
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(200, t);
-    osc.frequency.exponentialRampToValueAtTime(70, t + 0.08);
-    gainNode.gain.setValueAtTime(0.0001, t);
-    gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+
+    if (articulation === 'muffled') {
+      // Tight pitch: less resonant tail
+      osc.frequency.setValueAtTime(180, t);
+      osc.frequency.exponentialRampToValueAtTime(100, t + 0.05);
+      gainNode.gain.setValueAtTime(0.0001, t);
+      gainNode.gain.exponentialRampToValueAtTime(g * 0.75, t + 0.003);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    } else {
+      osc.frequency.setValueAtTime(200, t);
+      osc.frequency.exponentialRampToValueAtTime(70, t + 0.08);
+      gainNode.gain.setValueAtTime(0.0001, t);
+      gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    }
     osc.connect(gainNode);
 
-    // Peaking EQ: 150Hz body resonance boost (+3dB, tight Q)
+    // Peaking EQ: body resonance boost (reduced for muffled)
     const peaking = ctx.createBiquadFilter();
     peaking.type = 'peaking';
     peaking.frequency.value = 150;
     peaking.Q.value = 5;
-    peaking.gain.value = 3;
+    peaking.gain.value = articulation === 'muffled' ? 1 : 3;
+
+    // Muffled: add bandpass to cut the resonant tail
+    if (articulation === 'muffled') {
+      const damp = ctx.createBiquadFilter();
+      damp.type = 'bandpass';
+      damp.frequency.value = 300;
+      damp.Q.value = 3;
+      gainNode.connect(damp);
+      damp.connect(peaking);
+    } else {
+      gainNode.connect(peaking);
+    }
 
     // Pan left 20%
     const panner = ctx.createStereoPanner();
     panner.pan.value = -0.2;
-
-    gainNode.connect(peaking);
     peaking.connect(panner);
     panner.connect(this.masterGainNode!);
-    if (this.convolver) gainNode.connect(this.convolver);
+    if (this.convolver && articulation === 'open') gainNode.connect(this.convolver);
     osc.start(t);
-    osc.stop(t + 0.14);
+    osc.stop(t + (articulation === 'muffled' ? 0.07 : 0.14));
   }
 
   /**
-   * Bongo High (Hembra): hard snappy hit — physical skin stretch pitch drop
-   * 800Hz → 400Hz in 10ms reproduces the "カンッ" of a real drum skin.
-   * + Panned left 20% (same side as bongo low)
+   * Bongo High (Hembra): physical skin-stretch pitch drop.
+   *   open    — 800Hz→400Hz in 10ms, 70ms decay ("カンッ")
+   *   muffled — 600Hz→350Hz in 8ms, 40ms decay, lowpass@800Hz softens
+   * Panned left 20%.
    */
-  private synthBongoHigh(ctx: AudioContext, time: number) {
+  private synthBongoHigh(ctx: AudioContext, time: number, articulation: Articulation = 'open') {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-high'], time);
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';
-    // Pitch envelope: skin stretch simulation — 800Hz → 400Hz in 10ms
-    osc.frequency.setValueAtTime(800, t);
-    osc.frequency.exponentialRampToValueAtTime(400, t + 0.01);
-    gainNode.gain.setValueAtTime(0.0001, t);
-    gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+
+    if (articulation === 'muffled') {
+      osc.frequency.setValueAtTime(600, t);
+      osc.frequency.exponentialRampToValueAtTime(350, t + 0.008);
+      gainNode.gain.setValueAtTime(0.0001, t);
+      gainNode.gain.exponentialRampToValueAtTime(g * 0.6, t + 0.002);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+    } else {
+      osc.frequency.setValueAtTime(800, t);
+      osc.frequency.exponentialRampToValueAtTime(400, t + 0.01);
+      gainNode.gain.setValueAtTime(0.0001, t);
+      gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+    }
     osc.connect(gainNode);
 
-    // Pan left 20%
+    // Muffled: lowpass at 800Hz softens the attack edge
     const panner = ctx.createStereoPanner();
     panner.pan.value = -0.2;
 
-    gainNode.connect(panner);
+    if (articulation === 'muffled') {
+      const lpf = ctx.createBiquadFilter();
+      lpf.type = 'lowpass';
+      lpf.frequency.value = 800;
+      lpf.Q.value = 0.7;
+      gainNode.connect(lpf);
+      lpf.connect(panner);
+    } else {
+      gainNode.connect(panner);
+    }
+
     panner.connect(this.masterGainNode!);
     osc.start(t);
-    osc.stop(t + 0.08);
+    osc.stop(t + (articulation === 'muffled' ? 0.05 : 0.08));
   }
 
   /**

@@ -22,6 +22,12 @@ const BONGO_IDS:   readonly TrackId[] = ['bongo-low', 'bongo-high'];
 
 const GENRE_DEFAULT_BPM: Record<Genre, number> = { salsa: 180, bachata: 120 };
 
+/** BPM slider range per genre — exported for use in ControlPanel */
+export const BPM_RANGE: Record<Genre, { min: number; max: number }> = {
+  salsa:   { min: 140, max: 240 },
+  bachata: { min: 80,  max: 150 },
+};
+
 // ジャンル切替時のデフォルトミュート
 const SALSA_DEFAULT_MUTED:   TrackId[] = [
   'conga-open', 'conga-slap', 'conga-heel', 'cowbell-low', 'cowbell-high',
@@ -49,9 +55,15 @@ export function useAudioEngine() {
   useWakeLock(isPlaying);
   useSilentAudio(isPlaying, start, stop);
 
-  // BPM
+  // BPM — clamp to genre range on init so a Salsa BPM doesn't bleed into Bachata
   const [bpm, setBpmState] = useState<number>(() => {
-    const saved = storage.getBpm();
+    const savedGenre = storage.getGenre();
+    let saved = storage.getBpm();
+    const range = BPM_RANGE[savedGenre];
+    if (saved < range.min || saved > range.max) {
+      saved = GENRE_DEFAULT_BPM[savedGenre];
+      storage.setBpm(saved);
+    }
     audioEngine.bpm = saved;
     return saved;
   });

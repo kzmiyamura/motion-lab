@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { BPM_CATEGORIES, getActiveCategoryId } from '../engine/bpmCategories';
 import { BACHATA_PATTERNS } from '../engine/bachataPatterns';
-import { type Genre } from '../hooks/useAudioEngine';
+import { type Genre, BPM_RANGE } from '../hooks/useAudioEngine';
 import styles from './ControlPanel.module.css';
 
 type Props = {
@@ -79,34 +79,37 @@ export function ControlPanel({
   return (
     <div className={styles.panel}>
 
-      {/* ── BPM カテゴリ選択 ── */}
-      <div className={styles.categoryGrid}>
-        {BPM_CATEGORIES.map(cat => {
-          const isActive = activeCategoryId === cat.id;
-          const rangeLabel = cat.range[1] === Infinity
-            ? `${cat.range[0]}+`
-            : `${cat.range[0]}–${cat.range[1]}`;
+      {/* ── BPM カテゴリ選択（Salsa モードのみ：Bachata では BPM レンジが異なるため非表示） ── */}
+      {genre === 'salsa' && (
+        <>
+          <div className={styles.categoryGrid}>
+            {BPM_CATEGORIES.map(cat => {
+              const isActive = activeCategoryId === cat.id;
+              const rangeLabel = cat.range[1] === Infinity
+                ? `${cat.range[0]}+`
+                : `${cat.range[0]}–${cat.range[1]}`;
 
-          return (
-            <button
-              key={cat.id}
-              className={`${styles.catBtn} ${isActive ? styles.catBtnActive : ''}`}
-              onClick={() => onBpmChange(cat.defaultBpm)}
-              title={cat.feel}
-            >
-              <span className={styles.catLabel}>{cat.label}</span>
-              <span className={styles.catSublabel}>{cat.sublabel}</span>
-              <span className={styles.catRange}>{rangeLabel}</span>
-            </button>
-          );
-        })}
-      </div>
+              return (
+                <button
+                  key={cat.id}
+                  className={`${styles.catBtn} ${isActive ? styles.catBtnActive : ''}`}
+                  onClick={() => onBpmChange(cat.defaultBpm)}
+                  title={cat.feel}
+                >
+                  <span className={styles.catLabel}>{cat.label}</span>
+                  <span className={styles.catSublabel}>{cat.sublabel}</span>
+                  <span className={styles.catRange}>{rangeLabel}</span>
+                </button>
+              );
+            })}
+          </div>
 
-      {/* ── feel テキスト（アクティブカテゴリの説明） ── */}
-      {activeCategoryId && (
-        <p className={styles.feelText}>
-          {BPM_CATEGORIES.find(c => c.id === activeCategoryId)!.feel}
-        </p>
+          {activeCategoryId && (
+            <p className={styles.feelText}>
+              {BPM_CATEGORIES.find(c => c.id === activeCategoryId)!.feel}
+            </p>
+          )}
+        </>
       )}
 
       {/* ── VOL スライダー ── */}
@@ -125,14 +128,15 @@ export function ControlPanel({
         <span className={styles.bpmValue}>{Math.round(masterVolume * 100)}%</span>
       </div>
 
-      {/* ── BPM スライダー ── */}
+      {/* ── BPM スライダー（ジャンル別レンジ） ── */}
       <div className={styles.bpmRow}>
         <label className={styles.label} htmlFor="bpm-slider">BPM</label>
         <input
           id="bpm-slider"
+          aria-label="BPM"
           type="range"
-          min={120}
-          max={260}
+          min={BPM_RANGE[genre].min}
+          max={BPM_RANGE[genre].max}
           value={bpm}
           onChange={handleSlider}
           className={styles.slider}

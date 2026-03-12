@@ -961,19 +961,34 @@ export class AudioEngine {
     const gainNode = ctx.createGain();
     osc.type = 'sine';
 
+    // Scale durations proportionally to the 8th-note step length.
+    // At 120 BPM: stepDuration=0.25s → longer pitch glide and decay (fills the space).
+    // At 180 BPM: stepDuration=0.167s → tighter values (≈ previous hardcoded constants).
+    const stepDuration = (60 / this._bpm) / 2;
+
     if (articulation === 'muffled') {
+      const pitchDrop = Math.min(0.12, stepDuration * 0.22);
+      const decay     = Math.min(0.14, stepDuration * 0.30);
       osc.frequency.setValueAtTime(180, t);
-      osc.frequency.exponentialRampToValueAtTime(100, t + 0.05);
+      osc.frequency.exponentialRampToValueAtTime(100, t + pitchDrop);
       gainNode.gain.setValueAtTime(0.0001, t);
       gainNode.gain.exponentialRampToValueAtTime(g * 0.75, t + 0.003);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, t + decay);
     } else {
+      const pitchDrop = Math.min(0.18, stepDuration * 0.45);
+      const decay     = Math.min(0.28, stepDuration * 0.75);
+      // stop computed after the else block
       osc.frequency.setValueAtTime(200, t);
-      osc.frequency.exponentialRampToValueAtTime(70, t + 0.08);
+      osc.frequency.exponentialRampToValueAtTime(70, t + pitchDrop);
       gainNode.gain.setValueAtTime(0.0001, t);
       gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, t + decay);
     }
+
+    // Compute stop time after the if/else (used below)
+    const stopTime = articulation === 'muffled'
+      ? Math.min(0.16, stepDuration * 0.35)
+      : Math.min(0.32, stepDuration * 0.85);
 
     // WaveShaper: tanh saturation — adds odd harmonics for natural drum timbre
     const shaper = ctx.createWaveShaper();
@@ -1008,7 +1023,7 @@ export class AudioEngine {
     panner.connect(this.masterGainNode!);
     if (this.convolver && articulation === 'open') gainNode.connect(this.convolver);
     osc.start(t);
-    osc.stop(t + (articulation === 'muffled' ? 0.07 : 0.14));
+    osc.stop(t + stopTime);
 
     // Attack transient noise: fingertip-on-skin contact sound
     this.playAttackNoise(ctx, t, g * (articulation === 'muffled' ? 0.2 : 0.35), 1800);
@@ -1027,19 +1042,29 @@ export class AudioEngine {
     const gainNode = ctx.createGain();
     osc.type = 'sine';
 
+    // Scale decay to step duration — at 120 BPM the note has more space to ring.
+    // Pitch snap (800→400Hz) is a physical constant and stays short regardless of tempo.
+    const stepDuration = (60 / this._bpm) / 2;
+
     if (articulation === 'muffled') {
+      const decay = Math.min(0.10, stepDuration * 0.22);
       osc.frequency.setValueAtTime(600, t);
-      osc.frequency.exponentialRampToValueAtTime(350, t + 0.008);
+      osc.frequency.exponentialRampToValueAtTime(350, t + 0.008); // physical snap — keep fixed
       gainNode.gain.setValueAtTime(0.0001, t);
       gainNode.gain.exponentialRampToValueAtTime(g * 0.6, t + 0.002);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, t + decay);
     } else {
+      const decay = Math.min(0.16, stepDuration * 0.40);
       osc.frequency.setValueAtTime(800, t);
-      osc.frequency.exponentialRampToValueAtTime(400, t + 0.01);
+      osc.frequency.exponentialRampToValueAtTime(400, t + 0.01); // physical snap — keep fixed
       gainNode.gain.setValueAtTime(0.0001, t);
       gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, t + decay);
     }
+
+    const stopTime = articulation === 'muffled'
+      ? Math.min(0.12, stepDuration * 0.25)
+      : Math.min(0.18, stepDuration * 0.45);
 
     // WaveShaper: odd harmonic content → "wooden" skin character
     const shaper = ctx.createWaveShaper();
@@ -1064,7 +1089,7 @@ export class AudioEngine {
 
     panner.connect(this.masterGainNode!);
     osc.start(t);
-    osc.stop(t + (articulation === 'muffled' ? 0.05 : 0.08));
+    osc.stop(t + stopTime);
 
     // Attack transient: harder material → higher HPF cutoff than bongo low
     this.playAttackNoise(ctx, t, g * (articulation === 'muffled' ? 0.15 : 0.4), 2500);

@@ -1,0 +1,66 @@
+# Git
+.git/
+
+# Dependencies
+node_modules/
+
+# Lockfiles (can be very large and consume many tokens)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build output & artifacts
+dist/
+build/
+.next/
+out/
+
+# Public assets (images, fonts, etc.)
+public/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local environment variables (sensitive information)
+.env
+.env.*
+!.env.example
+
+# Editor-specific files
+.vscode/
+.idea/
+
+# Binary and non-text files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.webp
+*.mp4
+*.webm
+*.mov
+*.avi
+*.mp3
+*.wav
+*.ogg
+*.woff
+*.woff2
+*.eot
+*.ttf
+*.otf
+*.pdf
+*.zip
+*.gz
+*.tar
+*.rar
+*.bin
+*.exe
+*.dll
+*.so
+*.class
+*.jar

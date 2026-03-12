@@ -228,6 +228,98 @@
   white-space: nowrap;
 }
 
+/* Active (current) non-accent beat — subtle pulse */
+.bachataBeatCurrent {
+  border-color: var(--color-accent2, #ff6bcd);
+  background: color-mix(in srgb, var(--color-accent2, #ff6bcd) 10%, transparent);
+}
+
+/* Active accent beat (Beat 4 / Beat 8) — strong glow for hip-move cue */
+.bachataBeatLive {
+  border-color: var(--color-accent, #7c6bff) !important;
+  background: color-mix(in srgb, var(--color-accent, #7c6bff) 35%, transparent) !important;
+  color: #fff !important;
+  box-shadow: 0 0 12px rgba(124, 107, 255, 0.8), 0 0 24px rgba(124, 107, 255, 0.4);
+  animation: bachataBeatPulse 0.15s ease-out;
+}
+
+@keyframes bachataBeatPulse {
+  0%   { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+/* ── Bachata Section Selector ── */
+.bachataSectionSelector {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.bachataSectionLabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-section-title, #4040a0);
+}
+
+.bachataSectionBtns {
+  display: flex;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.bachataSectionBtn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.55rem 0.5rem;
+  border: 1.5px solid var(--color-border, #1e1e3a);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-fg-dim, #6060a0);
+  cursor: pointer;
+  transition: border-color 0.18s, background 0.18s, color 0.18s, box-shadow 0.18s;
+}
+
+.bachataSectionBtn:hover {
+  border-color: var(--color-accent, #7c6bff);
+  color: var(--color-fg, #e0e0ff);
+}
+
+.bachataSectionBtnActive {
+  border-color: var(--color-accent, #7c6bff);
+  background: color-mix(in srgb, var(--color-accent, #7c6bff) 18%, transparent);
+  color: var(--color-accent, #7c6bff);
+  box-shadow: 0 0 8px rgba(124, 107, 255, 0.35);
+}
+
+.bachataSectionBtnLabel {
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.bachataSectionBtnSub {
+  font-size: 0.62rem;
+  letter-spacing: 0.02em;
+  opacity: 0.75;
+}
+
+.bachataSectionDesc {
+  font-size: 0.75rem;
+  line-height: 1.65;
+  color: var(--color-fg-dim, #6060a0);
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid var(--color-accent, #7c6bff);
+  background: color-mix(in srgb, var(--color-accent, #7c6bff) 6%, transparent);
+  border-radius: 0 6px 6px 0;
+}
+
 @media (max-width: 480px) {
   .main {
     padding: 1.25rem 0.75rem 2rem;

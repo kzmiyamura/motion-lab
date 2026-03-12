@@ -191,6 +191,10 @@ export class AudioEngine {
     ['bongo-high', new Map()],
   ]);
 
+  // ── Per-step gain overrides (multiplier applied on top of TRACK_GAIN) ────
+  // Key: TrackId → Map<step, multiplier>
+  private stepGainOverrides: Map<TrackId, Map<number, number>> = new Map();
+
   // ── Clave Flip ─────────────────────────────────────────────────────────────
   private _flipPhase: 'idle' | 'announced' | 'ready' = 'idle';
   private _pendingFlipPattern: Set<number> | null = null;
@@ -291,6 +295,23 @@ export class AudioEngine {
       if (v) m.set(Number(k), v);
     }
     this.bongoArticulation.set(id, m);
+  }
+
+  /**
+   * Set per-step gain multipliers for a track.
+   * Pass null to clear all overrides for that track.
+   * Values in overrides are multiplied with TRACK_GAIN on playback.
+   */
+  setStepGainOverride(id: TrackId, overrides: Record<number, number> | null) {
+    if (overrides === null) {
+      this.stepGainOverrides.delete(id);
+    } else {
+      const m = new Map<number, number>();
+      for (const [k, v] of Object.entries(overrides)) {
+        m.set(Number(k), v);
+      }
+      this.stepGainOverrides.set(id, m);
+    }
   }
 
   /** OS による強制 suspend からの復帰用。useSilentAudio の visibilitychange から呼ぶ。 */
@@ -655,13 +676,21 @@ export class AudioEngine {
     }, Math.max(0, delay));
   }
 
+  /** Returns the gain multiplier for a given track+step (1.0 if no override). */
+  private getStepGainMult(id: TrackId, beat: number): number {
+    const overrides = this.stepGainOverrides.get(id);
+    if (!overrides) return 1.0;
+    return overrides.get(beat) ?? 1.0;
+  }
+
   private playTrack(ctx: AudioContext, id: TrackId, baseTime: number, beat: number) {
+    const gainMult = this.getStepGainMult(id, beat);
     const buffers = this.sampleBuffers.get(id)!;
     if (buffers.length > 0) {
-      this.playSampleBuffer(ctx, id, buffers, baseTime);
+      this.playSampleBuffer(ctx, id, buffers, baseTime, gainMult);
     } else {
       // Synthesis fallback while samples are loading or on network failure
-      this.playSynth(ctx, id, baseTime, beat);
+      this.playSynth(ctx, id, baseTime, beat, gainMult);
     }
   }
 
@@ -670,8 +699,9 @@ export class AudioEngine {
     id: TrackId,
     buffers: AudioBuffer[],
     baseTime: number,
+    gainMult = 1.0,
   ) {
-    const { gain, pitch, time } = this.humanize(TRACK_GAIN[id], baseTime);
+    const { gain, pitch, time } = this.humanize(TRACK_GAIN[id] * gainMult, baseTime);
 
     // Round-robin: alternate between available samples
     const counter = this.rrCounters.get(id)!;
@@ -752,7 +782,7 @@ export class AudioEngine {
 
   // ── Synthesis fallbacks ───────────────────────────────────────────────────
 
-  private playSynth(ctx: AudioContext, id: TrackId, time: number, beat: number) {
+  private playSynth(ctx: AudioContext, id: TrackId, time: number, beat: number, gainMult = 1.0) {
     switch (id) {
       case 'clave':        return this.synthClave(ctx, time);
       case 'conga-open':   return this.synthCongaOpen(ctx, time);
@@ -762,14 +792,14 @@ export class AudioEngine {
       case 'cowbell-high': return this.synthCowbellHigh(ctx, time);
       case 'bongo-low': {
         const art = this.bongoArticulation.get('bongo-low')?.get(beat) ?? 'open';
-        return this.synthBongoLow(ctx, time, art);
+        return this.synthBongoLow(ctx, time, art, gainMult);
       }
       case 'bongo-high': {
         const art = this.bongoArticulation.get('bongo-high')?.get(beat) ?? 'open';
-        return this.synthBongoHigh(ctx, time, art);
+        return this.synthBongoHigh(ctx, time, art, gainMult);
       }
-      case 'guira':        return this.synthGuira(ctx, time);
-      case 'bass':         return this.synthBass(ctx, time);
+      case 'guira':        return this.synthGuira(ctx, time, gainMult);
+      case 'bass':         return this.synthBass(ctx, time, gainMult);
     }
   }
 
@@ -955,8 +985,8 @@ export class AudioEngine {
    *   muffled — 180Hz→100Hz (0.05s), tighter peaking, bandpass dampens resonant tail
    * Panned left 20%.
    */
-  private synthBongoLow(ctx: AudioContext, time: number, articulation: Articulation = 'open') {
-    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-low'], time);
+  private synthBongoLow(ctx: AudioContext, time: number, articulation: Articulation = 'open', gainMult = 1.0) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-low'] * gainMult, time);
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';
@@ -1036,8 +1066,8 @@ export class AudioEngine {
    *   muffled — 600Hz→350Hz in 8ms, LPF@800Hz softens, lighter attack noise
    * Panned left 20%.
    */
-  private synthBongoHigh(ctx: AudioContext, time: number, articulation: Articulation = 'open') {
-    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-high'], time);
+  private synthBongoHigh(ctx: AudioContext, time: number, articulation: Articulation = 'open', gainMult = 1.0) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-high'] * gainMult, time);
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';
@@ -1100,8 +1130,8 @@ export class AudioEngine {
    * Attack 1ms, Decay 20ms → tiny metallic "チッ" grain per 16th note
    * + Panned right 20% to separate from bongos
    */
-  private synthGuira(ctx: AudioContext, time: number) {
-    const { gain: g, time: t } = this.humanize(TRACK_GAIN['guira'], time);
+  private synthGuira(ctx: AudioContext, time: number, gainMult = 1.0) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['guira'] * gainMult, time);
     const duration = 0.022; // 22ms total (attack 1ms + decay 20ms + margin)
     const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -1139,8 +1169,8 @@ export class AudioEngine {
    * Bass accent (beat 4 & 8): sub-bass only — LPF at 200Hz cuts overlap with bongos.
    * Sine 80Hz → 50Hz gives a "地響き" (ground rumble) character.
    */
-  private synthBass(ctx: AudioContext, time: number) {
-    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bass'], time);
+  private synthBass(ctx: AudioContext, time: number, gainMult = 1.0) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bass'] * gainMult, time);
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';

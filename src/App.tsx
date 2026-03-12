@@ -26,6 +26,7 @@ function App() {
     loudness, setLoudness,
     genre, setGenre,
     bachataComplexity, setBachataComplexity,
+    bachataSection, setBachataSection,
     samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,
@@ -104,16 +105,56 @@ function App() {
               Bongo・Güira・Bass の3層でリズムを構成します。
             </p>
             <div className={styles.bachataBeats}>
-              {[1,2,3,4,5,6,7,8].map(b => (
-                <div
-                  key={b}
-                  className={`${styles.bachataBeat} ${(b === 4 || b === 8) ? styles.bachataBeatAccent : ''}`}
+              {[1,2,3,4,5,6,7,8].map(b => {
+                // Beat 4 = step 6, Beat 8 = step 14
+                const step = (b - 1) * 2;
+                const isAccent = b === 4 || b === 8;
+                const isLive = currentBeat === step;
+                return (
+                  <div
+                    key={b}
+                    className={[
+                      styles.bachataBeat,
+                      isAccent ? styles.bachataBeatAccent : '',
+                      isLive && isAccent ? styles.bachataBeatLive : '',
+                      isLive && !isAccent ? styles.bachataBeatCurrent : '',
+                    ].filter(Boolean).join(' ')}
+                  >
+                    {b}
+                    {isAccent && <span className={styles.bachataTap}>tap</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── セクション・セレクター ── */}
+          <div className={styles.bachataSectionSelector}>
+            <span className={styles.bachataSectionLabel}>Section</span>
+            <div className={styles.bachataSectionBtns}>
+              {([
+                { id: 'derecho', label: 'Derecho', sub: 'ストレート' },
+                { id: 'majao',   label: 'Majao',   sub: '激しい刻み' },
+                { id: 'mambo',   label: 'Mambo',   sub: 'シンコペーション' },
+              ] as const).map(({ id, label, sub }) => (
+                <button
+                  key={id}
+                  className={`${styles.bachataSectionBtn} ${bachataSection === id ? styles.bachataSectionBtnActive : ''}`}
+                  onClick={() => setBachataSection(id)}
+                  title={sub}
                 >
-                  {b}
-                  {(b === 4 || b === 8) && <span className={styles.bachataTap}>tap</span>}
-                </div>
+                  <span className={styles.bachataSectionBtnLabel}>{label}</span>
+                  <span className={styles.bachataSectionBtnSub}>{sub}</span>
+                </button>
               ))}
             </div>
+            {bachataSection && (
+              <p className={styles.bachataSectionDesc}>
+                {bachataSection === 'derecho' && 'Beat 1–3 を抑え、Beat 4 & 8 のボンゴを強調。ヒップムーブのタイミングを掴もう。'}
+                {bachataSection === 'majao' && 'ゲインを均一に上げ、Güira を16分音符の激しいパターンへ切替。'}
+                {bachataSection === 'mambo' && '裏拍主体の複合シーケンス。アドリブやパートナーとのサイン交換で使用。'}
+              </p>
+            )}
           </div>
         </section>
       )}

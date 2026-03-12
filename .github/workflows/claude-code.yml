@@ -11,10 +11,31 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+
     steps:
       - uses: actions/checkout@v4
-      - name: Run Claude Code
-        uses: anthropic/claude-code-action@v1
+
+      - uses: actions/setup-node@v4
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          instructions: ${{ github.event.comment.body }}
+          node-version: '20'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run Claude Code
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          # @claude を除いた部分をプロンプトとして抽出
+          PROMPT="${COMMENT_BODY/@claude/}"
+          # 非インタラクティブモードで実行し結果をファイルへ
+          claude --print "$PROMPT" > /tmp/claude_response.txt 2>&1 || true
+
+      - name: Post response as comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} \
+            --repo "${{ github.repository }}" \
+            --body "$(printf '**🤖 Claude:**\n\n'; cat /tmp/claude_response.txt)"

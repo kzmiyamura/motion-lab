@@ -74,16 +74,17 @@ const REVERB_WET: Record<TrackId, number> = {
   'cowbell-high': 0.10,
 };
 
-// Base gain per instrument — adjust to balance perceived loudness
-// Values are set high to ensure audibility on smartphone speakers.
-// Samples are typically recorded at -3 to -6 dBFS, so gains above 1.0 are safe.
+// Base gain per instrument — 0dBFS を超えないよう 0.7 以下に抑える。
+// 音量の底上げは compressor 後段の outputGainNode (固定 4.0×) で行う。
+// これにより compressor が見るレベルを低く保ち、メイクアップゲインによる
+// ノイズ床の持ち上げを最小化する。
 const TRACK_GAIN: Record<TrackId, number> = {
-  clave:         2.20,
-  'conga-open':  3.00,  // dominant hit
-  'conga-slap':  1.10,  // medium accent
-  'conga-heel':  1.80,  // synth-only; lowpass noise "gosogoso"
-  'cowbell-low':  1.20,
-  'cowbell-high': 1.40,
+  clave:         0.55,
+  'conga-open':  0.70,  // dominant hit
+  'conga-slap':  0.28,  // medium accent
+  'conga-heel':  0.42,  // synth-only; lowpass noise "gosogoso"
+  'cowbell-low':  0.30,
+  'cowbell-high': 0.35,
 };
 
 // Default patterns (16 steps = 2 bars of 4/4 at 8th-note subdivision)
@@ -105,6 +106,8 @@ export class AudioEngine {
   private masterGainNode: GainNode | null = null;
   private _masterVolume = 1.0;
   private compressor: DynamicsCompressorNode | null = null;
+  private highShelfNode: BiquadFilterNode | null = null;
+  private outputGainNode: GainNode | null = null;
   private _loudness = true;
   private noiseGateNode: GainNode | null = null;
   // ノイズゲート定数
@@ -172,11 +175,12 @@ export class AudioEngine {
     this._loudness = value;
     if (!this.compressor) return;
     if (value) {
-      // コンプレッサーON: 音圧を稼ぐ設定
-      // ratio を抑えめにすることでメイクアップゲインによるノイズ床の持ち上げを抑制
-      this.compressor.threshold.value = -20;
-      this.compressor.knee.value      = 30;
-      this.compressor.ratio.value     = 8;
+      // コンプレッサーON: ピーク抑制のみ（過剰なメイクアップゲインを避ける設定）
+      // TRACK_GAIN を 0.7 以下に抑えているため、しきい値を高めに設定して
+      // ノイズ床が threshold を超えないようにする → ノイズへの makeup gain なし
+      this.compressor.threshold.value = -8;
+      this.compressor.knee.value      = 20;
+      this.compressor.ratio.value     = 4;
       this.compressor.attack.value    = 0.003;
       this.compressor.release.value   = 0.30;
     } else {
@@ -339,6 +343,8 @@ export class AudioEngine {
       this.masterGainNode = null;
       this.noiseGateNode = null;
       this.compressor = null;
+      this.highShelfNode = null;
+      this.outputGainNode = null;
     }
   }
 
@@ -349,9 +355,27 @@ export class AudioEngine {
       this.context = new AudioContext();
       this.masterGainNode = this.context.createGain();
       this.masterGainNode.gain.value = this._masterVolume;
-      // masterGainNode → noiseGateNode → compressor → destination
+      // Signal chain:
+      //   masterGainNode → noiseGateNode → compressor
+      //     → highShelfNode → outputGainNode → destination
       this.compressor = this.context.createDynamicsCompressor();
-      this.compressor.connect(this.context.destination);
+
+      // ハイシェルフ: 10kHz 以上を -6dB カット（「シャー」の帯域を物理的に削る）
+      this.highShelfNode = this.context.createBiquadFilter();
+      this.highShelfNode.type = 'highshelf';
+      this.highShelfNode.frequency.value = 10000;
+      this.highShelfNode.gain.value = -6;
+
+      // 出力ゲイン: TRACK_GAIN 削減分を後段で補償（4× ≈ +12dB）
+      // ユーザーの masterVolume スライダー（0–100%）とは独立した固定ブースト
+      this.outputGainNode = this.context.createGain();
+      this.outputGainNode.gain.value = 4.0;
+
+      // ルーティング
+      this.compressor.connect(this.highShelfNode);
+      this.highShelfNode.connect(this.outputGainNode);
+      this.outputGainNode.connect(this.context.destination);
+
       this.noiseGateNode = this.context.createGain();
       this.noiseGateNode.gain.value = 0; // 初期状態：閉じている
       this.noiseGateNode.connect(this.compressor);
@@ -545,7 +569,9 @@ export class AudioEngine {
     src.playbackRate.value = pitch;
 
     const gainNode = ctx.createGain();
-    gainNode.gain.value = gain;
+    // ゼロクロス・フェード: 段差ノイズを防ぐ 3ms アタック
+    gainNode.gain.setValueAtTime(0.0001, time);
+    gainNode.gain.exponentialRampToValueAtTime(gain, time + 0.003);
     src.connect(gainNode);
 
     // Dry path → master gain → destination
@@ -580,7 +606,8 @@ export class AudioEngine {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['clave'], time);
 
     const masterGain = ctx.createGain();
-    masterGain.gain.setValueAtTime(g, t);
+    masterGain.gain.setValueAtTime(0.0001, t);
+    masterGain.gain.exponentialRampToValueAtTime(g, t + 0.003);
     masterGain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
 
     for (const freq of [2500, 3800]) {
@@ -608,7 +635,8 @@ export class AudioEngine {
     body.type = 'sine';
     body.frequency.setValueAtTime(200, t);
     body.frequency.exponentialRampToValueAtTime(65, t + 0.15);
-    bodyGain.gain.setValueAtTime(g, t);
+    bodyGain.gain.setValueAtTime(0.0001, t);
+    bodyGain.gain.exponentialRampToValueAtTime(g, t + 0.003);
     bodyGain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
     body.connect(bodyGain);
     body.start(t);
@@ -640,7 +668,8 @@ export class AudioEngine {
     filter.Q.value = 1.2;
 
     const env = ctx.createGain();
-    env.gain.setValueAtTime(g, t);
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(g, t + 0.003);
     env.gain.exponentialRampToValueAtTime(0.001, t + duration);
 
     src.connect(filter);
@@ -673,7 +702,8 @@ export class AudioEngine {
     filter.Q.value = 1.0;
 
     const env = ctx.createGain();
-    env.gain.setValueAtTime(g, t);
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(g, t + 0.003);
     env.gain.exponentialRampToValueAtTime(0.001, t + duration);
 
     src.connect(filter);
@@ -695,7 +725,8 @@ export class AudioEngine {
     filter.Q.value = 4;
 
     const masterGain = ctx.createGain();
-    masterGain.gain.setValueAtTime(g, t);
+    masterGain.gain.setValueAtTime(0.0001, t);
+    masterGain.gain.exponentialRampToValueAtTime(g, t + 0.003);
     masterGain.gain.exponentialRampToValueAtTime(0.001, t + 0.55); // longer tail
 
     for (const freq of [562, 780]) { // lower pair → more open/resonant
@@ -725,7 +756,8 @@ export class AudioEngine {
     filter.Q.value = 5;
 
     const masterGain = ctx.createGain();
-    masterGain.gain.setValueAtTime(g, t);
+    masterGain.gain.setValueAtTime(0.0001, t);
+    masterGain.gain.exponentialRampToValueAtTime(g, t + 0.003);
     masterGain.gain.exponentialRampToValueAtTime(0.001, t + 0.15); // short decay
 
     for (const freq of [845, 1200]) { // higher pair → brighter/muted

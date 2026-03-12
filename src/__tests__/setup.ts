@@ -47,6 +47,7 @@ class MockAudioContext {
       type: 'bandpass',
       frequency: { value: 0 },
       Q: { value: 0 },
+      gain: { value: 0 },
       connect: vi.fn(),
     };
   }

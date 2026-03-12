@@ -18,7 +18,14 @@ class MockAudioContext {
 
   createGain() {
     return {
-      gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+      gain: {
+        value: 1,
+        setValueAtTime: vi.fn(),
+        exponentialRampToValueAtTime: vi.fn(),
+        linearRampToValueAtTime: vi.fn(),
+        setTargetAtTime: vi.fn(),
+        cancelScheduledValues: vi.fn(),
+      },
       connect: vi.fn(),
     };
   }

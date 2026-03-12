@@ -106,6 +106,11 @@ export class AudioEngine {
   private _masterVolume = 1.0;
   private compressor: DynamicsCompressorNode | null = null;
   private _loudness = true;
+  private noiseGateNode: GainNode | null = null;
+  // ノイズゲート定数
+  private static readonly GATE_HOLD    = 1.5;   // リバーブ残響(1.2s)が収まるまで保持
+  private static readonly GATE_RELEASE = 0.08;  // 80ms でフェードアウト（ブツ切れ防止）
+  private static readonly GATE_ATTACK  = 0.002; // τ=2ms（約6msで95%到達）
   private nextBeatTime = 0;
   private currentBeat = 0;
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
@@ -168,11 +173,12 @@ export class AudioEngine {
     if (!this.compressor) return;
     if (value) {
       // コンプレッサーON: 音圧を稼ぐ設定
-      this.compressor.threshold.value = -24;
+      // ratio を抑えめにすることでメイクアップゲインによるノイズ床の持ち上げを抑制
+      this.compressor.threshold.value = -20;
       this.compressor.knee.value      = 30;
-      this.compressor.ratio.value     = 12;
+      this.compressor.ratio.value     = 8;
       this.compressor.attack.value    = 0.003;
-      this.compressor.release.value   = 0.25;
+      this.compressor.release.value   = 0.30;
     } else {
       // コンプレッサーOFF: 無効化（ratio=1 で透過）
       this.compressor.threshold.value = 0;
@@ -313,6 +319,12 @@ export class AudioEngine {
     this._pendingFlipPattern = null;
     this._flipPhase = 'idle';
     this.stopSilentLoop();
+    // ノイズゲートを即座に閉じる（Stop後の残響ノイズを遮断）
+    if (this.noiseGateNode && this.context) {
+      const g = this.noiseGateNode.gain;
+      g.cancelScheduledValues(this.context.currentTime);
+      g.setTargetAtTime(0, this.context.currentTime, AudioEngine.GATE_ATTACK);
+    }
   }
 
   dispose() {
@@ -325,6 +337,7 @@ export class AudioEngine {
       this.context.close();
       this.context = null;
       this.masterGainNode = null;
+      this.noiseGateNode = null;
       this.compressor = null;
     }
   }
@@ -336,10 +349,13 @@ export class AudioEngine {
       this.context = new AudioContext();
       this.masterGainNode = this.context.createGain();
       this.masterGainNode.gain.value = this._masterVolume;
-      // masterGainNode → compressor → destination
+      // masterGainNode → noiseGateNode → compressor → destination
       this.compressor = this.context.createDynamicsCompressor();
       this.compressor.connect(this.context.destination);
-      this.masterGainNode.connect(this.compressor);
+      this.noiseGateNode = this.context.createGain();
+      this.noiseGateNode.gain.value = 0; // 初期状態：閉じている
+      this.noiseGateNode.connect(this.compressor);
+      this.masterGainNode.connect(this.noiseGateNode);
       // 初期状態を反映
       this.loudness = this._loudness;
       // iOS が AudioContext を interrupt/suspend したとき自動で resume を試みる。
@@ -389,6 +405,25 @@ export class AudioEngine {
     src.connect(ctx.destination);
     src.start();
     this.silentSource = src;
+  }
+
+  /**
+   * ノイズゲートを開く。
+   * 音符スケジュール時点から GATE_HOLD 秒後に GATE_RELEASE かけてフェードアウト。
+   * 次の音符が来るたびに cancelScheduledValues でクローズをキャンセルし、
+   * ホールド時間を延長することで連続再生中はゲートが閉まらない。
+   */
+  private openNoiseGate(time: number) {
+    if (!this.noiseGateNode) return;
+    const g = this.noiseGateNode.gain;
+    // 将来スケジュール済みのクローズをキャンセル（前のホールドを上書き）
+    g.cancelScheduledValues(time);
+    // スムーズなアタック（τ=2ms）
+    g.setTargetAtTime(1.0, time, AudioEngine.GATE_ATTACK);
+    // リバーブ残響が収まるまでホールドしてから滑らかにクローズ
+    const holdUntil = time + AudioEngine.GATE_HOLD;
+    g.setValueAtTime(1.0, holdUntil);
+    g.linearRampToValueAtTime(0.0, holdUntil + AudioEngine.GATE_RELEASE);
   }
 
   private stopSilentLoop() {
@@ -466,11 +501,15 @@ export class AudioEngine {
       setTimeout(() => cbs.forEach(cb => cb()), 0);
     }
 
+    let hasNotes = false;
     for (const track of this.tracks.values()) {
       if (!track.muted && track.pattern.has(beat)) {
         this.playTrack(ctx, track.id, time);
+        hasNotes = true;
       }
     }
+    // 音符が1つでもあればノイズゲートを開き、リバーブ残響後に閉じる
+    if (hasNotes) this.openNoiseGate(time);
 
     const delay = (time - ctx.currentTime) * 1000;
     setTimeout(() => {

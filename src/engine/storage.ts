@@ -60,7 +60,7 @@ export const storage = {
   ),
   setMutedTracks: (ids: string[]) => save(KEYS.mutedTracks, JSON.stringify(ids)),
 
-  getBackgroundPlay: ()           => load(KEYS.backgroundPlay, false, v => v === 'true'),
+  getBackgroundPlay: ()           => load(KEYS.backgroundPlay, true, v => v === 'true'),
   setBackgroundPlay: (v: boolean) => save(KEYS.backgroundPlay, String(v)),
 
   getMasterVolume: ()           => load(KEYS.masterVolume, 1.0, Number),

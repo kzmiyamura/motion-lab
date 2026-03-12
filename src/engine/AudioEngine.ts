@@ -342,6 +342,14 @@ export class AudioEngine {
       this.masterGainNode.connect(this.compressor);
       // 初期状態を反映
       this.loudness = this._loudness;
+      // iOS が AudioContext を interrupt/suspend したとき自動で resume を試みる。
+      // _isPlaying が false のとき（意図的停止後）は何もしない。
+      this.context.addEventListener('statechange', () => {
+        if (!this._isPlaying || !this.context) return;
+        if (this.context.state === 'suspended') {
+          this.context.resume().catch(() => {});
+        }
+      });
     }
     return this.context;
   }
@@ -373,7 +381,7 @@ export class AudioEngine {
     const buf = ctx.createBuffer(1, sampleRate, sampleRate); // 1秒
     const data = buf.getChannelData(0);
     for (let i = 0; i < data.length; i++) {
-      data[i] = (Math.random() * 2 - 1) * 0.00001; // -100 dB ノイズ
+      data[i] = (Math.random() * 2 - 1) * 0.001; // -60 dB ノイズ（iOS silence detection 対策）
     }
     const src = ctx.createBufferSource();
     src.buffer = buf;

@@ -73,6 +73,8 @@ class MockAudioContext {
     return Promise.resolve({} as AudioBuffer);
   }
 
+  addEventListener(_: string, __: EventListenerOrEventListenerObject) {}
+  removeEventListener(_: string, __: EventListenerOrEventListenerObject) {}
   resume() { return Promise.resolve(); }
   close() { return Promise.resolve(); }
 }

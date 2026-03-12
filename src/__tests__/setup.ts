@@ -44,6 +44,17 @@ class MockAudioContext {
     };
   }
 
+  createDynamicsCompressor() {
+    return {
+      threshold: { value: 0 },
+      knee:      { value: 0 },
+      ratio:     { value: 1 },
+      attack:    { value: 0 },
+      release:   { value: 0.25 },
+      connect: vi.fn(),
+    };
+  }
+
   createConvolver() {
     return { buffer: null as AudioBuffer | null, connect: vi.fn() };
   }

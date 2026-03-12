@@ -14,6 +14,7 @@ const KEYS = {
   mutedTracks:    'motionlab:mutedTracks',
   backgroundPlay: 'motionlab:backgroundPlay',
   masterVolume:   'motionlab:masterVolume',
+  loudness:       'motionlab:loudness',
 } as const;
 
 function load<T>(key: string, fallback: T, parse: (v: string) => T): T {
@@ -64,4 +65,7 @@ export const storage = {
 
   getMasterVolume: ()           => load(KEYS.masterVolume, 1.0, Number),
   setMasterVolume: (v: number)  => save(KEYS.masterVolume, String(v)),
+
+  getLoudness: ()           => load(KEYS.loudness, true, v => v === 'true'),
+  setLoudness: (v: boolean) => save(KEYS.loudness, String(v)),
 };

@@ -19,6 +19,8 @@ const baseProps = {
   onCowbellMuteToggle: vi.fn(),
   randomFlipMode: false,
   onRandomFlipModeChange: vi.fn(),
+  loudness: true,
+  onLoudnessChange: vi.fn(),
 };
 
 describe('ControlPanel', () => {

@@ -104,6 +104,8 @@ export class AudioEngine {
   private context: AudioContext | null = null;
   private masterGainNode: GainNode | null = null;
   private _masterVolume = 1.0;
+  private compressor: DynamicsCompressorNode | null = null;
+  private _loudness = true;
   private nextBeatTime = 0;
   private currentBeat = 0;
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
@@ -157,6 +159,27 @@ export class AudioEngine {
     this._masterVolume = Math.max(0, Math.min(1, value));
     if (this.masterGainNode) {
       this.masterGainNode.gain.value = this._masterVolume;
+    }
+  }
+
+  get loudness() { return this._loudness; }
+  set loudness(value: boolean) {
+    this._loudness = value;
+    if (!this.compressor) return;
+    if (value) {
+      // コンプレッサーON: 音圧を稼ぐ設定
+      this.compressor.threshold.value = -24;
+      this.compressor.knee.value      = 30;
+      this.compressor.ratio.value     = 12;
+      this.compressor.attack.value    = 0.003;
+      this.compressor.release.value   = 0.25;
+    } else {
+      // コンプレッサーOFF: 無効化（ratio=1 で透過）
+      this.compressor.threshold.value = 0;
+      this.compressor.knee.value      = 0;
+      this.compressor.ratio.value     = 1;
+      this.compressor.attack.value    = 0;
+      this.compressor.release.value   = 0.25;
     }
   }
 
@@ -302,6 +325,7 @@ export class AudioEngine {
       this.context.close();
       this.context = null;
       this.masterGainNode = null;
+      this.compressor = null;
     }
   }
 
@@ -312,7 +336,12 @@ export class AudioEngine {
       this.context = new AudioContext();
       this.masterGainNode = this.context.createGain();
       this.masterGainNode.gain.value = this._masterVolume;
-      this.masterGainNode.connect(this.context.destination);
+      // masterGainNode → compressor → destination
+      this.compressor = this.context.createDynamicsCompressor();
+      this.compressor.connect(this.context.destination);
+      this.masterGainNode.connect(this.compressor);
+      // 初期状態を反映
+      this.loudness = this._loudness;
     }
     return this.context;
   }

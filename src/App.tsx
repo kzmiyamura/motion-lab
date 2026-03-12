@@ -21,6 +21,7 @@ function App() {
     congaMuted,   toggleCongaMute,
     cowbellMuted, toggleCowbellMute,
     backgroundPlay, setBackgroundPlay,
+    loudness, setLoudness,
     samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,
@@ -98,6 +99,8 @@ function App() {
           onCowbellMuteToggle={toggleCowbellMute}
           randomFlipMode={randomFlipMode}
           onRandomFlipModeChange={setRandomFlipMode}
+          loudness={loudness}
+          onLoudnessChange={setLoudness}
         />
       </section>
     </main>

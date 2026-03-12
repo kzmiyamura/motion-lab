@@ -265,6 +265,19 @@ export function useAudioEngine() {
     await audioEngine.loadBuffer(arrayBuffer);
   }, []);
 
+  // Loudness (DynamicsCompressor)
+  const [loudness, setLoudnessState] = useState<boolean>(() => {
+    const saved = storage.getLoudness();
+    audioEngine.loudness = saved;
+    return saved;
+  });
+
+  const setLoudness = useCallback((value: boolean) => {
+    audioEngine.loudness = value;
+    setLoudnessState(value);
+    storage.setLoudness(value);
+  }, []);
+
   const congaMuted   = CONGA_IDS.every(id => mutedTracks.has(id));
   const cowbellMuted = COWBELL_IDS.every(id => mutedTracks.has(id));
 
@@ -279,6 +292,7 @@ export function useAudioEngine() {
     congaMuted,   toggleCongaMute,
     cowbellMuted, toggleCowbellMute,
     backgroundPlay, setBackgroundPlay,
+    loudness, setLoudness,
     samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,

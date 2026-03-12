@@ -19,6 +19,8 @@ type Props = {
   onCowbellMuteToggle: () => void;
   randomFlipMode: boolean;
   onRandomFlipModeChange: (v: boolean) => void;
+  loudness: boolean;
+  onLoudnessChange: (v: boolean) => void;
 };
 
 export function ControlPanel({
@@ -38,6 +40,8 @@ export function ControlPanel({
   onCowbellMuteToggle,
   randomFlipMode,
   onRandomFlipModeChange,
+  loudness,
+  onLoudnessChange,
 }: Props) {
   const activeCategoryId = getActiveCategoryId(bpm);
 
@@ -195,6 +199,25 @@ export function ControlPanel({
           aria-label="Random Flip Mode"
           className={`${styles.toggle} ${randomFlipMode ? styles.toggleOn : ''}`}
           onClick={() => onRandomFlipModeChange(!randomFlipMode)}
+        >
+          <span className={styles.toggleThumb} />
+        </button>
+      </div>
+
+      {/* ── LOUDNESS ── */}
+      <div className={styles.settingsRow}>
+        <span className={styles.settingsLabel}>
+          LOUDNESS
+          <span className={styles.settingsSub}>
+            {loudness ? 'コンプレッサー ON（音量最大化）' : 'コンプレッサー OFF'}
+          </span>
+        </span>
+        <button
+          role="switch"
+          aria-checked={loudness}
+          aria-label="LOUDNESS"
+          className={`${styles.toggle} ${loudness ? styles.toggleOn : ''}`}
+          onClick={() => onLoudnessChange(!loudness)}
         >
           <span className={styles.toggleThumb} />
         </button>

@@ -421,7 +421,7 @@ export class AudioEngine {
     const buf = ctx.createBuffer(1, sampleRate, sampleRate); // 1秒
     const data = buf.getChannelData(0);
     for (let i = 0; i < data.length; i++) {
-      data[i] = (Math.random() * 2 - 1) * 0.001; // -60 dB ノイズ（iOS silence detection 対策）
+      data[i] = (Math.random() * 2 - 1) * 0.00003; // ≈ -90 dB — 人間には不可聴、iOS には充分
     }
     const src = ctx.createBufferSource();
     src.buffer = buf;

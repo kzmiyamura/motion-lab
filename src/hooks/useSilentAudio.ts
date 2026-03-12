@@ -30,8 +30,8 @@ function createSilentWavUrl(): string {
   str(36, 'data'); view.setUint32(40, dataSize, true);
 
   for (let i = 44; i < buf.byteLength; i += 2) {
-    // ±32 LSB ≈ -60 dB — iOS の silence detection を回避するための最小ノイズ
-    view.setInt16(i, Math.round((Math.random() - 0.5) * 64), true);
+    // ±2 LSB ≈ -84 dB — 人間には不可聴、iOS audio session を維持する最小レベル
+    view.setInt16(i, Math.round((Math.random() - 0.5) * 4), true);
   }
 
   return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));

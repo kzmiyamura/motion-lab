@@ -28,7 +28,7 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           PROMPT="${COMMENT_BODY/@claude/}"
-          claude --print "$PROMPT" > /tmp/claude_response.txt 2>&1 || true
+          claude --print --dangerously-skip-permissions "$PROMPT" > /tmp/claude_response.txt 2>&1 || true
 
       - name: Post response as comment
         uses: actions/github-script@v7

@@ -62,6 +62,6 @@ export const storage = {
   getBackgroundPlay: ()           => load(KEYS.backgroundPlay, false, v => v === 'true'),
   setBackgroundPlay: (v: boolean) => save(KEYS.backgroundPlay, String(v)),
 
-  getMasterVolume: ()           => load(KEYS.masterVolume, 0.8, Number),
+  getMasterVolume: ()           => load(KEYS.masterVolume, 1.0, Number),
   setMasterVolume: (v: number)  => save(KEYS.masterVolume, String(v)),
 };

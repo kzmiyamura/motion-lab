@@ -75,13 +75,15 @@ const REVERB_WET: Record<TrackId, number> = {
 };
 
 // Base gain per instrument — adjust to balance perceived loudness
+// Values are set high to ensure audibility on smartphone speakers.
+// Samples are typically recorded at -3 to -6 dBFS, so gains above 1.0 are safe.
 const TRACK_GAIN: Record<TrackId, number> = {
-  clave:         0.85,
-  'conga-open':  1.40,  // dominant hit
-  'conga-slap':  0.30,  // medium accent
-  'conga-heel':  0.70,  // synth-only; lowpass noise "gosogoso"
-  'cowbell-low':  0.28,
-  'cowbell-high': 0.40,
+  clave:         1.30,
+  'conga-open':  1.80,  // dominant hit
+  'conga-slap':  0.65,  // medium accent
+  'conga-heel':  1.10,  // synth-only; lowpass noise "gosogoso"
+  'cowbell-low':  0.70,
+  'cowbell-high': 0.85,
 };
 
 // Default patterns (16 steps = 2 bars of 4/4 at 8th-note subdivision)
@@ -101,7 +103,7 @@ const DEFAULT_COWBELL_HIGH_STEPS = new Set([3, 5, 11, 13]);
 export class AudioEngine {
   private context: AudioContext | null = null;
   private masterGainNode: GainNode | null = null;
-  private _masterVolume = 0.8;
+  private _masterVolume = 1.0;
   private nextBeatTime = 0;
   private currentBeat = 0;
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
@@ -499,7 +501,7 @@ export class AudioEngine {
 
   /** Clave: two detuned inharmonic sine partials, very short decay */
   private synthClave(ctx: AudioContext, time: number) {
-    const { gain: g, time: t } = this.humanize(0.5, time);
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['clave'], time);
 
     const masterGain = ctx.createGain();
     masterGain.gain.setValueAtTime(g, t);

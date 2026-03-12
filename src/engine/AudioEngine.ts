@@ -750,13 +750,13 @@ export class AudioEngine {
   }
 
   /**
-   * Physical contact transient: 1ms attack + 7ms HPF white-noise burst.
+   * Physical contact transient: 1ms attack + HPF white-noise burst.
    * Simulates the fingertip or beater briefly touching the drumhead / scraper.
-   * @param hpFreq   High-pass cutoff — higher for harder surfaces (metal > skin)
-   * @param level    Peak gain (proportional to TRACK_GAIN of the instrument)
+   * @param hpFreq    High-pass cutoff — higher for harder surfaces (metal > skin)
+   * @param level     Peak gain (proportional to TRACK_GAIN of the instrument)
+   * @param duration  Total burst length in seconds (default 8ms; use 10ms for bongo high)
    */
-  private playAttackNoise(ctx: AudioContext, time: number, level: number, hpFreq: number) {
-    const duration = 0.008;
+  private playAttackNoise(ctx: AudioContext, time: number, level: number, hpFreq: number, duration = 0.008) {
     const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
@@ -1061,30 +1061,38 @@ export class AudioEngine {
 
   /**
    * Bongo High (Hembra): skin-stretch pitch drop with physical realism.
-   *   open    — 800Hz→400Hz in 10ms ("カンッ"), WaveShaper harmonics
-   *             Attack noise (HPF 2.5kHz, 8ms): sharp fingertip impact
+   *   open    — 800Hz→400Hz in 10ms ("カンッ"), WaveShaper saturation
+   *             Inharmonic overtone (×2.76) at 15% mix → membrane roughness
+   *             Attack noise (HPF 2.5kHz, 10ms): sharp fingertip impact
+   *             Pitch detune + decay time randomized ±2% per hit
    *   muffled — 600Hz→350Hz in 8ms, LPF@800Hz softens, lighter attack noise
    * Panned left 20%.
    */
   private synthBongoHigh(ctx: AudioContext, time: number, articulation: Articulation = 'open', gainMult = 1.0) {
-    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-high'] * gainMult, time);
+    // pitch from humanize → per-hit detune (±3%); decayJitter → ±2% decay variation
+    const { gain: g, pitch, time: t } = this.humanize(TRACK_GAIN['bongo-high'] * gainMult, time);
+    const detuneCents = Math.log2(pitch) * 1200;
+    const decayJitter = 1 + (Math.random() - 0.5) * 0.04;
+
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';
+    osc.detune.value = detuneCents;
 
     // Scale decay to step duration — at 120 BPM the note has more space to ring.
     // Pitch snap (800→400Hz) is a physical constant and stays short regardless of tempo.
     const stepDuration = (60 / this._bpm) / 2;
 
+    let decay: number;
     if (articulation === 'muffled') {
-      const decay = Math.min(0.10, stepDuration * 0.22);
+      decay = Math.min(0.10, stepDuration * 0.22) * decayJitter;
       osc.frequency.setValueAtTime(600, t);
       osc.frequency.exponentialRampToValueAtTime(350, t + 0.008); // physical snap — keep fixed
       gainNode.gain.setValueAtTime(0.0001, t);
       gainNode.gain.exponentialRampToValueAtTime(g * 0.6, t + 0.002);
       gainNode.gain.exponentialRampToValueAtTime(0.001, t + decay);
     } else {
-      const decay = Math.min(0.16, stepDuration * 0.40);
+      decay = Math.min(0.16, stepDuration * 0.40) * decayJitter;
       osc.frequency.setValueAtTime(800, t);
       osc.frequency.exponentialRampToValueAtTime(400, t + 0.01); // physical snap — keep fixed
       gainNode.gain.setValueAtTime(0.0001, t);
@@ -1096,12 +1104,29 @@ export class AudioEngine {
       ? Math.min(0.12, stepDuration * 0.25)
       : Math.min(0.18, stepDuration * 0.45);
 
-    // WaveShaper: odd harmonic content → "wooden" skin character
+    // WaveShaper: tanh saturation adds odd harmonics → "wooden" skin character
     const shaper = ctx.createWaveShaper();
     shaper.curve = this.createSaturationCurve();
     shaper.oversample = '2x';
     osc.connect(shaper);
     shaper.connect(gainNode);
+
+    // Inharmonic overtone: ×2.76 ratio (non-integer → membrane resonance roughness)
+    // Mixed at 15% of main gain; decays ~55% of fundamental length
+    const overtoneFreqBase = articulation === 'muffled' ? 600 : 800;
+    const overtoneOsc = ctx.createOscillator();
+    const overtoneGain = ctx.createGain();
+    overtoneOsc.type = 'sine';
+    overtoneOsc.frequency.setValueAtTime(overtoneFreqBase * 2.76, t);
+    overtoneOsc.detune.value = detuneCents;
+    overtoneGain.gain.setValueAtTime(0.0001, t);
+    overtoneGain.gain.exponentialRampToValueAtTime(g * 0.15, t + 0.003);
+    overtoneGain.gain.exponentialRampToValueAtTime(0.001, t + decay * 0.55);
+    const overtoneShaper = ctx.createWaveShaper();
+    overtoneShaper.curve = this.createSaturationCurve();
+    overtoneShaper.oversample = '2x';
+    overtoneOsc.connect(overtoneShaper);
+    overtoneShaper.connect(overtoneGain);
 
     const panner = ctx.createStereoPanner();
     panner.pan.value = -0.2;
@@ -1112,17 +1137,21 @@ export class AudioEngine {
       lpf.frequency.value = 800;
       lpf.Q.value = 0.7;
       gainNode.connect(lpf);
+      overtoneGain.connect(lpf);
       lpf.connect(panner);
     } else {
       gainNode.connect(panner);
+      overtoneGain.connect(panner);
     }
 
     panner.connect(this.masterGainNode!);
     osc.start(t);
     osc.stop(t + stopTime);
+    overtoneOsc.start(t);
+    overtoneOsc.stop(t + stopTime * 0.65);
 
-    // Attack transient: harder material → higher HPF cutoff than bongo low
-    this.playAttackNoise(ctx, t, g * (articulation === 'muffled' ? 0.15 : 0.4), 2500);
+    // Attack transient: 10ms (extended from 8ms) for sharper fingertip impact
+    this.playAttackNoise(ctx, t, g * (articulation === 'muffled' ? 0.15 : 0.4), 2500, 0.010);
   }
 
   /**

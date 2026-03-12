@@ -78,12 +78,12 @@ const REVERB_WET: Record<TrackId, number> = {
 // Values are set high to ensure audibility on smartphone speakers.
 // Samples are typically recorded at -3 to -6 dBFS, so gains above 1.0 are safe.
 const TRACK_GAIN: Record<TrackId, number> = {
-  clave:         1.30,
-  'conga-open':  1.80,  // dominant hit
-  'conga-slap':  0.65,  // medium accent
-  'conga-heel':  1.10,  // synth-only; lowpass noise "gosogoso"
-  'cowbell-low':  0.70,
-  'cowbell-high': 0.85,
+  clave:         2.20,
+  'conga-open':  3.00,  // dominant hit
+  'conga-slap':  1.10,  // medium accent
+  'conga-heel':  1.80,  // synth-only; lowpass noise "gosogoso"
+  'cowbell-low':  1.20,
+  'cowbell-high': 1.40,
 };
 
 // Default patterns (16 steps = 2 bars of 4/4 at 8th-note subdivision)

@@ -81,6 +81,13 @@ class MockAudioContext {
     return Promise.resolve({} as AudioBuffer);
   }
 
+  createStereoPanner() {
+    return {
+      pan: { value: 0 },
+      connect: vi.fn(),
+    };
+  }
+
   addEventListener(_: string, __: EventListenerOrEventListenerObject) {}
   removeEventListener(_: string, __: EventListenerOrEventListenerObject) {}
   resume() { return Promise.resolve(); }

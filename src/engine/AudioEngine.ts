@@ -840,7 +840,11 @@ export class AudioEngine {
     if (this.convolver) masterGain.connect(this.convolver);
   }
 
-  /** Bongo Low (Macho): warm, deep punch — pitch drop 200Hz → 70Hz */
+  /**
+   * Bongo Low (Macho): deep warm punch — pitch drop 200Hz → 70Hz
+   * + Peaking filter at 150Hz (+3dB, Q=5) for drum body resonance
+   * + Panned left 20% to widen the stereo image
+   */
   private synthBongoLow(ctx: AudioContext, time: number) {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-low'], time);
     const osc = ctx.createOscillator();
@@ -852,53 +856,94 @@ export class AudioEngine {
     gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
     gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
     osc.connect(gainNode);
-    gainNode.connect(this.masterGainNode!);
+
+    // Peaking EQ: 150Hz body resonance boost (+3dB, tight Q)
+    const peaking = ctx.createBiquadFilter();
+    peaking.type = 'peaking';
+    peaking.frequency.value = 150;
+    peaking.Q.value = 5;
+    peaking.gain.value = 3;
+
+    // Pan left 20%
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = -0.2;
+
+    gainNode.connect(peaking);
+    peaking.connect(panner);
+    panner.connect(this.masterGainNode!);
     if (this.convolver) gainNode.connect(this.convolver);
     osc.start(t);
     osc.stop(t + 0.14);
   }
 
-  /** Bongo High (Hembra): bright snappy hit — pitch drop 320Hz → 130Hz */
+  /**
+   * Bongo High (Hembra): hard snappy hit — physical skin stretch pitch drop
+   * 800Hz → 400Hz in 10ms reproduces the "カンッ" of a real drum skin.
+   * + Panned left 20% (same side as bongo low)
+   */
   private synthBongoHigh(ctx: AudioContext, time: number) {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-high'], time);
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(320, t);
-    osc.frequency.exponentialRampToValueAtTime(130, t + 0.05);
+    // Pitch envelope: skin stretch simulation — 800Hz → 400Hz in 10ms
+    osc.frequency.setValueAtTime(800, t);
+    osc.frequency.exponentialRampToValueAtTime(400, t + 0.01);
     gainNode.gain.setValueAtTime(0.0001, t);
     gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
     gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
     osc.connect(gainNode);
-    gainNode.connect(this.masterGainNode!);
+
+    // Pan left 20%
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = -0.2;
+
+    gainNode.connect(panner);
+    panner.connect(this.masterGainNode!);
     osc.start(t);
     osc.stop(t + 0.08);
   }
 
-  /** Güira: metallic scraper — bandpass noise burst at 5kHz */
+  /**
+   * Güira: metallic scraper — bandpass noise at 10kHz ("air" frequency band)
+   * Attack 1ms, Decay 20ms → tiny metallic "チッ" grain per 16th note
+   * + Panned right 20% to separate from bongos
+   */
   private synthGuira(ctx: AudioContext, time: number) {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['guira'], time);
-    const duration = 0.035;
+    const duration = 0.022; // 22ms total (attack 1ms + decay 20ms + margin)
     const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
     const src = ctx.createBufferSource();
     src.buffer = buf;
+
+    // Bandpass at 10kHz: "air" band — metallic scrape character
     const filter = ctx.createBiquadFilter();
     filter.type = 'bandpass';
-    filter.frequency.value = 5000;
-    filter.Q.value = 0.8;
+    filter.frequency.value = 10000;
+    filter.Q.value = 2.0; // narrow enough to cut below 8kHz and above 12kHz
+
     const env = ctx.createGain();
     env.gain.setValueAtTime(0.0001, t);
-    env.gain.exponentialRampToValueAtTime(g, t + 0.002);
-    env.gain.exponentialRampToValueAtTime(0.001, t + duration);
+    env.gain.linearRampToValueAtTime(g, t + 0.001);        // Attack 1ms
+    env.gain.exponentialRampToValueAtTime(0.001, t + 0.021); // Decay 20ms
+
+    // Pan right 20%
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = 0.2;
+
     src.connect(filter);
     filter.connect(env);
-    env.connect(this.masterGainNode!);
+    env.connect(panner);
+    panner.connect(this.masterGainNode!);
     src.start(t);
   }
 
-  /** Bass accent (beat 4 & 8): deep sine punch 80Hz → 50Hz */
+  /**
+   * Bass accent (beat 4 & 8): sub-bass only — LPF at 200Hz cuts overlap with bongos.
+   * Sine 80Hz → 50Hz gives a "地響き" (ground rumble) character.
+   */
   private synthBass(ctx: AudioContext, time: number) {
     const { gain: g, time: t } = this.humanize(TRACK_GAIN['bass'], time);
     const osc = ctx.createOscillator();
@@ -910,7 +955,15 @@ export class AudioEngine {
     gainNode.gain.exponentialRampToValueAtTime(g, t + 0.003);
     gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
     osc.connect(gainNode);
-    gainNode.connect(this.masterGainNode!);
+
+    // LPF at 200Hz: sub-bass specialisation — removes frequency clash with bongos
+    const lpf = ctx.createBiquadFilter();
+    lpf.type = 'lowpass';
+    lpf.frequency.value = 200;
+    lpf.Q.value = 0.7;
+
+    gainNode.connect(lpf);
+    lpf.connect(this.masterGainNode!);
     if (this.convolver) gainNode.connect(this.convolver);
     osc.start(t);
     osc.stop(t + 0.28);

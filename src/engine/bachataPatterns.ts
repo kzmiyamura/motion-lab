@@ -13,6 +13,8 @@
 
 export type Articulation = 'open' | 'muffled';
 
+export type BachataSection = 'derecho' | 'majao' | 'mambo';
+
 export type BachataPattern = {
   id: string;
   name: string;
@@ -167,3 +169,24 @@ export const BACHATA_PATTERNS: readonly BachataPattern[] = [
     bass:  [5, 6, 13, 14],
   },
 ];
+
+// ── Section-mode patterns ─────────────────────────────────────────────────────
+//
+// These are used when the user selects a named section (Derecho / Majao / Mambo)
+// rather than the complexity slider.
+
+/**
+ * Mambo section: highly syncopated — anticipations on and-of-3 (step 5/13),
+ * full Martillo high bongo, dense bass.
+ */
+export const MAMBO_SECTION_PATTERN = {
+  bongoLow:  [0, 3, 5, 6, 8, 11, 13, 14],
+  bongoLowArticulation: { 3: 'muffled' as Articulation, 11: 'muffled' as Articulation },
+  bongoHigh: [1, 3, 5, 7, 9, 11, 13, 15],
+  bongoHighArticulation: { 7: 'muffled' as Articulation, 15: 'muffled' as Articulation },
+  guira: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  bass: [5, 6, 13, 14],
+} as const;
+
+/** All 16 steps — forced Güira pattern for Majao section */
+export const MAJAO_GUIRA_PATTERN = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const;

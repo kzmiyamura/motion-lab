@@ -191,6 +191,10 @@ export class AudioEngine {
     ['bongo-high', new Map()],
   ]);
 
+  // ── Per-step gain overrides (multiplier applied on top of TRACK_GAIN) ────
+  // Key: TrackId → Map<step, multiplier>
+  private stepGainOverrides: Map<TrackId, Map<number, number>> = new Map();
+
   // ── Clave Flip ─────────────────────────────────────────────────────────────
   private _flipPhase: 'idle' | 'announced' | 'ready' = 'idle';
   private _pendingFlipPattern: Set<number> | null = null;
@@ -291,6 +295,23 @@ export class AudioEngine {
       if (v) m.set(Number(k), v);
     }
     this.bongoArticulation.set(id, m);
+  }
+
+  /**
+   * Set per-step gain multipliers for a track.
+   * Pass null to clear all overrides for that track.
+   * Values in overrides are multiplied with TRACK_GAIN on playback.
+   */
+  setStepGainOverride(id: TrackId, overrides: Record<number, number> | null) {
+    if (overrides === null) {
+      this.stepGainOverrides.delete(id);
+    } else {
+      const m = new Map<number, number>();
+      for (const [k, v] of Object.entries(overrides)) {
+        m.set(Number(k), v);
+      }
+      this.stepGainOverrides.set(id, m);
+    }
   }
 
   /** OS による強制 suspend からの復帰用。useSilentAudio の visibilitychange から呼ぶ。 */
@@ -655,13 +676,21 @@ export class AudioEngine {
     }, Math.max(0, delay));
   }
 
+  /** Returns the gain multiplier for a given track+step (1.0 if no override). */
+  private getStepGainMult(id: TrackId, beat: number): number {
+    const overrides = this.stepGainOverrides.get(id);
+    if (!overrides) return 1.0;
+    return overrides.get(beat) ?? 1.0;
+  }
+
   private playTrack(ctx: AudioContext, id: TrackId, baseTime: number, beat: number) {
+    const gainMult = this.getStepGainMult(id, beat);
     const buffers = this.sampleBuffers.get(id)!;
     if (buffers.length > 0) {
-      this.playSampleBuffer(ctx, id, buffers, baseTime);
+      this.playSampleBuffer(ctx, id, buffers, baseTime, gainMult);
     } else {
       // Synthesis fallback while samples are loading or on network failure
-      this.playSynth(ctx, id, baseTime, beat);
+      this.playSynth(ctx, id, baseTime, beat, gainMult);
     }
   }
 
@@ -670,8 +699,9 @@ export class AudioEngine {
     id: TrackId,
     buffers: AudioBuffer[],
     baseTime: number,
+    gainMult = 1.0,
   ) {
-    const { gain, pitch, time } = this.humanize(TRACK_GAIN[id], baseTime);
+    const { gain, pitch, time } = this.humanize(TRACK_GAIN[id] * gainMult, baseTime);
 
     // Round-robin: alternate between available samples
     const counter = this.rrCounters.get(id)!;
@@ -720,13 +750,13 @@ export class AudioEngine {
   }
 
   /**
-   * Physical contact transient: 1ms attack + 7ms HPF white-noise burst.
+   * Physical contact transient: 1ms attack + HPF white-noise burst.
    * Simulates the fingertip or beater briefly touching the drumhead / scraper.
-   * @param hpFreq   High-pass cutoff — higher for harder surfaces (metal > skin)
-   * @param level    Peak gain (proportional to TRACK_GAIN of the instrument)
+   * @param hpFreq    High-pass cutoff — higher for harder surfaces (metal > skin)
+   * @param level     Peak gain (proportional to TRACK_GAIN of the instrument)
+   * @param duration  Total burst length in seconds (default 8ms; use 10ms for bongo high)
    */
-  private playAttackNoise(ctx: AudioContext, time: number, level: number, hpFreq: number) {
-    const duration = 0.008;
+  private playAttackNoise(ctx: AudioContext, time: number, level: number, hpFreq: number, duration = 0.008) {
     const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
@@ -752,7 +782,7 @@ export class AudioEngine {
 
   // ── Synthesis fallbacks ───────────────────────────────────────────────────
 
-  private playSynth(ctx: AudioContext, id: TrackId, time: number, beat: number) {
+  private playSynth(ctx: AudioContext, id: TrackId, time: number, beat: number, gainMult = 1.0) {
     switch (id) {
       case 'clave':        return this.synthClave(ctx, time);
       case 'conga-open':   return this.synthCongaOpen(ctx, time);
@@ -762,14 +792,14 @@ export class AudioEngine {
       case 'cowbell-high': return this.synthCowbellHigh(ctx, time);
       case 'bongo-low': {
         const art = this.bongoArticulation.get('bongo-low')?.get(beat) ?? 'open';
-        return this.synthBongoLow(ctx, time, art);
+        return this.synthBongoLow(ctx, time, art, gainMult);
       }
       case 'bongo-high': {
         const art = this.bongoArticulation.get('bongo-high')?.get(beat) ?? 'open';
-        return this.synthBongoHigh(ctx, time, art);
+        return this.synthBongoHigh(ctx, time, art, gainMult);
       }
-      case 'guira':        return this.synthGuira(ctx, time);
-      case 'bass':         return this.synthBass(ctx, time);
+      case 'guira':        return this.synthGuira(ctx, time, gainMult);
+      case 'bass':         return this.synthBass(ctx, time, gainMult);
     }
   }
 
@@ -955,8 +985,8 @@ export class AudioEngine {
    *   muffled — 180Hz→100Hz (0.05s), tighter peaking, bandpass dampens resonant tail
    * Panned left 20%.
    */
-  private synthBongoLow(ctx: AudioContext, time: number, articulation: Articulation = 'open') {
-    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-low'], time);
+  private synthBongoLow(ctx: AudioContext, time: number, articulation: Articulation = 'open', gainMult = 1.0) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-low'] * gainMult, time);
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';
@@ -1031,30 +1061,38 @@ export class AudioEngine {
 
   /**
    * Bongo High (Hembra): skin-stretch pitch drop with physical realism.
-   *   open    — 800Hz→400Hz in 10ms ("カンッ"), WaveShaper harmonics
-   *             Attack noise (HPF 2.5kHz, 8ms): sharp fingertip impact
+   *   open    — 800Hz→400Hz in 10ms ("カンッ"), WaveShaper saturation
+   *             Inharmonic overtone (×2.76) at 15% mix → membrane roughness
+   *             Attack noise (HPF 2.5kHz, 10ms): sharp fingertip impact
+   *             Pitch detune + decay time randomized ±2% per hit
    *   muffled — 600Hz→350Hz in 8ms, LPF@800Hz softens, lighter attack noise
    * Panned left 20%.
    */
-  private synthBongoHigh(ctx: AudioContext, time: number, articulation: Articulation = 'open') {
-    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bongo-high'], time);
+  private synthBongoHigh(ctx: AudioContext, time: number, articulation: Articulation = 'open', gainMult = 1.0) {
+    // pitch from humanize → per-hit detune (±3%); decayJitter → ±2% decay variation
+    const { gain: g, pitch, time: t } = this.humanize(TRACK_GAIN['bongo-high'] * gainMult, time);
+    const detuneCents = Math.log2(pitch) * 1200;
+    const decayJitter = 1 + (Math.random() - 0.5) * 0.04;
+
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';
+    osc.detune.value = detuneCents;
 
     // Scale decay to step duration — at 120 BPM the note has more space to ring.
     // Pitch snap (800→400Hz) is a physical constant and stays short regardless of tempo.
     const stepDuration = (60 / this._bpm) / 2;
 
+    let decay: number;
     if (articulation === 'muffled') {
-      const decay = Math.min(0.10, stepDuration * 0.22);
+      decay = Math.min(0.10, stepDuration * 0.22) * decayJitter;
       osc.frequency.setValueAtTime(600, t);
       osc.frequency.exponentialRampToValueAtTime(350, t + 0.008); // physical snap — keep fixed
       gainNode.gain.setValueAtTime(0.0001, t);
       gainNode.gain.exponentialRampToValueAtTime(g * 0.6, t + 0.002);
       gainNode.gain.exponentialRampToValueAtTime(0.001, t + decay);
     } else {
-      const decay = Math.min(0.16, stepDuration * 0.40);
+      decay = Math.min(0.16, stepDuration * 0.40) * decayJitter;
       osc.frequency.setValueAtTime(800, t);
       osc.frequency.exponentialRampToValueAtTime(400, t + 0.01); // physical snap — keep fixed
       gainNode.gain.setValueAtTime(0.0001, t);
@@ -1066,12 +1104,29 @@ export class AudioEngine {
       ? Math.min(0.12, stepDuration * 0.25)
       : Math.min(0.18, stepDuration * 0.45);
 
-    // WaveShaper: odd harmonic content → "wooden" skin character
+    // WaveShaper: tanh saturation adds odd harmonics → "wooden" skin character
     const shaper = ctx.createWaveShaper();
     shaper.curve = this.createSaturationCurve();
     shaper.oversample = '2x';
     osc.connect(shaper);
     shaper.connect(gainNode);
+
+    // Inharmonic overtone: ×2.76 ratio (non-integer → membrane resonance roughness)
+    // Mixed at 15% of main gain; decays ~55% of fundamental length
+    const overtoneFreqBase = articulation === 'muffled' ? 600 : 800;
+    const overtoneOsc = ctx.createOscillator();
+    const overtoneGain = ctx.createGain();
+    overtoneOsc.type = 'sine';
+    overtoneOsc.frequency.setValueAtTime(overtoneFreqBase * 2.76, t);
+    overtoneOsc.detune.value = detuneCents;
+    overtoneGain.gain.setValueAtTime(0.0001, t);
+    overtoneGain.gain.exponentialRampToValueAtTime(g * 0.15, t + 0.003);
+    overtoneGain.gain.exponentialRampToValueAtTime(0.001, t + decay * 0.55);
+    const overtoneShaper = ctx.createWaveShaper();
+    overtoneShaper.curve = this.createSaturationCurve();
+    overtoneShaper.oversample = '2x';
+    overtoneOsc.connect(overtoneShaper);
+    overtoneShaper.connect(overtoneGain);
 
     const panner = ctx.createStereoPanner();
     panner.pan.value = -0.2;
@@ -1082,17 +1137,21 @@ export class AudioEngine {
       lpf.frequency.value = 800;
       lpf.Q.value = 0.7;
       gainNode.connect(lpf);
+      overtoneGain.connect(lpf);
       lpf.connect(panner);
     } else {
       gainNode.connect(panner);
+      overtoneGain.connect(panner);
     }
 
     panner.connect(this.masterGainNode!);
     osc.start(t);
     osc.stop(t + stopTime);
+    overtoneOsc.start(t);
+    overtoneOsc.stop(t + stopTime * 0.65);
 
-    // Attack transient: harder material → higher HPF cutoff than bongo low
-    this.playAttackNoise(ctx, t, g * (articulation === 'muffled' ? 0.15 : 0.4), 2500);
+    // Attack transient: 10ms (extended from 8ms) for sharper fingertip impact
+    this.playAttackNoise(ctx, t, g * (articulation === 'muffled' ? 0.15 : 0.4), 2500, 0.010);
   }
 
   /**
@@ -1100,8 +1159,8 @@ export class AudioEngine {
    * Attack 1ms, Decay 20ms → tiny metallic "チッ" grain per 16th note
    * + Panned right 20% to separate from bongos
    */
-  private synthGuira(ctx: AudioContext, time: number) {
-    const { gain: g, time: t } = this.humanize(TRACK_GAIN['guira'], time);
+  private synthGuira(ctx: AudioContext, time: number, gainMult = 1.0) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['guira'] * gainMult, time);
     const duration = 0.022; // 22ms total (attack 1ms + decay 20ms + margin)
     const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -1139,8 +1198,8 @@ export class AudioEngine {
    * Bass accent (beat 4 & 8): sub-bass only — LPF at 200Hz cuts overlap with bongos.
    * Sine 80Hz → 50Hz gives a "地響き" (ground rumble) character.
    */
-  private synthBass(ctx: AudioContext, time: number) {
-    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bass'], time);
+  private synthBass(ctx: AudioContext, time: number, gainMult = 1.0) {
+    const { gain: g, time: t } = this.humanize(TRACK_GAIN['bass'] * gainMult, time);
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
     osc.type = 'sine';

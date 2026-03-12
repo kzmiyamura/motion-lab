@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { audioEngine, type BeatCallback, type TrackId } from '../engine/AudioEngine';
 import { CLAVE_PATTERNS, CLAVE_FLIP_MAP, toEngineSteps, type ClavePattern } from '../engine/salsaPatterns';
-import { BACHATA_PATTERNS } from '../engine/bachataPatterns';
+import { BACHATA_PATTERNS, MAMBO_SECTION_PATTERN, MAJAO_GUIRA_PATTERN, type BachataSection } from '../engine/bachataPatterns';
 import { storage } from '../engine/storage';
 import { useWakeLock } from './useWakeLock';
 import { useSilentAudio } from './useSilentAudio';
@@ -107,6 +107,7 @@ export function useAudioEngine() {
   // Bachata complexity (0-based index into BACHATA_PATTERNS)
   const DEFAULT_BACHATA_COMPLEXITY = 2; // Doble
   const [bachataComplexity, setBachataComplexityState] = useState(DEFAULT_BACHATA_COMPLEXITY);
+  const bachataComplexityRef = useRef(DEFAULT_BACHATA_COMPLEXITY);
 
   /** Apply a Bachata pattern by its 0-based index and update engine tracks. */
   const applyBachataPattern = useCallback((index: number) => {
@@ -129,9 +130,73 @@ export function useAudioEngine() {
   }, []);
 
   const setBachataComplexity = useCallback((index: number) => {
+    bachataComplexityRef.current = index;
     setBachataComplexityState(index);
     applyBachataPattern(index);
   }, [applyBachataPattern]);
+
+  // Bachata section (Derecho / Majao / Mambo), null = complexity-slider mode
+  const [bachataSection, setBachataSectionState] = useState<BachataSection | null>(null);
+
+  /** Clear all per-step gain overrides for bachata tracks. */
+  const clearSectionGains = useCallback(() => {
+    audioEngine.setStepGainOverride('bongo-low',  null);
+    audioEngine.setStepGainOverride('bongo-high', null);
+    audioEngine.setStepGainOverride('guira',      null);
+    audioEngine.setStepGainOverride('bass',       null);
+  }, []);
+
+  const setBachataSection = useCallback((section: BachataSection | null) => {
+    // Toggle off if same section clicked again
+    const next = section === bachataSection ? null : section;
+    setBachataSectionState(next);
+    clearSectionGains();
+
+    if (next === null) {
+      // Restore complexity-slider pattern
+      applyBachataPattern(bachataComplexityRef.current);
+      return;
+    }
+
+    if (next === 'derecho') {
+      // Use the Derecho base pattern from BACHATA_PATTERNS[0]
+      const p = BACHATA_PATTERNS[0];
+      audioEngine.setTrackPattern('bongo-low',  new Set(p.bongoLow));
+      audioEngine.setTrackPattern('bongo-high', new Set(p.bongoHigh));
+      audioEngine.setTrackPattern('guira',      new Set(p.guira));
+      audioEngine.setTrackPattern('bass',       new Set(p.bass));
+      audioEngine.setTrackArticulation('bongo-low',  p.bongoLowArticulation);
+      audioEngine.setTrackArticulation('bongo-high', p.bongoHighArticulation);
+      // Gain shaping: beats 1-3 quiet, beat 4/8 (step 6/14) strongly accented
+      audioEngine.setStepGainOverride('bongo-low', {
+        0: 0.42, 2: 0.42, 4: 0.42, 6: 1.5,
+        8: 0.42, 10: 0.42, 12: 0.42, 14: 1.5,
+      });
+      audioEngine.setStepGainOverride('guira', Object.fromEntries(
+        [0, 2, 4, 6, 8, 10, 12, 14].map(s => [s, 0.7])
+      ));
+    } else if (next === 'majao') {
+      // Keep current complexity bongo pattern, force Güira to dense 16th notes
+      applyBachataPattern(bachataComplexityRef.current);
+      audioEngine.setTrackPattern('guira', new Set(MAJAO_GUIRA_PATTERN));
+      // Uniform gain boost for all bachata tracks
+      const boost = Object.fromEntries(
+        Array.from({ length: 16 }, (_, i) => [i, 1.2])
+      );
+      audioEngine.setStepGainOverride('bongo-low',  boost);
+      audioEngine.setStepGainOverride('bongo-high', boost);
+      audioEngine.setStepGainOverride('guira',      boost);
+      audioEngine.setStepGainOverride('bass',       boost);
+    } else if (next === 'mambo') {
+      // Full syncopated pattern override
+      audioEngine.setTrackPattern('bongo-low',  new Set(MAMBO_SECTION_PATTERN.bongoLow));
+      audioEngine.setTrackPattern('bongo-high', new Set(MAMBO_SECTION_PATTERN.bongoHigh));
+      audioEngine.setTrackPattern('guira',      new Set(MAMBO_SECTION_PATTERN.guira));
+      audioEngine.setTrackPattern('bass',       new Set(MAMBO_SECTION_PATTERN.bass));
+      audioEngine.setTrackArticulation('bongo-low',  MAMBO_SECTION_PATTERN.bongoLowArticulation);
+      audioEngine.setTrackArticulation('bongo-high', MAMBO_SECTION_PATTERN.bongoHighArticulation);
+    }
+  }, [bachataSection, clearSectionGains, applyBachataPattern]);
 
   // Master volume
   const [masterVolume, setMasterVolumeState] = useState<number>(() => {
@@ -372,9 +437,12 @@ export function useAudioEngine() {
     // Bachata に切り替えたときはデフォルトパターンを適用してスライダーをリセット
     if (g === 'bachata') {
       setBachataComplexityState(DEFAULT_BACHATA_COMPLEXITY);
+      bachataComplexityRef.current = DEFAULT_BACHATA_COMPLEXITY;
       applyBachataPattern(DEFAULT_BACHATA_COMPLEXITY);
+      setBachataSectionState(null);
+      clearSectionGains();
     }
-  }, [applyBachataPattern]);
+  }, [applyBachataPattern, clearSectionGains]);
 
   const loadAudioFile = useCallback(async (file: File) => {
     const arrayBuffer = await file.arrayBuffer();
@@ -415,6 +483,7 @@ export function useAudioEngine() {
     loudness, setLoudness,
     genre, setGenre,
     bachataComplexity, setBachataComplexity,
+    bachataSection, setBachataSection,
     samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,

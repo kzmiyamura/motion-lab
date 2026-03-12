@@ -299,12 +299,24 @@ export class AudioEngine {
 
   async start(): Promise<void> {
     if (this._isPlaying) return;
-    const ctx = this.getContext();
-    // iOS では resume() が非同期。await しないと suspended のまま
-    // scheduler が走り音が鳴らないケースが発生する。
-    if (ctx.state === 'suspended') {
-      try { await ctx.resume(); } catch { /* ignore */ }
+    let ctx = this.getContext();
+
+    if (ctx.state !== 'running') {
+      // iOS ではスリープ後に resume() が永久に resolve されないケースがある。
+      // 500ms タイムアウトを設け、それでも running にならなければ Context を再生成する。
+      try {
+        await Promise.race([
+          ctx.resume(),
+          new Promise<void>(resolve => setTimeout(resolve, 500)),
+        ]);
+      } catch { /* ignore */ }
+
+      if (this.context?.state !== 'running') {
+        // iOS の user gesture 内で新規 AudioContext を生成すると即 running になる
+        ctx = await this.resetAudioContext();
+      }
     }
+
     this._isPlaying = true;
     this.currentBeat = 0;
     this.nextBeatTime = ctx.currentTime + 0.05;
@@ -429,6 +441,30 @@ export class AudioEngine {
     src.connect(ctx.destination);
     src.start();
     this.silentSource = src;
+  }
+
+  /**
+   * AudioContext を安全に閉じて再生成する。
+   * iOS でスリープ後に context が無効化された場合の復帰に使用。
+   * AudioBuffer は context 非依存のデータ容器なので、再デコードは不要。
+   */
+  private async resetAudioContext(): Promise<AudioContext> {
+    if (this.context) {
+      try { await this.context.close(); } catch { /* ignore */ }
+    }
+    this.context        = null;
+    this.masterGainNode = null;
+    this.noiseGateNode  = null;
+    this.compressor     = null;
+    this.highShelfNode  = null;
+    this.outputGainNode = null;
+    this.convolver      = null;
+    this.stopSilentLoop();
+    // 新コンテキスト生成（user gesture 内 → iOS でも即 running）
+    const ctx = this.getContext();
+    // リバーブを再セットアップ（IR バッファは新 ctx で再生成）
+    this.setupReverb(ctx);
+    return ctx;
   }
 
   /**

@@ -6,7 +6,7 @@
 
 **Cloudflare Pages 管理画面:** https://dash.cloudflare.com/ → Workers & Pages → motion-lab-apa
 
-**技術スタック:** React 19 / TypeScript 5.9 / Vite 7 / PWA (vite-plugin-pwa + Workbox) / Vitest 4
+**技術スタック:** React 19.2 / TypeScript 5.9 / Vite 7.3 / PWA (vite-plugin-pwa + Workbox) / Vitest 4 / Testing Library
 
 ---
 
@@ -26,10 +26,21 @@
 
 ```bash
 npm install
-npm run dev        # Vite dev server
-npm test           # Vitest（--run で単発実行）
+npm run dev        # Vite dev server（HMR あり）
+npm run dev:pages  # Wrangler Pages ローカルプレビュー
+npm test           # Vitest（ウォッチモード）
+npm test -- --run  # Vitest（単発実行・CI向け）
+npm run test:ui    # Vitest UI（ブラウザで結果確認）
 npm run build      # 本番ビルド → dist/
+npm run lint       # ESLint
 ```
+
+## テスト方針
+
+- **フレームワーク:** Vitest 4 + jsdom + @testing-library/react
+- テスト変更後は必ず `npm test -- --run` と `npm run build` で確認してからコミット
+- タイマー系テストでは `vi.runAllTimersAsync()` を**使わない**（setInterval 無限ループになる）
+  → 代わりに `vi.advanceTimersByTimeAsync(100)` を使う
 
 ## デプロイ
 

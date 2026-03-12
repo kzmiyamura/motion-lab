@@ -12,6 +12,7 @@ import styles from './App.module.css';
 function App() {
   const {
     isPlaying, bpm, setBpm,
+    masterVolume, setMasterVolume,
     currentBeat,
     selectedPattern, handlePatternSelect,
     flipPending, flipTarget, requestFlip,
@@ -87,6 +88,8 @@ function App() {
           onStop={stop}
           onBpmChange={setBpm}
           onFileLoad={loadAudioFile}
+          masterVolume={masterVolume}
+          onMasterVolumeChange={setMasterVolume}
           backgroundPlay={backgroundPlay}
           onBackgroundPlayChange={setBackgroundPlay}
           congaMuted={congaMuted}

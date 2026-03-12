@@ -9,6 +9,8 @@ type Props = {
   onStop: () => void;
   onBpmChange: (bpm: number) => void;
   onFileLoad: (file: File) => void;
+  masterVolume: number;
+  onMasterVolumeChange: (v: number) => void;
   backgroundPlay: boolean;
   onBackgroundPlayChange: (v: boolean) => void;
   congaMuted: boolean;
@@ -26,6 +28,8 @@ export function ControlPanel({
   onStop,
   onBpmChange,
   onFileLoad,
+  masterVolume,
+  onMasterVolumeChange,
   backgroundPlay,
   onBackgroundPlayChange,
   congaMuted,
@@ -84,6 +88,22 @@ export function ControlPanel({
           {BPM_CATEGORIES.find(c => c.id === activeCategoryId)!.feel}
         </p>
       )}
+
+      {/* ── VOL スライダー ── */}
+      <div className={styles.bpmRow}>
+        <label className={styles.label} htmlFor="vol-slider">VOL</label>
+        <input
+          id="vol-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={Math.round(masterVolume * 100)}
+          onChange={(e) => onMasterVolumeChange(Number(e.target.value) / 100)}
+          className={styles.slider}
+        />
+        <span className={styles.bpmValue}>{Math.round(masterVolume * 100)}%</span>
+      </div>
 
       {/* ── BPM スライダー ── */}
       <div className={styles.bpmRow}>

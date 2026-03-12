@@ -63,6 +63,19 @@ export function useAudioEngine() {
     return muted;
   });
 
+  // Master volume
+  const [masterVolume, setMasterVolumeState] = useState<number>(() => {
+    const saved = storage.getMasterVolume();
+    audioEngine.masterVolume = saved;
+    return saved;
+  });
+
+  const setMasterVolume = useCallback((value: number) => {
+    audioEngine.masterVolume = value;
+    setMasterVolumeState(value);
+    storage.setMasterVolume(value);
+  }, []);
+
   // Background play
   const [backgroundPlay, setBackgroundPlayState] = useState<boolean>(
     () => storage.getBackgroundPlay()
@@ -257,6 +270,7 @@ export function useAudioEngine() {
 
   return {
     isPlaying, bpm, setBpm,
+    masterVolume, setMasterVolume,
     currentBeat,
     selectedPattern, handlePatternSelect,
     flipPending, flipTarget, requestFlip,

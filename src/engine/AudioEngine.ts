@@ -100,6 +100,8 @@ const DEFAULT_COWBELL_HIGH_STEPS = new Set([3, 5, 11, 13]);
 
 export class AudioEngine {
   private context: AudioContext | null = null;
+  private masterGainNode: GainNode | null = null;
+  private _masterVolume = 0.8;
   private nextBeatTime = 0;
   private currentBeat = 0;
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
@@ -147,6 +149,14 @@ export class AudioEngine {
 
   get bpm() { return this._bpm; }
   set bpm(value: number) { this._bpm = Math.max(20, Math.min(300, value)); }
+
+  get masterVolume() { return this._masterVolume; }
+  set masterVolume(value: number) {
+    this._masterVolume = Math.max(0, Math.min(1, value));
+    if (this.masterGainNode) {
+      this.masterGainNode.gain.value = this._masterVolume;
+    }
+  }
 
   get isPlaying() { return this._isPlaying; }
 
@@ -289,13 +299,19 @@ export class AudioEngine {
     if (this.context) {
       this.context.close();
       this.context = null;
+      this.masterGainNode = null;
     }
   }
 
   // ── Private ───────────────────────────────────────────────────────────────
 
   private getContext(): AudioContext {
-    if (!this.context) this.context = new AudioContext();
+    if (!this.context) {
+      this.context = new AudioContext();
+      this.masterGainNode = this.context.createGain();
+      this.masterGainNode.gain.value = this._masterVolume;
+      this.masterGainNode.connect(this.context.destination);
+    }
     return this.context;
   }
 
@@ -370,7 +386,7 @@ export class AudioEngine {
     const reverbOut = ctx.createGain();
     reverbOut.gain.value = 1.0;
     this.convolver.connect(reverbOut);
-    reverbOut.connect(ctx.destination);
+    reverbOut.connect(this.masterGainNode!);
   }
 
   /**
@@ -454,8 +470,8 @@ export class AudioEngine {
     gainNode.gain.value = gain;
     src.connect(gainNode);
 
-    // Dry path → destination
-    gainNode.connect(ctx.destination);
+    // Dry path → master gain → destination
+    gainNode.connect(this.masterGainNode!);
 
     // Wet path → convolver → reverb output → destination
     if (this.convolver) {
@@ -499,7 +515,7 @@ export class AudioEngine {
       osc.stop(t + 0.05);
     }
 
-    masterGain.connect(ctx.destination);
+    masterGain.connect(this.masterGainNode!);
   }
 
   /**
@@ -519,7 +535,7 @@ export class AudioEngine {
     body.connect(bodyGain);
     body.start(t);
     body.stop(t + 0.24);
-    bodyGain.connect(ctx.destination);
+    bodyGain.connect(this.masterGainNode!);
     if (this.convolver) bodyGain.connect(this.convolver);
   }
 
@@ -551,7 +567,7 @@ export class AudioEngine {
 
     src.connect(filter);
     filter.connect(env);
-    env.connect(ctx.destination);
+    env.connect(this.masterGainNode!);
     src.start(t);
   }
 
@@ -584,7 +600,7 @@ export class AudioEngine {
 
     src.connect(filter);
     filter.connect(env);
-    env.connect(ctx.destination);
+    env.connect(this.masterGainNode!);
     src.start(t);
   }
 
@@ -614,7 +630,7 @@ export class AudioEngine {
     }
 
     filter.connect(masterGain);
-    masterGain.connect(ctx.destination);
+    masterGain.connect(this.masterGainNode!);
     if (this.convolver) masterGain.connect(this.convolver);
   }
 
@@ -644,7 +660,7 @@ export class AudioEngine {
     }
 
     filter.connect(masterGain);
-    masterGain.connect(ctx.destination);
+    masterGain.connect(this.masterGainNode!);
     if (this.convolver) masterGain.connect(this.convolver);
   }
 
@@ -677,7 +693,7 @@ export class AudioEngine {
 
       src.connect(filter);
       filter.connect(gainNode);
-      gainNode.connect(ctx.destination);
+      gainNode.connect(this.masterGainNode!);
       src.start(t);
     }
 
@@ -690,7 +706,7 @@ export class AudioEngine {
     finalGain.gain.setValueAtTime(0.5, finalT);
     finalGain.gain.exponentialRampToValueAtTime(0.001, finalT + 0.1);
     osc.connect(finalGain);
-    finalGain.connect(ctx.destination);
+    finalGain.connect(this.masterGainNode!);
     osc.start(finalT);
     osc.stop(finalT + 0.12);
   }

@@ -9,6 +9,8 @@ const baseProps = {
   onStop: vi.fn(),
   onBpmChange: vi.fn(),
   onFileLoad: vi.fn(),
+  masterVolume: 0.8,
+  onMasterVolumeChange: vi.fn(),
   backgroundPlay: false,
   onBackgroundPlayChange: vi.fn(),
   congaMuted: true,
@@ -47,7 +49,7 @@ describe('ControlPanel', () => {
   it('calls onBpmChange with numeric value on slider change', () => {
     const onBpmChange = vi.fn();
     render(<ControlPanel {...baseProps} onBpmChange={onBpmChange} />);
-    fireEvent.change(screen.getByRole('slider'), { target: { value: '180' } });
+    fireEvent.change(screen.getByLabelText('BPM'), { target: { value: '180' } });
     expect(onBpmChange).toHaveBeenCalledWith(180);
   });
 

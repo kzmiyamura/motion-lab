@@ -198,6 +198,11 @@ function App() {
           onBachataComplexityChange={setBachataComplexity}
         />
       </section>
+
+      {/* ── Footer with Version ── */}
+      <footer className={styles.footer}>
+        <p className={styles.version}>v1.0.1-haiku</p>
+      </footer>
     </main>
     </>
   );

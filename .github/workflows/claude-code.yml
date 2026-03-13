@@ -36,7 +36,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           # 【修正】CLIで確実に認識されるモデル名に変更
-          ANTHROPIC_MODEL: claude-3-5-haiku
+          #ANTHROPIC_MODEL: claude-3-5-haiku
+          ANTHROPIC_MODEL: haiku
           # プロンプトキャッシュを有効化
           ANTHROPIC_BETA: prompt-caching-2024-07-31
         run: |

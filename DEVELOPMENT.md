@@ -136,6 +136,16 @@ private schedule() {
         ▼
  noiseGateNode   ← 無音時は gain=0（ノイズゲート）
         │
+        V
+ DynamicsCompressor  ← LOUDNESS トグルで ON/OFF（threshold, ratio 等）
+        │
+        ▼
+        │
+        V
+ DynamicsCompressor  ← LOUDNESS トグルで ON/OFF（threshold, ratio 等）
+        │
+        ▼
+        │
         ▼
  DynamicsCompressor  ← LOUDNESS トグルで ON/OFF（threshold, ratio 等）
         │
@@ -157,6 +167,31 @@ silentSource（≈−90dB ノイズループ）→ ctx.destination  直結
 > これらは iOS バックグラウンド維持専用。`masterGainNode` を経由しないので
 > ボリューム操作の影響を受けない。振幅は −84〜−90dB と**人間には不可聴**に設定。
 > **重要:** これらの振幅を −60dB 以上に上げると、ボリューム 0 でも「サー」ノイズが聞こえる。
+
+#### Parallel Send-Return Reverb（並列センド・リターン型リバーブ）
+
+リバーブは `getContext()` 内で一度だけ固定ルートを構築する **Send-Return** 構成を採用しています。
+
+```
+【Dry 経路】
+各楽器 GainNode → masterGainNode → noiseGateNode → compressor → … → destination
+
+【Wet 経路（Send-Return）】
+masterGainNode ──(Send tap)──► reverbSendGain ──► ConvolverNode
+                                                        │
+                                               reverbWetGain（クロスフェード制御）
+                                                        │
+                                              ◄── masterGainNode（Return）
+```
+
+**設計上の重要な決定:**
+
+- **単一インスタンス**: `reverbSendGain / convolver / reverbWetGain` は `getContext()` で一度だけ生成・接続。`loadReverbSample` は既存ノードを再利用し、新規ノード生成・接続は行わない。
+- **グローバル Send**: Send タップは `masterGainNode` からの単一の接続。全楽器に均一なリバーブ空間を与える。
+- **クロスフェード切り替え**: リバーブタイプ変更時は `reverbWetGain.gain` を `exponentialRampToValueAtTime`（20ms）で制御し、クリックノイズなしで切り替える。
+- **ミュート**: `type === 'none'` のとき `reverbWetGain.gain` を `0.0001` まで下げてリバーブを実質的に無効化。
+- **IR 更新**: `convolver.buffer` の差し替えは既存ノードのまま行うため、シグナルチェーンの再接続コストがない。
+- **フィードバックループ**: `masterGainNode → reverbSendGain → convolver → reverbWetGain → masterGainNode` のサイクルは `ConvolverNode` が内在的な処理遅延（IR の長さ分）を持つため Web Audio API 仕様上は許容される（`reverbWetGain.gain = 0.0` の初期値でリバーブが無効なときはループも実質無効）。
 
 #### TRACK_GAIN の設計思想
 

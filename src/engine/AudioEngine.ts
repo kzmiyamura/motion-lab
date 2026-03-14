@@ -71,19 +71,6 @@ const SAMPLE_URLS: Record<TrackId, string[]> = {
   'bass':       [],
 };
 
-// Reverb wet level per instrument (clave is traditionally dry)
-const REVERB_WET: Record<TrackId, number> = {
-  clave:         0.08,
-  'conga-open':  0.22,
-  'conga-slap':  0.12,
-  'conga-heel':  0.06,
-  'cowbell-low':  0.18,
-  'cowbell-high': 0.10,
-  'bongo-low':  0.15,
-  'bongo-high': 0.10,
-  'guira':      0.04,
-  'bass':       0.20,
-};
 
 // Base gain per instrument — 0dBFS を超えないよう 0.7 以下に抑える。
 // 音量の底上げは compressor 後段の outputGainNode (固定 4.0×) で行う。
@@ -174,6 +161,9 @@ export class AudioEngine {
 
   // Reverb
   private convolver: ConvolverNode | null = null;
+  private reverbSendGain: GainNode | null = null;
+  private reverbWetGain: GainNode | null = null;
+  private _reverbType: 'studio' | 'hall' | 'none' = 'none';
 
   // バックグラウンド維持用: 極小ノイズをループ再生して AudioContext をアクティブに保つ
   private silentSource: AudioBufferSourceNode | null = null;
@@ -369,6 +359,13 @@ export class AudioEngine {
     this.sampleBuffers.set('clave', [decoded]);
   }
 
+  get reverbType() { return this._reverbType; }
+  async setReverb(type: 'studio' | 'hall' | 'none'): Promise<void> {
+    if (this._reverbType === type) return;
+    await this.loadReverbSample(type);
+    this._reverbType = type;
+  }
+
   async start(): Promise<void> {
     if (this._isPlaying) return;
     let ctx = this.getContext();
@@ -429,6 +426,9 @@ export class AudioEngine {
       this.compressor = null;
       this.highShelfNode = null;
       this.outputGainNode = null;
+      this.convolver = null;
+      this.reverbSendGain = null;
+      this.reverbWetGain = null;
       this.studioDelayNode = null;
       this.studioDelayFeedback = null;
       this.studioDelayWet = null;
@@ -454,7 +454,7 @@ export class AudioEngine {
       this.highShelfNode.gain.value = -6;
 
       // 出力ゲイン: TRACK_GAIN 削減分を後段で補償（4× ≈ +12dB）
-      // ユーザーの masterVolume スライダー（0–100%）とは独立した固定ブースト
+      // ユーザーの masterVolume スライダー（0-100%）とは独立した固定ブースト
       this.outputGainNode = this.context.createGain();
       this.outputGainNode.gain.value = 4.0;
 
@@ -467,6 +467,20 @@ export class AudioEngine {
       this.noiseGateNode.gain.value = 0; // 初期状態：閉じている
       this.noiseGateNode.connect(this.compressor);
       this.masterGainNode.connect(this.noiseGateNode);
+
+      // ── Reverb Send-Return Routing (一度だけ構築) ────────────────────────
+      // Wet経路: masterGainNode (Send) → reverbSendGain → convolver
+      //                               → reverbWetGain → masterGainNode (Return)
+      this.reverbSendGain = this.context.createGain();
+      this.reverbSendGain.gain.value = 0.3; // センドレベル
+      this.convolver = this.context.createConvolver();
+      this.reverbWetGain = this.context.createGain();
+      this.reverbWetGain.gain.value = 0.0; // 初期値はリバーブOFF（setReverb で変更）
+
+      this.masterGainNode.connect(this.reverbSendGain);   // Send tap
+      this.reverbSendGain.connect(this.convolver);
+      this.convolver.connect(this.reverbWetGain);
+      this.reverbWetGain.connect(this.masterGainNode);    // Return (masterGainNode → noiseGateNode へ流れる)
 
       // ── Studio ambience: 15ms pre-delay + 0.1 feedback ──────────────────
       // Tap from masterGainNode → delayNode; wet output bypasses the noise gate
@@ -487,6 +501,9 @@ export class AudioEngine {
       // Wet: delay output → compressor (room tail unaffected by noise gate)
       this.studioDelayNode.connect(this.studioDelayWet);
       this.studioDelayWet.connect(this.compressor);
+
+      // 合成 IR をセットアップ（初期リバーブ: reverbWetGain=0 なので無音）
+      this.setupReverb(this.context);
 
       // 初期状態を反映
       this.loudness = this._loudness;
@@ -555,6 +572,8 @@ export class AudioEngine {
     this.highShelfNode       = null;
     this.outputGainNode      = null;
     this.convolver           = null;
+    this.reverbSendGain      = null;
+    this.reverbWetGain       = null;
     this.studioDelayNode     = null;
     this.studioDelayFeedback = null;
     this.studioDelayWet      = null;
@@ -595,10 +614,12 @@ export class AudioEngine {
   }
 
   /**
-   * Create a synthetic room impulse response for the ConvolverNode.
-   * Exponentially decaying white noise — classic plate/room reverb technique.
+   * 合成ルームIRを生成して ConvolverNode のバッファをセット。
+   * 指数減衰ホワイトノイズ — classic plate/room reverb technique.
+   * getContext() で作成済みの convolver インスタンスを破壊しない。
    */
   private setupReverb(ctx: AudioContext) {
+    if (!this.convolver) return;
     const sampleRate = ctx.sampleRate;
     const duration = 1.2;  // seconds of reverb tail
     const decay = 2.8;
@@ -612,14 +633,56 @@ export class AudioEngine {
       }
     }
 
-    this.convolver = ctx.createConvolver();
     this.convolver.buffer = ir;
+  }
 
-    // Reverb output at full volume — per-instrument wet levels control mix
-    const reverbOut = ctx.createGain();
-    reverbOut.gain.value = 1.0;
-    this.convolver.connect(reverbOut);
-    reverbOut.connect(this.masterGainNode!);
+  /**
+   * リバーブタイプを切り替える。
+   * - 'none': reverbWetGain を 20ms クロスフェードでミュート（0.0001）。
+   * - 'studio'/'hall': IR ファイルをロードし、convolver.buffer を差し替えた後
+   *   reverbWetGain を 20ms クロスフェードでフェードイン。
+   * 既存の reverbSendGain/convolver/reverbWetGain ノードを再利用し、
+   * 新規ノード生成・接続は行わない。
+   */
+  private async loadReverbSample(type: 'studio' | 'hall' | 'none') {
+    if (!this.context || !this.convolver || !this.reverbWetGain) return;
+
+    const now = this.context.currentTime;
+    const g = this.reverbWetGain.gain;
+
+    if (type === 'none') {
+      // 20ms でリバーブをミュート
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(Math.max(g.value, 0.0001), now);
+      g.exponentialRampToValueAtTime(0.0001, now + 0.02);
+      return;
+    }
+
+    let url = '';
+    switch (type) {
+      case 'studio':
+        url = 'https://example.com/studio-reverb.wav'; // プレースホルダー
+        break;
+      case 'hall':
+        url = 'https://example.com/hall-reverb.wav'; // プレースホルダー
+        break;
+    }
+
+    try {
+      const response = await fetch(url);
+      const arrayBuffer = await response.arrayBuffer();
+      const audioBuffer = await this.context.decodeAudioData(arrayBuffer);
+
+      // 一旦フェードアウト → バッファ差し替え → フェードイン（クロスフェード）
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(Math.max(g.value, 0.0001), now);
+      g.exponentialRampToValueAtTime(0.0001, now + 0.01); // 10ms でフェードアウト
+      this.convolver.buffer = audioBuffer;
+      g.setValueAtTime(0.0001, now + 0.01);
+      g.exponentialRampToValueAtTime(1.0, now + 0.02);   // 10ms でフェードイン
+    } catch (error) {
+      console.error('Failed to load reverb sample:', error);
+    }
   }
 
   /**
@@ -718,16 +781,8 @@ export class AudioEngine {
     gainNode.gain.exponentialRampToValueAtTime(gain, time + 0.003);
     src.connect(gainNode);
 
-    // Dry path → master gain → destination
+    // Dry path → masterGainNode（リバーブは masterGainNode からのグローバル Send-Return で処理）
     gainNode.connect(this.masterGainNode!);
-
-    // Wet path → convolver → reverb output → destination
-    if (this.convolver) {
-      const wetGain = ctx.createGain();
-      wetGain.gain.value = REVERB_WET[id];
-      gainNode.connect(wetGain);
-      wetGain.connect(this.convolver);
-    }
 
     src.start(time);
   }
@@ -844,7 +899,6 @@ export class AudioEngine {
     body.start(t);
     body.stop(t + 0.24);
     bodyGain.connect(this.masterGainNode!);
-    if (this.convolver) bodyGain.connect(this.convolver);
   }
 
   /**
@@ -942,7 +996,6 @@ export class AudioEngine {
 
     filter.connect(masterGain);
     masterGain.connect(this.masterGainNode!);
-    if (this.convolver) masterGain.connect(this.convolver);
   }
 
   /**
@@ -973,7 +1026,6 @@ export class AudioEngine {
 
     filter.connect(masterGain);
     masterGain.connect(this.masterGainNode!);
-    if (this.convolver) masterGain.connect(this.convolver);
   }
 
   /**
@@ -1051,7 +1103,6 @@ export class AudioEngine {
     panner.pan.value = -0.2;
     peaking.connect(panner);
     panner.connect(this.masterGainNode!);
-    if (this.convolver && articulation === 'open') gainNode.connect(this.convolver);
     osc.start(t);
     osc.stop(t + stopTime);
 
@@ -1218,7 +1269,6 @@ export class AudioEngine {
 
     gainNode.connect(lpf);
     lpf.connect(this.masterGainNode!);
-    if (this.convolver) gainNode.connect(this.convolver);
     osc.start(t);
     osc.stop(t + 0.28);
   }

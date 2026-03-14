@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { audioEngine, type BeatCallback, type TrackId } from '../engine/AudioEngine';
+import { audioEngine, type BeatCallback, type TrackId, type ReverbType } from '../engine/AudioEngine';
 import { CLAVE_PATTERNS, CLAVE_FLIP_MAP, toEngineSteps, type ClavePattern } from '../engine/salsaPatterns';
 import { BACHATA_PATTERNS, MAMBO_SECTION_PATTERN, MAJAO_GUIRA_PATTERN, type BachataSection } from '../engine/bachataPatterns';
 import { storage } from '../engine/storage';
@@ -462,6 +462,40 @@ export function useAudioEngine() {
     storage.setLoudness(value);
   }, []);
 
+  // Reverb environment
+  const [reverbType, setReverbTypeState] = useState<ReverbType>(() => {
+    const saved = storage.getReverbType();
+    if (saved !== 'none') {
+      audioEngine.setReverb(saved).catch(() => {});
+    }
+    return saved;
+  });
+  const [isReverbLoading, setIsReverbLoading] = useState(false);
+
+  const setReverb = useCallback(async (type: ReverbType) => {
+    setIsReverbLoading(true);
+    try {
+      await audioEngine.setReverb(type);
+      setReverbTypeState(type);
+      storage.setReverbType(type);
+    } finally {
+      setIsReverbLoading(false);
+    }
+  }, []);
+
+  // Reverb wet level (0–1)
+  const [reverbWetLevel, setReverbWetLevelState] = useState<number>(() => {
+    const saved = storage.getReverbWetLevel();
+    audioEngine.reverbWetLevel = saved;
+    return saved;
+  });
+
+  const setReverbWetLevel = useCallback((value: number) => {
+    audioEngine.reverbWetLevel = value;
+    setReverbWetLevelState(value);
+    storage.setReverbWetLevel(value);
+  }, []);
+
   const congaMuted   = CONGA_IDS.every(id => mutedTracks.has(id));
   const cowbellMuted = COWBELL_IDS.every(id => mutedTracks.has(id));
   const bongoMuted   = BONGO_IDS.every(id => mutedTracks.has(id));
@@ -487,5 +521,7 @@ export function useAudioEngine() {
     samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,
+    reverbType, setReverb, isReverbLoading,
+    reverbWetLevel, setReverbWetLevel,
   };
 }

@@ -30,6 +30,8 @@ function App() {
     samplesReady, samplesOffline,
     start, stop,
     loadAudioFile,
+    reverbType, setReverb, isReverbLoading,
+    reverbWetLevel, setReverbWetLevel,
   } = useAudioEngine();
 
   return (
@@ -196,6 +198,11 @@ function App() {
           onGuiraMuteToggle={toggleGuiraMute}
           bachataComplexity={bachataComplexity}
           onBachataComplexityChange={setBachataComplexity}
+          reverbType={reverbType}
+          onReverbChange={setReverb}
+          isReverbLoading={isReverbLoading}
+          reverbWetLevel={reverbWetLevel}
+          onReverbWetLevelChange={setReverbWetLevel}
         />
       </section>
 

@@ -2,6 +2,8 @@ import { useCallback } from 'react';
 import { BPM_CATEGORIES, getActiveCategoryId } from '../engine/bpmCategories';
 import { BACHATA_PATTERNS } from '../engine/bachataPatterns';
 import { type Genre, BPM_RANGE } from '../hooks/useAudioEngine';
+import { type ReverbType } from '../engine/AudioEngine';
+import { EnvironmentSelector } from './EnvironmentSelector';
 import styles from './ControlPanel.module.css';
 
 type Props = {
@@ -30,6 +32,11 @@ type Props = {
   onGuiraMuteToggle: () => void;
   bachataComplexity: number;
   onBachataComplexityChange: (v: number) => void;
+  reverbType: ReverbType;
+  onReverbChange: (type: ReverbType) => void;
+  isReverbLoading: boolean;
+  reverbWetLevel: number;
+  onReverbWetLevelChange: (v: number) => void;
 };
 
 export function ControlPanel({
@@ -58,6 +65,11 @@ export function ControlPanel({
   onGuiraMuteToggle,
   bachataComplexity,
   onBachataComplexityChange,
+  reverbType,
+  onReverbChange,
+  isReverbLoading,
+  reverbWetLevel,
+  onReverbWetLevelChange,
 }: Props) {
   const activeCategoryId = getActiveCategoryId(bpm);
 
@@ -297,6 +309,15 @@ export function ControlPanel({
           </div>
         </>
       )}
+
+      {/* ── Environment (Reverb) ── */}
+      <EnvironmentSelector
+        reverbType={reverbType}
+        isReverbLoading={isReverbLoading}
+        reverbWetLevel={reverbWetLevel}
+        onReverbChange={onReverbChange}
+        onWetLevelChange={onReverbWetLevelChange}
+      />
 
       {/* ── LOUDNESS ── */}
       <div className={styles.settingsRow}>

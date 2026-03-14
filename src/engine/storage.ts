@@ -17,6 +17,8 @@ const KEYS = {
   masterVolume:   'motionlab:masterVolume',
   loudness:       'motionlab:loudness',
   genre:          'motionlab:genre',
+  reverbType:     'motionlab:reverbType',
+  reverbWetLevel: 'motionlab:reverbWetLevel',
 } as const;
 
 function load<T>(key: string, fallback: T, parse: (v: string) => T): T {
@@ -74,4 +76,9 @@ export const storage = {
 
   getGenre: () => load(KEYS.genre, 'salsa' as 'salsa' | 'bachata', s => s as 'salsa' | 'bachata'),
   setGenre: (v: 'salsa' | 'bachata') => save(KEYS.genre, v),
+
+  getReverbType:     () => load(KEYS.reverbType, 'none' as import('./AudioEngine').ReverbType, s => s as import('./AudioEngine').ReverbType),
+  setReverbType:     (v: import('./AudioEngine').ReverbType) => save(KEYS.reverbType, v),
+  getReverbWetLevel: () => load(KEYS.reverbWetLevel, 0.8, Number),
+  setReverbWetLevel: (v: number) => save(KEYS.reverbWetLevel, String(v)),
 };

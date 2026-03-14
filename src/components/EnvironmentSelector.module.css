@@ -1,0 +1,200 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  background: #0e0e1e;
+  border-radius: 10px;
+  border: 1px solid #1e1e3a;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #7070b0;
+}
+
+.activeTag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #7c6bff;
+  background: rgba(124, 107, 255, 0.12);
+  padding: 2px 8px;
+  border-radius: 20px;
+  animation: fadeIn 0.3s ease;
+}
+
+/* ── Button group ── */
+.btnGroup {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 0.55rem 0.25rem 0.45rem;
+  border: 1.5px solid #2a2a4a;
+  border-radius: 9px;
+  background: #12122a;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+  min-height: 58px;
+  overflow: hidden;
+}
+
+.btn:hover {
+  border-color: #4a42a0;
+  background: #16143a;
+}
+
+.btn:active {
+  transform: scale(0.95);
+}
+
+.btnActive {
+  border-color: #7c6bff;
+  background: #16143a;
+  box-shadow: 0 0 0 2px rgba(124, 107, 255, 0.2);
+}
+
+/* Ripple wave animation on active (non-dry) environment */
+.btnRipple::before,
+.btnRipple::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  border: 1.5px solid rgba(124, 107, 255, 0.5);
+  animation: rippleWave 2.4s ease-out infinite;
+  pointer-events: none;
+}
+
+.btnRipple::after {
+  animation-delay: 1.2s;
+}
+
+@keyframes rippleWave {
+  0%   { transform: scale(1);    opacity: 0.6; }
+  60%  { transform: scale(1.18); opacity: 0; }
+  100% { transform: scale(1.18); opacity: 0; }
+}
+
+/* Loading state */
+.btnLoading {
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.icon {
+  font-size: 1.1rem;
+  line-height: 1;
+  color: #6060a0;
+  height: 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btnActive .icon {
+  color: #9d8fff;
+}
+
+.btnLabel {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #5050a0;
+  white-space: nowrap;
+}
+
+.btnActive .btnLabel {
+  color: #c0b8ff;
+}
+
+/* Spinner for loading state */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(124, 107, 255, 0.3);
+  border-top-color: #7c6bff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Wet level slider ── */
+.wetRow {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-top: 2px;
+  animation: fadeIn 0.25s ease;
+}
+
+.wetLabel {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6060a0;
+  min-width: 2.2rem;
+}
+
+.wetSlider {
+  flex: 1;
+  accent-color: #7c6bff;
+  cursor: pointer;
+  height: 4px;
+}
+
+.wetValue {
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #a0a0d0;
+  min-width: 2.8rem;
+  text-align: right;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Mobile ── */
+@media (max-width: 480px) {
+  .btnGroup {
+    gap: 4px;
+  }
+
+  .btn {
+    padding: 0.5rem 0.2rem 0.4rem;
+    min-height: 52px;
+    border-radius: 8px;
+  }
+
+  .icon {
+    font-size: 1rem;
+  }
+
+  .btnLabel {
+    font-size: 0.6rem;
+  }
+}

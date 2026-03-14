@@ -28,6 +28,11 @@ const baseProps = {
   onGuiraMuteToggle: vi.fn(),
   bachataComplexity: 2,
   onBachataComplexityChange: vi.fn(),
+  reverbType: 'none' as const,
+  onReverbChange: vi.fn(),
+  isReverbLoading: false,
+  reverbWetLevel: 0.8,
+  onReverbWetLevelChange: vi.fn(),
 };
 
 describe('ControlPanel', () => {

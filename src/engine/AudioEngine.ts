@@ -18,6 +18,8 @@
 export type TrackId = 'clave' | 'conga-open' | 'conga-slap' | 'conga-heel' | 'cowbell-low' | 'cowbell-high'
   | 'bongo-low' | 'bongo-high' | 'guira' | 'bass';
 
+export type ReverbType = 'none' | 'studio' | 'hall' | 'club' | 'plaza';
+
 import { type Articulation } from './bachataPatterns';
 
 export type Track = {
@@ -163,7 +165,8 @@ export class AudioEngine {
   private convolver: ConvolverNode | null = null;
   private reverbSendGain: GainNode | null = null;
   private reverbWetGain: GainNode | null = null;
-  private _reverbType: 'studio' | 'hall' | 'none' = 'none';
+  private _reverbType: ReverbType = 'none';
+  private _reverbWetLevel = 0.8; // User-controlled wet depth (0–1)
 
   // バックグラウンド維持用: 極小ノイズをループ再生して AudioContext をアクティブに保つ
   private silentSource: AudioBufferSourceNode | null = null;
@@ -359,9 +362,25 @@ export class AudioEngine {
     this.sampleBuffers.set('clave', [decoded]);
   }
 
-  get reverbType() { return this._reverbType; }
-  async setReverb(type: 'studio' | 'hall' | 'none'): Promise<void> {
+  get reverbType(): ReverbType { return this._reverbType; }
+
+  /** User-controlled wet depth (0–1). Changing this live crossfades the reverb return level. */
+  get reverbWetLevel() { return this._reverbWetLevel; }
+  set reverbWetLevel(value: number) {
+    this._reverbWetLevel = Math.max(0, Math.min(1, value));
+    if (this.reverbWetGain && this.context && this._reverbType !== 'none') {
+      const now = this.context.currentTime;
+      const g = this.reverbWetGain.gain;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(Math.max(g.value, 0.0001), now);
+      g.exponentialRampToValueAtTime(Math.max(this._reverbWetLevel, 0.0001), now + 0.02);
+    }
+  }
+
+  async setReverb(type: ReverbType): Promise<void> {
     if (this._reverbType === type) return;
+    this.getContext(); // Ensure context is initialized before adjustAmbience
+    this.adjustAmbience(type);
     await this.loadReverbSample(type);
     this._reverbType = type;
   }
@@ -692,7 +711,50 @@ export class AudioEngine {
    *
    * The crossfade prevents audible clicks when the buffer is replaced mid-playback.
    */
-  private async loadReverbSample(type: 'studio' | 'hall' | 'none') {
+  /**
+   * Adjusts the studio ambience delay parameters to match the acoustic character
+   * of the selected environment. Called synchronously before loadReverbSample().
+   *
+   * | type   | delay  | feedback | wet  | character               |
+   * |--------|--------|----------|------|-------------------------|
+   * | none   | —      | —        | ~0   | completely dry          |
+   * | studio | 15 ms  | 0.10     | 0.14 | tight recording space   |
+   * | hall   | 35 ms  | 0.18     | 0.20 | concert hall            |
+   * | club   | 22 ms  | 0.15     | 0.18 | medium indoor venue     |
+   * | plaza  | 55 ms  | 0.25     | 0.22 | outdoor open square     |
+   */
+  private adjustAmbience(type: ReverbType) {
+    if (!this.studioDelayNode || !this.studioDelayFeedback || !this.studioDelayWet || !this.context) return;
+    const now = this.context.currentTime;
+    switch (type) {
+      case 'none':
+        this.studioDelayWet.gain.setTargetAtTime(0.0001, now, 0.02);
+        break;
+      case 'studio':
+        this.studioDelayNode.delayTime.value = 0.015;
+        this.studioDelayFeedback.gain.value  = 0.10;
+        this.studioDelayWet.gain.setTargetAtTime(0.14, now, 0.05);
+        break;
+      case 'hall':
+        this.studioDelayNode.delayTime.value = 0.035;
+        this.studioDelayFeedback.gain.value  = 0.18;
+        this.studioDelayWet.gain.setTargetAtTime(0.20, now, 0.05);
+        break;
+      case 'club':
+        this.studioDelayNode.delayTime.value = 0.022;
+        this.studioDelayFeedback.gain.value  = 0.15;
+        this.studioDelayWet.gain.setTargetAtTime(0.18, now, 0.05);
+        break;
+      case 'plaza':
+        // Outdoor plaza: long pre-delay + high feedback simulates distant walls
+        this.studioDelayNode.delayTime.value = 0.055;
+        this.studioDelayFeedback.gain.value  = 0.25;
+        this.studioDelayWet.gain.setTargetAtTime(0.22, now, 0.05);
+        break;
+    }
+  }
+
+  private async loadReverbSample(type: ReverbType) {
     if (!this.context || !this.convolver || !this.reverbWetGain) return;
 
     const now = this.context.currentTime;
@@ -705,9 +767,11 @@ export class AudioEngine {
       return;
     }
 
-    const urls: Record<'studio' | 'hall', string> = {
+    const urls: Record<Exclude<ReverbType, 'none'>, string> = {
       studio: 'https://example.com/studio-reverb.wav', // placeholder
       hall:   'https://example.com/hall-reverb.wav',   // placeholder
+      club:   'https://example.com/club-reverb.wav',   // placeholder
+      plaza:  'https://example.com/plaza-reverb.wav',  // placeholder
     };
 
     try {
@@ -721,7 +785,7 @@ export class AudioEngine {
       g.exponentialRampToValueAtTime(0.0001, now + 0.01);
       this.convolver.buffer = audioBuffer;
       g.setValueAtTime(0.0001, now + 0.01);
-      g.exponentialRampToValueAtTime(1.0, now + 0.02);
+      g.exponentialRampToValueAtTime(Math.max(this._reverbWetLevel, 0.0001), now + 0.02);
     } catch (error) {
       console.error('Failed to load reverb sample:', error);
     }

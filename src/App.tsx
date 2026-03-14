@@ -201,7 +201,7 @@ function App() {
 
       {/* ── Footer with Version ── */}
       <footer className={styles.footer}>
-        <p className={styles.version}>v1.0.1-haiku</p>
+        <p className={styles.version}>v{__APP_VERSION__}</p>
       </footer>
     </main>
     </>

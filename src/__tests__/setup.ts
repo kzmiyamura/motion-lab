@@ -27,6 +27,7 @@ class MockAudioContext {
         cancelScheduledValues: vi.fn(),
       },
       connect: vi.fn(),
+      disconnect: vi.fn(),
     };
   }
 
@@ -49,6 +50,7 @@ class MockAudioContext {
       Q: { value: 0 },
       gain: { value: 0 },
       connect: vi.fn(),
+      disconnect: vi.fn(),
     };
   }
 
@@ -60,11 +62,12 @@ class MockAudioContext {
       attack:    { value: 0 },
       release:   { value: 0.25 },
       connect: vi.fn(),
+      disconnect: vi.fn(),
     };
   }
 
   createConvolver() {
-    return { buffer: null as AudioBuffer | null, connect: vi.fn() };
+    return { buffer: null as AudioBuffer | null, connect: vi.fn(), disconnect: vi.fn() };
   }
 
   createBuffer(channels: number, length: number, sampleRate: number) {
@@ -92,6 +95,7 @@ class MockAudioContext {
     return {
       delayTime: { value: 0 },
       connect: vi.fn(),
+      disconnect: vi.fn(),
     };
   }
 

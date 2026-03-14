@@ -419,96 +419,134 @@ export class AudioEngine {
       this.visibilityHandler = null;
     }
     if (this.context) {
+      // Explicitly disconnect every node before closing the context.
+      // AudioContext.close() alone releases the hardware, but explicit
+      // disconnect() ensures no dangling references prevent GC.
+      this.masterGainNode?.disconnect();
+      this.noiseGateNode?.disconnect();
+      this.compressor?.disconnect();
+      this.highShelfNode?.disconnect();
+      this.outputGainNode?.disconnect();
+      this.reverbSendGain?.disconnect();
+      this.convolver?.disconnect();
+      this.reverbWetGain?.disconnect();
+      this.studioDelayNode?.disconnect();
+      this.studioDelayFeedback?.disconnect();
+      this.studioDelayWet?.disconnect();
+
       this.context.close();
-      this.context = null;
-      this.masterGainNode = null;
-      this.noiseGateNode = null;
-      this.compressor = null;
-      this.highShelfNode = null;
-      this.outputGainNode = null;
-      this.convolver = null;
-      this.reverbSendGain = null;
-      this.reverbWetGain = null;
-      this.studioDelayNode = null;
+      this.context             = null;
+      this.masterGainNode      = null;
+      this.noiseGateNode       = null;
+      this.compressor          = null;
+      this.highShelfNode       = null;
+      this.outputGainNode      = null;
+      this.convolver           = null;
+      this.reverbSendGain      = null;
+      this.reverbWetGain       = null;
+      this.studioDelayNode     = null;
       this.studioDelayFeedback = null;
-      this.studioDelayWet = null;
+      this.studioDelayWet      = null;
     }
   }
 
   // ── Private ───────────────────────────────────────────────────────────────
 
+  /**
+   * Returns the singleton AudioContext, creating and wiring all nodes on first call.
+   *
+   * Full signal graph (built once; never reconnected):
+   *
+   *   Source nodes (per instrument) ──► masterGainNode
+   *
+   *   Dry path:
+   *     masterGainNode → noiseGateNode → compressor → highShelfNode
+   *                    → outputGainNode → destination
+   *
+   *   Reverb Send-Return loop (parallel to dry, shares masterGainNode as mix bus):
+   *     masterGainNode → reverbSendGain → convolver → reverbWetGain ┐
+   *     └─────────────────────────────────────────────────────────────┘
+   *     reverbWetGain.gain controls wet depth (0 = dry only, set via setReverb()).
+   *     The cycle is valid because ConvolverNode has an intrinsic block-size delay.
+   *
+   *   Studio ambience delay (independent tap, feeds compressor directly):
+   *     masterGainNode → studioDelayNode ⟲(feedback=0.1) → studioDelayWet → compressor
+   */
   private getContext(): AudioContext {
     if (!this.context) {
       this.context = new AudioContext();
+
+      // ── Master mix bus ───────────────────────────────────────────────────
       this.masterGainNode = this.context.createGain();
       this.masterGainNode.gain.value = this._masterVolume;
-      // Signal chain:
-      //   masterGainNode → noiseGateNode → compressor
-      //     → highShelfNode → outputGainNode → destination
+
+      // ── Dry path nodes ───────────────────────────────────────────────────
+      this.noiseGateNode = this.context.createGain();
+      this.noiseGateNode.gain.value = 0; // Initially closed; opened per beat by openNoiseGate()
+
       this.compressor = this.context.createDynamicsCompressor();
 
-      // ハイシェルフ: 10kHz 以上を -6dB カット（「シャー」の帯域を物理的に削る）
+      // High-shelf filter: cut frequencies above 10 kHz by 6 dB.
+      // Removes the audible hiss introduced when the compressor boosts
+      // the broadband noise floor of the congas and reverb IR.
       this.highShelfNode = this.context.createBiquadFilter();
       this.highShelfNode.type = 'highshelf';
       this.highShelfNode.frequency.value = 10000;
       this.highShelfNode.gain.value = -6;
 
-      // 出力ゲイン: TRACK_GAIN 削減分を後段で補償（4× ≈ +12dB）
-      // ユーザーの masterVolume スライダー（0-100%）とは独立した固定ブースト
+      // Fixed output boost (+12 dB / 4×) to compensate for the conservative
+      // TRACK_GAIN values (≤0.7) that keep the compressor input level low.
       this.outputGainNode = this.context.createGain();
       this.outputGainNode.gain.value = 4.0;
 
-      // ルーティング
+      // Wire dry path: masterGainNode → noiseGateNode → compressor → highShelfNode → outputGainNode → destination
+      this.masterGainNode.connect(this.noiseGateNode);
+      this.noiseGateNode.connect(this.compressor);
       this.compressor.connect(this.highShelfNode);
       this.highShelfNode.connect(this.outputGainNode);
       this.outputGainNode.connect(this.context.destination);
 
-      this.noiseGateNode = this.context.createGain();
-      this.noiseGateNode.gain.value = 0; // 初期状態：閉じている
-      this.noiseGateNode.connect(this.compressor);
-      this.masterGainNode.connect(this.noiseGateNode);
-
-      // ── Reverb Send-Return Routing (一度だけ構築) ────────────────────────
-      // Wet経路: masterGainNode (Send) → reverbSendGain → convolver
-      //                               → reverbWetGain → masterGainNode (Return)
+      // ── Reverb Send-Return loop ──────────────────────────────────────────
+      // Send tap: masterGainNode → reverbSendGain (controls send level)
+      //           → convolver (IR-based room simulation)
+      //           → reverbWetGain (controls wet depth, changed via setReverb())
+      //           → masterGainNode (return; flows onward through the dry path)
+      // All source nodes connect only to masterGainNode; reverb is applied globally.
       this.reverbSendGain = this.context.createGain();
-      this.reverbSendGain.gain.value = 0.3; // センドレベル
+      this.reverbSendGain.gain.value = 0.3;
       this.convolver = this.context.createConvolver();
       this.reverbWetGain = this.context.createGain();
-      this.reverbWetGain.gain.value = 0.0; // 初期値はリバーブOFF（setReverb で変更）
+      this.reverbWetGain.gain.value = 0.0; // Starts silent; setReverb() fades this in
 
-      this.masterGainNode.connect(this.reverbSendGain);   // Send tap
+      this.masterGainNode.connect(this.reverbSendGain);
       this.reverbSendGain.connect(this.convolver);
       this.convolver.connect(this.reverbWetGain);
-      this.reverbWetGain.connect(this.masterGainNode);    // Return (masterGainNode → noiseGateNode へ流れる)
+      this.reverbWetGain.connect(this.masterGainNode); // Return into the mix bus
 
-      // ── Studio ambience: 15ms pre-delay + 0.1 feedback ──────────────────
-      // Tap from masterGainNode → delayNode; wet output bypasses the noise gate
-      // so room reflections sustain naturally after gate closes.
-      // Signal chain: masterGainNode → studioDelayNode ⟲(feedback 0.1)
-      //                                               → studioDelayWet → compressor
+      // ── Studio ambience delay ────────────────────────────────────────────
+      // A 15 ms pre-delay with light feedback gives a sense of room size without
+      // the character of a full convolution reverb. Wet output feeds the compressor
+      // directly (bypassing the noise gate) so the room tail decays naturally.
       this.studioDelayNode = this.context.createDelay(0.1);
-      this.studioDelayNode.delayTime.value = 0.015; // 15ms room reflection
+      this.studioDelayNode.delayTime.value = 0.015;
       this.studioDelayFeedback = this.context.createGain();
       this.studioDelayFeedback.gain.value = 0.1;
       this.studioDelayWet = this.context.createGain();
-      this.studioDelayWet.gain.value = 0.14; // subtle ambience level
-      // Send: masterGainNode → delay input
+      this.studioDelayWet.gain.value = 0.14;
+
       this.masterGainNode.connect(this.studioDelayNode);
-      // Feedback loop (valid in Web Audio because DelayNode breaks the cycle)
       this.studioDelayNode.connect(this.studioDelayFeedback);
-      this.studioDelayFeedback.connect(this.studioDelayNode);
-      // Wet: delay output → compressor (room tail unaffected by noise gate)
+      this.studioDelayFeedback.connect(this.studioDelayNode); // Feedback loop (DelayNode breaks the cycle)
       this.studioDelayNode.connect(this.studioDelayWet);
       this.studioDelayWet.connect(this.compressor);
 
-      // 合成 IR をセットアップ（初期リバーブ: reverbWetGain=0 なので無音）
+      // Load a synthetic room IR into the convolver (reverbWetGain=0 so inaudible at start)
       this.setupReverb(this.context);
 
-      // 初期状態を反映
+      // Apply the stored loudness setting to the freshly created compressor
       this.loudness = this._loudness;
-      // iOS が AudioContext を interrupt/suspend したとき自動で resume を試みる。
-      // _isPlaying が false のとき（意図的停止後）は何もしない。
+
+      // Resume automatically if iOS suspends the context mid-playback
       this.context.addEventListener('statechange', () => {
         if (!this._isPlaying || !this.context) return;
         if (this.context.state === 'suspended') {
@@ -520,12 +558,12 @@ export class AudioEngine {
   }
 
   /**
-   * タブがバックグラウンドから復帰したとき、iOS Safari が
-   * AudioContext を自動 suspend するので、明示的に resume する。
-   * また、無音ループが途切れていれば再開する。
+   * Registers a one-time visibilitychange listener that resumes the AudioContext
+   * and restarts the silent keep-alive loop whenever the tab becomes visible.
+   * iOS Safari automatically suspends the context on tab hide.
    */
   private attachVisibilityHandler() {
-    if (this.visibilityHandler) return; // 二重登録しない
+    if (this.visibilityHandler) return; // Register only once
     this.visibilityHandler = () => {
       if (document.visibilityState !== 'visible') return;
       if (!this._isPlaying || !this.context) return;
@@ -536,9 +574,10 @@ export class AudioEngine {
   }
 
   /**
-   * 無音（極小ノイズ）バッファをループ再生し、AudioContext を
-   * バックグラウンドでもアクティブに維持する。
-   * 振幅 0.00001（約 -100 dB）= 聴覚上は完全に無音。
+   * Plays a 1-second looping buffer of near-silent noise (≈−90 dBFS) directly
+   * to the destination, keeping the AudioContext alive in the iOS background.
+   * Amplitude 0.00003 is inaudible to humans but sufficient to prevent iOS
+   * from suspending the audio session.
    */
   private startSilentLoop(ctx: AudioContext) {
     this.stopSilentLoop();
@@ -561,6 +600,12 @@ export class AudioEngine {
    * iOS でスリープ後に context が無効化された場合の復帰に使用。
    * AudioBuffer は context 非依存のデータ容器なので、再デコードは不要。
    */
+  /**
+   * Tears down the current AudioContext and rebuilds it from scratch.
+   * Called when iOS suspends the context during sleep and resume() times out.
+   * AudioBuffer objects are context-independent data containers, so no
+   * re-decoding is needed; getContext() calls setupReverb() internally.
+   */
   private async resetAudioContext(): Promise<AudioContext> {
     if (this.context) {
       try { await this.context.close(); } catch { /* ignore */ }
@@ -578,27 +623,27 @@ export class AudioEngine {
     this.studioDelayFeedback = null;
     this.studioDelayWet      = null;
     this.stopSilentLoop();
-    // 新コンテキスト生成（user gesture 内 → iOS でも即 running）
-    const ctx = this.getContext();
-    // リバーブを再セットアップ（IR バッファは新 ctx で再生成）
-    this.setupReverb(ctx);
-    return ctx;
+    // getContext() wires the full signal graph and calls setupReverb() — no extra call needed
+    return this.getContext();
   }
 
   /**
-   * ノイズゲートを開く。
-   * 音符スケジュール時点から GATE_HOLD 秒後に GATE_RELEASE かけてフェードアウト。
-   * 次の音符が来るたびに cancelScheduledValues でクローズをキャンセルし、
-   * ホールド時間を延長することで連続再生中はゲートが閉まらない。
+   * Opens the noise gate at the scheduled beat time.
+   *
+   * The gate stays open as long as notes keep arriving: each call cancels the
+   * previously scheduled close and reschedules it GATE_HOLD seconds later,
+   * giving the reverb tail time to decay before the gate shuts.
+   *
+   * Timeline per note:
+   *   [time]               → attack (τ=2 ms) to 1.0
+   *   [time + GATE_HOLD]   → hold ends, gate held at 1.0
+   *   [time + GATE_HOLD + GATE_RELEASE] → linear ramp to 0 (80 ms)
    */
   private openNoiseGate(time: number) {
     if (!this.noiseGateNode) return;
     const g = this.noiseGateNode.gain;
-    // 将来スケジュール済みのクローズをキャンセル（前のホールドを上書き）
-    g.cancelScheduledValues(time);
-    // スムーズなアタック（τ=2ms）
+    g.cancelScheduledValues(time); // Cancel any pending close from a previous note
     g.setTargetAtTime(1.0, time, AudioEngine.GATE_ATTACK);
-    // リバーブ残響が収まるまでホールドしてから滑らかにクローズ
     const holdUntil = time + AudioEngine.GATE_HOLD;
     g.setValueAtTime(1.0, holdUntil);
     g.linearRampToValueAtTime(0.0, holdUntil + AudioEngine.GATE_RELEASE);
@@ -614,14 +659,16 @@ export class AudioEngine {
   }
 
   /**
-   * 合成ルームIRを生成して ConvolverNode のバッファをセット。
-   * 指数減衰ホワイトノイズ — classic plate/room reverb technique.
-   * getContext() で作成済みの convolver インスタンスを破壊しない。
+   * Generates a synthetic room impulse response (IR) and loads it into
+   * the existing this.convolver without recreating the node.
+   *
+   * Technique: exponentially decaying stereo white noise — the classic
+   * plate/room reverb approximation.  Duration 1.2 s, decay exponent 2.8.
    */
   private setupReverb(ctx: AudioContext) {
     if (!this.convolver) return;
     const sampleRate = ctx.sampleRate;
-    const duration = 1.2;  // seconds of reverb tail
+    const duration = 1.2;
     const decay = 2.8;
     const length = Math.floor(sampleRate * duration);
     const ir = ctx.createBuffer(2, length, sampleRate);
@@ -637,12 +684,13 @@ export class AudioEngine {
   }
 
   /**
-   * リバーブタイプを切り替える。
-   * - 'none': reverbWetGain を 20ms クロスフェードでミュート（0.0001）。
-   * - 'studio'/'hall': IR ファイルをロードし、convolver.buffer を差し替えた後
-   *   reverbWetGain を 20ms クロスフェードでフェードイン。
-   * 既存の reverbSendGain/convolver/reverbWetGain ノードを再利用し、
-   * 新規ノード生成・接続は行わない。
+   * Switches the reverb type by crossfading reverbWetGain over ~20 ms.
+   * Reuses the existing convolver node — no new nodes are created or connected.
+   *
+   * 'none'          → fade reverbWetGain to 0.0001 (effectively silent)
+   * 'studio'/'hall' → fetch IR, swap convolver.buffer, then fade gain in to 1.0
+   *
+   * The crossfade prevents audible clicks when the buffer is replaced mid-playback.
    */
   private async loadReverbSample(type: 'studio' | 'hall' | 'none') {
     if (!this.context || !this.convolver || !this.reverbWetGain) return;
@@ -651,35 +699,29 @@ export class AudioEngine {
     const g = this.reverbWetGain.gain;
 
     if (type === 'none') {
-      // 20ms でリバーブをミュート
       g.cancelScheduledValues(now);
       g.setValueAtTime(Math.max(g.value, 0.0001), now);
       g.exponentialRampToValueAtTime(0.0001, now + 0.02);
       return;
     }
 
-    let url = '';
-    switch (type) {
-      case 'studio':
-        url = 'https://example.com/studio-reverb.wav'; // プレースホルダー
-        break;
-      case 'hall':
-        url = 'https://example.com/hall-reverb.wav'; // プレースホルダー
-        break;
-    }
+    const urls: Record<'studio' | 'hall', string> = {
+      studio: 'https://example.com/studio-reverb.wav', // placeholder
+      hall:   'https://example.com/hall-reverb.wav',   // placeholder
+    };
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(urls[type]);
       const arrayBuffer = await response.arrayBuffer();
       const audioBuffer = await this.context.decodeAudioData(arrayBuffer);
 
-      // 一旦フェードアウト → バッファ差し替え → フェードイン（クロスフェード）
+      // Crossfade: fade out (10 ms) → swap buffer → fade in (10 ms)
       g.cancelScheduledValues(now);
       g.setValueAtTime(Math.max(g.value, 0.0001), now);
-      g.exponentialRampToValueAtTime(0.0001, now + 0.01); // 10ms でフェードアウト
+      g.exponentialRampToValueAtTime(0.0001, now + 0.01);
       this.convolver.buffer = audioBuffer;
       g.setValueAtTime(0.0001, now + 0.01);
-      g.exponentialRampToValueAtTime(1.0, now + 0.02);   // 10ms でフェードイン
+      g.exponentialRampToValueAtTime(1.0, now + 0.02);
     } catch (error) {
       console.error('Failed to load reverb sample:', error);
     }
@@ -776,12 +818,13 @@ export class AudioEngine {
     src.playbackRate.value = pitch;
 
     const gainNode = ctx.createGain();
-    // ゼロクロス・フェード: 段差ノイズを防ぐ 3ms アタック
+    // 3 ms exponential ramp from near-zero avoids the click caused by a gain step
     gainNode.gain.setValueAtTime(0.0001, time);
     gainNode.gain.exponentialRampToValueAtTime(gain, time + 0.003);
     src.connect(gainNode);
 
-    // Dry path → masterGainNode（リバーブは masterGainNode からのグローバル Send-Return で処理）
+    // Connect only to masterGainNode; reverb is handled globally via the
+    // Send-Return loop (masterGainNode → reverbSendGain → convolver → reverbWetGain → masterGainNode)
     gainNode.connect(this.masterGainNode!);
 
     src.start(time);

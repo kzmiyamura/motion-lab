@@ -392,8 +392,10 @@ export class AudioEngine {
   }
 
   async start(delayMs = 0): Promise<void> {
+    console.log('[AudioEngine] start() called, _isPlaying=', this._isPlaying);
     if (this._isPlaying) return;
     let ctx = this.getContext();
+    console.log('[AudioEngine] ctx.state=', ctx.state);
 
     if (ctx.state !== 'running') {
       // iOS ではスリープ後に resume() が永久に resolve されないケースがある。
@@ -403,11 +405,14 @@ export class AudioEngine {
           ctx.resume(),
           new Promise<void>(resolve => setTimeout(resolve, 500)),
         ]);
-      } catch { /* ignore */ }
+      } catch (e) { console.warn('[AudioEngine] resume() threw:', e); }
+      console.log('[AudioEngine] after resume, ctx.state=', this.context?.state);
 
       if (this.context?.state !== 'running') {
         // iOS の user gesture 内で新規 AudioContext を生成すると即 running になる
+        console.warn('[AudioEngine] context not running after resume — resetting');
         ctx = await this.resetAudioContext();
+        console.log('[AudioEngine] after resetAudioContext, ctx.state=', ctx.state);
       }
     }
 
@@ -430,6 +435,7 @@ export class AudioEngine {
     }, LOOKAHEAD_MS);
     this.startSilentLoop(ctx);
     this.attachVisibilityHandler();
+    console.log('[AudioEngine] start() complete, _isPlaying=', this._isPlaying, 'gen=', gen);
   }
 
   /** Shift all future beats forward (positive ms) or backward (negative ms). */

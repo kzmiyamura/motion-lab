@@ -6,8 +6,8 @@
   width: 100%;
   max-width: 640px;
   padding: 0.65rem 0.9rem;
-  background: rgba(124, 107, 255, 0.1);
-  border: 1px solid rgba(124, 107, 255, 0.3);
+  background: var(--color-accent, rgba(124, 107, 255, 0.1));
+  border: 1px solid var(--color-accent, rgba(124, 107, 255, 0.3));
   border-radius: 10px;
   margin-bottom: 0.25rem;
   animation: fadeIn 0.3s ease-out;
@@ -34,7 +34,7 @@
 .installBtn {
   flex-shrink: 0;
   padding: 0.35rem 0.9rem;
-  border: 1.5px solid #7c6bff;
+  border: 1.5px solid var(--color-accent, #7c6bff);
   border-radius: 20px;
   background: transparent;
   color: #a090ff;
@@ -44,7 +44,7 @@
   white-space: nowrap;
   transition: background 0.15s;
 }
-.installBtn:active { background: rgba(124, 107, 255, 0.2); }
+.installBtn:active { background: var(--color-accent, rgba(124, 107, 255, 0.2)); }
 
 .closeBtn {
   flex-shrink: 0;
@@ -85,8 +85,8 @@
   position: relative;
   width: 100%;
   max-width: 360px;
-  background: #13132a;
-  border: 1px solid #2a2a50;
+  background: var(--color-ui-dark3, #13132a);
+  border: 1px solid var(--color-border2, #2a2a50);
   border-radius: 20px;
   padding: 1.5rem 1.25rem 1.25rem;
   animation: popIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -106,8 +106,8 @@
   width: 28px;
   height: 28px;
   border: none;
-  background: #1e1e40;
-  color: #6060a0;
+  background: var(--color-ui-dark, #1e1e40);
+  color: var(--color-fg-dim, #6060a0);
   border-radius: 50%;
   font-size: 0.7rem;
   cursor: pointer;
@@ -143,8 +143,8 @@
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: rgba(124, 107, 255, 0.2);
-  border: 1px solid #4a42a0;
+  background: var(--color-accent, rgba(124, 107, 255, 0.2));
+  border: 1px solid var(--color-ui-border-hover, #4a42a0);
   color: #9080e0;
   font-size: 0.72rem;
   font-weight: 800;
@@ -172,8 +172,8 @@
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  background: #1a1a30;
-  border: 1px solid #2a2a50;
+  background: var(--color-ui-dark2, #1a1a30);
+  border: 1px solid var(--color-border2, #2a2a50);
   border-radius: 10px;
   padding: 0.45rem 0.7rem;
 }
@@ -182,7 +182,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #2a2a50;
+  background: var(--color-border2, #2a2a50);
   flex-shrink: 0;
 }
 
@@ -204,8 +204,8 @@
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  background: rgba(124, 107, 255, 0.2);
-  border: 1.5px solid #7c6bff;
+  background: var(--color-accent, rgba(124, 107, 255, 0.2));
+  border: 1.5px solid var(--color-accent, #7c6bff);
   color: #a090ff;
   animation: pulse 1.8s ease-in-out infinite;
 }
@@ -222,8 +222,8 @@
 
 /* ── メニュープレビュー ────────────────────────────────────────────────────── */
 .menuPreview {
-  background: #1a1a30;
-  border: 1px solid #2a2a50;
+  background: var(--color-ui-dark2, #1a1a30);
+  border: 1px solid var(--color-border2, #2a2a50);
   border-radius: 10px;
   overflow: hidden;
   margin-bottom: 0.5rem;
@@ -231,7 +231,7 @@
 
 .menuItem {
   font-size: 0.75rem;
-  color: #5050a0;
+  color: var(--color-ui-text-dim, #5050a0);
   padding: 0.45rem 0.75rem;
   border-bottom: 1px solid #22223a;
 }
@@ -242,7 +242,7 @@
   align-items: center;
   gap: 0.4rem;
   color: #c0b0ff;
-  background: rgba(124, 107, 255, 0.12);
+  background: var(--color-accent, rgba(124, 107, 255, 0.12));
   font-weight: 700;
 }
 
@@ -250,7 +250,7 @@
   width: 18px;
   height: 18px;
   border-radius: 4px;
-  background: rgba(124, 107, 255, 0.3);
+  background: var(--color-accent, rgba(124, 107, 255, 0.3));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -270,13 +270,13 @@
   width: 100%;
   margin-top: 0.5rem;
   padding: 0.7rem;
-  border: 1.5px solid #4a42a0;
+  border: 1.5px solid var(--color-ui-border-hover, #4a42a0);
   border-radius: 12px;
-  background: rgba(124, 107, 255, 0.1);
+  background: var(--color-accent, rgba(124, 107, 255, 0.1));
   color: #a090e0;
   font-size: 0.9rem;
   font-weight: 700;
   cursor: pointer;
   transition: background 0.15s;
 }
-.modalOk:active { background: rgba(124, 107, 255, 0.25); }
+.modalOk:active { background: var(--color-accent, rgba(124, 107, 255, 0.25)); }

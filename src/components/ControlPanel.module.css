@@ -3,9 +3,9 @@
   flex-direction: column;
   gap: 1.25rem;
   padding: 1.5rem 2rem;
-  background: #1a1a2e;
+  background: var(--color-machine, #1a1a2e);
   border-radius: 12px;
-  border: 1px solid #2a2a4a;
+  border: 1px solid var(--color-border2, #2a2a4a);
   width: 100%;
   max-width: 520px;
 }
@@ -24,8 +24,8 @@
   gap: 2px;
   padding: 0.65rem 0.75rem;
   border-radius: 9px;
-  border: 1.5px solid #2a2a4a;
-  background: #0e0e22;
+  border: 1.5px solid var(--color-border2, #2a2a4a);
+  background: var(--color-ui-dark, #0e0e22);
   cursor: pointer;
   text-align: left;
   transition: border-color 0.15s, background 0.15s;
@@ -33,20 +33,20 @@
 }
 
 .catBtn:hover {
-  border-color: #4a42a0;
-  background: #13132a;
+  border-color: var(--color-ui-border-hover, #4a42a0);
+  background: var(--color-ui-dark3, #13132a);
 }
 
 .catBtnActive {
-  border-color: #7c6bff;
-  background: #16143a;
+  border-color: var(--color-accent, #7c6bff);
+  background: var(--color-ui-medium, #16143a);
   box-shadow: 0 0 0 2px rgba(124, 107, 255, 0.2);
 }
 
 .catLabel {
   font-size: 0.82rem;
   font-weight: 700;
-  color: #c0b8ff;
+  color: var(--color-ui-text-bright, #c0b8ff);
   line-height: 1;
 }
 
@@ -56,7 +56,7 @@
 
 .catSublabel {
   font-size: 0.65rem;
-  color: #5050a0;
+  color: var(--color-ui-text-dim, #5050a0);
   line-height: 1;
 }
 
@@ -68,7 +68,7 @@
   font-size: 0.72rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: #7c6bff;
+  color: var(--color-accent, #7c6bff);
   line-height: 1;
   margin-top: 2px;
 }
@@ -80,8 +80,8 @@
   line-height: 1.5;
   margin: 0;
   padding: 0.5rem 0.75rem;
-  border-left: 2px solid #7c6bff;
-  background: #0e0e1e;
+  border-left: 2px solid var(--color-accent, #7c6bff);
+  background: var(--color-surface, #0e0e1e);
   border-radius: 0 6px 6px 0;
 }
 
@@ -96,13 +96,13 @@
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #a0a0c0;
+  color: var(--color-fg-dim, #a0a0c0);
   min-width: 3rem;
 }
 
 .slider {
   flex: 1;
-  accent-color: #7c6bff;
+  accent-color: var(--color-accent, #7c6bff);
   cursor: pointer;
   height: 4px;
 }
@@ -137,7 +137,7 @@
 }
 
 .btnStart {
-  background: #7c6bff;
+  background: var(--color-accent, #7c6bff);
   color: #fff;
 }
 
@@ -146,7 +146,7 @@
 }
 
 .btnStop {
-  background: #ff6b6b;
+  background: var(--color-button-red, #ff6b6b);
   color: #fff;
 }
 
@@ -161,20 +161,20 @@
 
 .fileLabel {
   font-size: 0.8rem;
-  color: #6060a0;
+  color: var(--color-fg-dim, #6060a0);
   cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.25rem;
   padding: 0.5rem 1rem;
-  border: 1px dashed #3a3a6a;
+  border: 1px dashed var(--color-ui-border, #3a3a6a);
   border-radius: 6px;
   transition: border-color 0.2s, color 0.2s;
 }
 
 .fileLabel:hover {
-  border-color: #7c6bff;
+  border-color: var(--color-accent, #7c6bff);
   color: #a0a0e0;
 }
 
@@ -189,9 +189,9 @@
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.6rem 0.75rem;
-  background: #0e0e1e;
+  background: var(--color-surface, #0e0e1e);
   border-radius: 8px;
-  border: 1px solid #1e1e3a;
+  border: 1px solid var(--color-border, #1e1e3a);
 }
 
 .settingsLabel {
@@ -217,14 +217,14 @@
   height: 26px;
   border-radius: 13px;
   border: none;
-  background: #2a2a4a;
+  background: var(--color-border2, #2a2a4a);
   cursor: pointer;
   transition: background 0.2s;
   padding: 0;
 }
 
 .toggleOn {
-  background: #7c6bff;
+  background: var(--color-accent, #7c6bff);
 }
 
 .toggleThumb {

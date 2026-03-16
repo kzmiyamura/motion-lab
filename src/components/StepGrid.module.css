@@ -44,27 +44,27 @@
 
 /* ── Checked (音が鳴る) ── */
 .checked {
-  background: #2a2a4a;
-  border-color: #7c6bff;
-  color: #c0b8ff;
+  background: var(--color-border2, #2a2a4a);
+  border-color: var(--color-accent, #7c6bff);
+  color: var(--color-ui-text-bright, #c0b8ff);
 }
 
 .checked.accent {
-  border-color: #ff9f43;
+  border-color: var(--color-step-accent, #ff9f43);
   color: #ffcf9f;
   background: #2a1f0a;
 }
 
 /* ── Unchecked (サイレント) ── */
 .unchecked {
-  background: #111128;
-  border-color: #2a2a4a;
-  color: #3a3a6a;
+  background: var(--color-ui-dark, #111128);
+  border-color: var(--color-border2, #2a2a4a);
+  color: var(--color-ui-border, #3a3a6a);
 }
 
 /* ── Active (現在再生中) ── */
 .active {
-  background: #7c6bff;
+  background: var(--color-accent, #7c6bff);
   border-color: #9d8fff;
   color: #fff;
   box-shadow: 0 0 16px 4px rgba(124, 107, 255, 0.55);
@@ -72,7 +72,7 @@
 }
 
 .activeAccent {
-  background: #ff9f43;
+  background: var(--color-step-accent, #ff9f43);
   border-color: #ffbf7f;
   color: #fff;
   box-shadow: 0 0 16px 4px rgba(255, 159, 67, 0.55);
@@ -101,7 +101,7 @@
 
 .andStep.checked {
   background: #1e1a40;
-  border-color: #5a52b0;
+  border-color: var(--color-ui-border-hover, #5a52b0);
   color: #9088e0;
 }
 

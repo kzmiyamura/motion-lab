@@ -17,7 +17,7 @@
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #6060a0;
+  color: var(--color-fg-dim, #6060a0);
   min-width: 4rem;
 }
 
@@ -29,9 +29,9 @@
 .stepBtn {
   padding: 0.3rem 0.9rem;
   border-radius: 6px;
-  border: 1px solid #3a3a6a;
-  background: #111128;
-  color: #8080c0;
+  border: 1px solid var(--color-ui-border, #3a3a6a);
+  background: var(--color-ui-dark, #111128);
+  color: var(--color-ui-text, #8080c0);
   font-size: 0.85rem;
   font-weight: 700;
   cursor: pointer;
@@ -39,13 +39,13 @@
 }
 
 .stepBtn:hover {
-  border-color: #7c6bff;
-  color: #c0b8ff;
+  border-color: var(--color-accent, #7c6bff);
+  color: var(--color-ui-text-bright, #c0b8ff);
 }
 
 .stepBtnActive {
-  background: #2a2a4a;
-  border-color: #7c6bff;
+  background: var(--color-border2, #2a2a4a);
+  border-color: var(--color-accent, #7c6bff);
   color: #fff;
 }
 
@@ -53,9 +53,9 @@
   flex: 1;
   padding: 0.35rem 0.75rem;
   border-radius: 6px;
-  border: 1px solid #3a3a6a;
-  background: #111128;
-  color: #c0b8ff;
+  border: 1px solid var(--color-ui-border, #3a3a6a);
+  background: var(--color-ui-dark, #111128);
+  color: var(--color-ui-text-bright, #c0b8ff);
   font-size: 0.9rem;
   cursor: pointer;
   outline: none;
@@ -67,5 +67,5 @@
 }
 
 .select:focus {
-  border-color: #7c6bff;
+  border-color: var(--color-accent, #7c6bff);
 }

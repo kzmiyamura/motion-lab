@@ -3,9 +3,9 @@
   flex-direction: column;
   gap: 0.6rem;
   padding: 0.75rem;
-  background: #0e0e1e;
+  background: var(--color-surface, #0e0e1e);
   border-radius: 10px;
-  border: 1px solid #1e1e3a;
+  border: 1px solid var(--color-border, #1e1e3a);
 }
 
 .header {
@@ -19,13 +19,13 @@
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #7070b0;
+  color: var(--color-fg-dim, #7070b0);
 }
 
 .activeTag {
   font-size: 0.68rem;
   font-weight: 600;
-  color: #7c6bff;
+  color: var(--color-accent, #7c6bff);
   background: rgba(124, 107, 255, 0.12);
   padding: 2px 8px;
   border-radius: 20px;
@@ -46,9 +46,9 @@
   align-items: center;
   gap: 3px;
   padding: 0.55rem 0.25rem 0.45rem;
-  border: 1.5px solid #2a2a4a;
+  border: 1.5px solid var(--color-border2, #2a2a4a);
   border-radius: 9px;
-  background: #12122a;
+  background: var(--color-ui-dark2, #12122a);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, transform 0.1s;
   min-height: 58px;
@@ -56,8 +56,8 @@
 }
 
 .btn:hover {
-  border-color: #4a42a0;
-  background: #16143a;
+  border-color: var(--color-ui-border-hover, #4a42a0);
+  background: var(--color-ui-medium, #16143a);
 }
 
 .btn:active {
@@ -65,8 +65,8 @@
 }
 
 .btnActive {
-  border-color: #7c6bff;
-  background: #16143a;
+  border-color: var(--color-accent, #7c6bff);
+  background: var(--color-ui-medium, #16143a);
   box-shadow: 0 0 0 2px rgba(124, 107, 255, 0.2);
 }
 
@@ -77,7 +77,7 @@
   position: absolute;
   inset: 0;
   border-radius: 8px;
-  border: 1.5px solid rgba(124, 107, 255, 0.5);
+  border: 1.5px solid var(--color-accent, rgba(124, 107, 255, 0.5));
   animation: rippleWave 2.4s ease-out infinite;
   pointer-events: none;
 }
@@ -101,7 +101,7 @@
 .icon {
   font-size: 1.1rem;
   line-height: 1;
-  color: #6060a0;
+  color: var(--color-fg-dim, #6060a0);
   height: 1.2rem;
   display: flex;
   align-items: center;
@@ -116,12 +116,12 @@
   font-size: 0.65rem;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: #5050a0;
+  color: var(--color-ui-text-dim, #5050a0);
   white-space: nowrap;
 }
 
 .btnActive .btnLabel {
-  color: #c0b8ff;
+  color: var(--color-ui-text-bright, #c0b8ff);
 }
 
 /* Spinner for loading state */
@@ -129,8 +129,8 @@
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(124, 107, 255, 0.3);
-  border-top-color: #7c6bff;
+  border: 2px solid var(--color-accent, rgba(124, 107, 255, 0.3));
+  border-top-color: var(--color-accent, #7c6bff);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
@@ -153,13 +153,13 @@
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #6060a0;
+  color: var(--color-fg-dim, #6060a0);
   min-width: 2.2rem;
 }
 
 .wetSlider {
   flex: 1;
-  accent-color: #7c6bff;
+  accent-color: var(--color-accent, #7c6bff);
   cursor: pointer;
   height: 4px;
 }

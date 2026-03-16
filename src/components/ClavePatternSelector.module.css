@@ -9,8 +9,8 @@
 
 .card {
   text-align: left;
-  background: #0e0e22;
-  border: 2px solid #1e1e3a;
+  background: var(--color-ui-dark, #0e0e22);
+  border: 2px solid var(--color-border, #1e1e3a);
   border-radius: 12px;
   padding: 0.85rem 1rem;
   cursor: pointer;
@@ -21,13 +21,13 @@
 }
 
 .card:hover {
-  border-color: #4a42a0;
-  background: #13132a;
+  border-color: var(--color-ui-border-hover, #4a42a0);
+  background: var(--color-ui-dark3, #13132a);
 }
 
 .selected {
-  border-color: #7c6bff;
-  background: #16143a;
+  border-color: var(--color-accent, #7c6bff);
+  background: var(--color-ui-medium, #16143a);
   box-shadow: 0 0 0 3px rgba(124, 107, 255, 0.15);
 }
 
@@ -41,7 +41,7 @@
 .name {
   font-size: 0.85rem;
   font-weight: 700;
-  color: #c0b8ff;
+  color: var(--color-ui-text-bright, #c0b8ff);
 }
 
 .selected .name {
@@ -54,14 +54,14 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #fff;
-  background: #7c6bff;
+  background: var(--color-accent, #7c6bff);
   border-radius: 4px;
   padding: 1px 6px;
 }
 
 .description {
   font-size: 0.75rem;
-  color: #5050a0;
+  color: var(--color-ui-text-dim, #5050a0);
   line-height: 1.5;
   margin: 0;
 }

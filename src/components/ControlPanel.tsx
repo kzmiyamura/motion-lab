@@ -160,7 +160,7 @@ export function ControlPanel({
       <div className={styles.buttonRow}>
         <button
           className={`${styles.btn} ${isPlaying ? styles.btnStop : styles.btnStart}`}
-          onClick={isPlaying ? onStop : onStart}
+          onClick={() => isPlaying ? onStop() : onStart()}
           aria-label={isPlaying ? 'Stop metronome' : 'Start metronome'}
         >
           {isPlaying ? 'Stop' : 'Start'}

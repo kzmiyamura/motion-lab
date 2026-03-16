@@ -41,15 +41,7 @@ export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
 
   const start = useCallback((delayMs = 0) => {
-    console.log('[useAudioEngine] start() called, delayMs=', delayMs, 'engine.isPlaying=', audioEngine.isPlaying);
-    audioEngine.start(delayMs)
-      .then(() => {
-        console.log('[useAudioEngine] start() resolved → setIsPlaying(true)');
-        setIsPlaying(true);
-      })
-      .catch((err) => {
-        console.error('[useAudioEngine] start() rejected:', err);
-      });
+    audioEngine.start(delayMs).then(() => setIsPlaying(true));
   }, []);
 
   const stop = useCallback(() => {

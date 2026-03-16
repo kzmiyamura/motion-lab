@@ -128,6 +128,8 @@ export class AudioEngine {
   private nextBeatTime = 0;
   private currentBeat = 0;
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
+  /** Incremented on every stop() to invalidate zombie schedulers from concurrent start() calls. */
+  private schedulerGeneration = 0;
   private beatCallbacks: Set<BeatCallback> = new Set();
   private _bpm = 120;
   private _isPlaying = false;
@@ -315,7 +317,11 @@ export class AudioEngine {
         // resume 後にスケジューラが止まっていれば再起動
         if (this._isPlaying && this.schedulerTimer === null) {
           this.nextBeatTime = this.context!.currentTime + 0.05;
-          this.schedulerTimer = setInterval(() => this.schedule(), LOOKAHEAD_MS);
+          const gen = this.schedulerGeneration;
+          this.schedulerTimer = setInterval(() => {
+            if (this.schedulerGeneration !== gen) return;
+            this.schedule();
+          }, LOOKAHEAD_MS);
         }
       }).catch(() => {});
     }
@@ -405,10 +411,23 @@ export class AudioEngine {
       }
     }
 
+    // Reset the noise gate so any events left by a zombie scheduler don't block sound.
+    if (this.noiseGateNode) {
+      const g = this.noiseGateNode.gain;
+      g.cancelScheduledValues(ctx.currentTime);
+      g.setValueAtTime(0, ctx.currentTime);
+    }
+
     this._isPlaying = true;
     this.currentBeat = 0;
     this.nextBeatTime = ctx.currentTime + 0.05 + Math.max(0, delayMs) / 1000;
-    this.schedulerTimer = setInterval(() => this.schedule(), LOOKAHEAD_MS);
+    // Tag this scheduler with the current generation so stop() can invalidate it
+    // even if a concurrent start() already spawned a zombie scheduler.
+    const gen = ++this.schedulerGeneration;
+    this.schedulerTimer = setInterval(() => {
+      if (this.schedulerGeneration !== gen) return; // zombie — bail out
+      this.schedule();
+    }, LOOKAHEAD_MS);
     this.startSilentLoop(ctx);
     this.attachVisibilityHandler();
   }
@@ -425,6 +444,9 @@ export class AudioEngine {
   stop() {
     if (!this._isPlaying) return;
     this._isPlaying = false;
+    // Increment generation to invalidate ALL schedulers — including any zombie
+    // timers spawned by concurrent start() calls (async await race condition).
+    this.schedulerGeneration++;
     if (this.schedulerTimer !== null) {
       clearInterval(this.schedulerTimer);
       this.schedulerTimer = null;

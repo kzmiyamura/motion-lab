@@ -28,10 +28,19 @@ function extractVideoId(input: string): string | null {
   return null;
 }
 
+/** Format seconds → "M:SS.s" */
+function formatVideoTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = (sec % 60).toFixed(1).padStart(4, '0');
+  return `${m}:${s}`;
+}
+
 export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, onAdjustOffset }: Props) {
   const [urlInput, setUrlInput] = useState('');
   const [videoId, setVideoId] = useState<string | null>(null);
   const [baseBpm, setBaseBpm] = useState<number | null>(null);
+  /** Video timestamp (seconds) captured when the user started measuring beat 1 */
+  const [syncPoint, setSyncPoint] = useState<number | null>(null);
   const [ytVolume, setYtVolume] = useState(80);
   const [ytMuted, setYtMuted] = useState(false);
   const [offset, setOffset] = useState(0);
@@ -51,6 +60,30 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
     firstTapSet,
     handlePressStart, handlePressEnd, handleTap,
   } = useBpmMeasure(handleMeasuredBpm, bpm);
+
+  /** Capture the current video position as beat-1 anchor, then start the measurement */
+  const captureSyncPoint = useCallback(() => {
+    try {
+      const t = playerRef.current?.getCurrentTime?.();
+      if (typeof t === 'number' && isFinite(t)) {
+        setSyncPoint(t);
+      }
+    } catch { /* player not ready */ }
+  }, []);
+
+  /** Long-press wrapper: capture syncPoint on pointerdown */
+  const handleMeasurePressStart = useCallback(() => {
+    captureSyncPoint();
+    handlePressStart();
+  }, [captureSyncPoint, handlePressStart]);
+
+  /** Two-tap wrapper: capture syncPoint on the FIRST tap only */
+  const handleMeasureTap = useCallback(() => {
+    if (!firstTapSet) {
+      captureSyncPoint();
+    }
+    handleTap();
+  }, [firstTapSet, captureSyncPoint, handleTap]);
 
   /* Playback rate: currentBpm / baseBpm */
   useEffect(() => {
@@ -74,7 +107,10 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
 
   const handleLoad = useCallback(() => {
     const id = extractVideoId(urlInput);
-    if (id) setVideoId(id);
+    if (id) {
+      setVideoId(id);
+      setSyncPoint(null); // reset on new video
+    }
   }, [urlInput]);
 
   const handlePlayerReady = useCallback((e: { target: YouTubePlayer }) => {
@@ -93,15 +129,19 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
     }
   }, [onStart, offset]);
 
-  /* iOS: both calls in same user gesture */
+  /**
+   * Start Sync — iOS compatible: both calls in same user gesture.
+   * Seeks to syncPoint (beat 1 captured during measurement) so that
+   * video beat 1 and AudioEngine beat 1 start at the same instant.
+   */
   const handleSyncStart = useCallback(() => {
     pendingSyncRef.current = true;
     try {
-      playerRef.current?.seekTo(0);
+      playerRef.current?.seekTo(syncPoint ?? 0, true);
       playerRef.current?.playVideo();
     } catch { /* ignore */ }
     onStart(offset);
-  }, [onStart, offset]);
+  }, [onStart, offset, syncPoint]);
 
   const handleStop = useCallback(() => {
     try { playerRef.current?.pauseVideo(); } catch { /* ignore */ }
@@ -154,7 +194,7 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
         {mode === 'longpress' ? (
           <button
             className={`${styles.measureBtn} ${isPressing ? styles.measureBtnActive : ''}`}
-            onPointerDown={handlePressStart}
+            onPointerDown={handleMeasurePressStart}
             onPointerUp={handlePressEnd}
             onPointerLeave={handlePressEnd}
           >
@@ -165,7 +205,7 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
         ) : (
           <button
             className={`${styles.measureBtn} ${(isPressing || firstTapSet) ? styles.measureBtnActive : ''}`}
-            onClick={handleTap}
+            onClick={handleMeasureTap}
           >
             {!firstTapSet
               ? '「1」でタップ'
@@ -180,6 +220,19 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
             {bpm !== baseBpm && (
               <span className={styles.rateTag}>×{playbackRate.toFixed(2)}</span>
             )}
+          </div>
+        )}
+
+        {/* syncPoint indicator */}
+        {syncPoint !== null && (
+          <div className={styles.syncPointRow}>
+            <span className={styles.syncPointIcon}>●</span>
+            <span className={styles.syncPointLabel}>
+              同期ポイント
+            </span>
+            <span className={styles.syncPointValue}>
+              {formatVideoTime(syncPoint)}
+            </span>
           </div>
         )}
       </div>
@@ -242,9 +295,14 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
       <div className={styles.block}>
         <div className={styles.blockHeader}>
           <span className={styles.blockLabel}>同期</span>
+          {syncPoint !== null && (
+            <span className={styles.syncPointBadge}>
+              beat 1 @ {formatVideoTime(syncPoint)}
+            </span>
+          )}
         </div>
 
-        {/* Offset */}
+        {/* Offset fine-tuning */}
         <div className={styles.offsetRow}>
           <span className={styles.offsetLabel}>ラグ補正</span>
           <button className={styles.offsetBtn} onClick={() => handleOffsetAdjust(-50)}>−</button>
@@ -266,7 +324,9 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
             disabled={!videoId}
             title={!videoId ? 'YouTube URLを先に読み込んでください' : ''}
           >
-            ▶ Start Sync
+            {syncPoint !== null
+              ? `▶ Start Sync  (→ ${formatVideoTime(syncPoint)})`
+              : '▶ Start Sync'}
           </button>
         )}
       </div>

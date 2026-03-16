@@ -157,6 +157,49 @@
   border-radius: 20px;
 }
 
+/* ── Sync point indicator (in BPM block) ── */
+.syncPointRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  animation: fadeIn 0.25s ease;
+}
+
+.syncPointIcon {
+  color: #60c080;
+  font-size: 0.55rem;
+}
+
+.syncPointLabel {
+  color: #6060a0;
+  font-weight: 600;
+}
+
+.syncPointValue {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #90e0b0;
+}
+
+/* syncPoint badge in 同期 block header */
+.syncPointBadge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #60c080;
+  background: rgba(96, 192, 128, 0.1);
+  border: 1px solid rgba(96, 192, 128, 0.25);
+  padding: 2px 8px;
+  border-radius: 20px;
+  animation: fadeIn 0.25s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* ── URL input ── */
 .urlRow {
   display: flex;

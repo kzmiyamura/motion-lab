@@ -40,8 +40,8 @@ const BACHATA_DEFAULT_MUTED: TrackId[] = [
 export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
 
-  const start = useCallback(() => {
-    audioEngine.start().then(() => setIsPlaying(true));
+  const start = useCallback((delayMs = 0) => {
+    audioEngine.start(delayMs).then(() => setIsPlaying(true));
   }, []);
 
   const stop = useCallback(() => {

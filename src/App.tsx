@@ -7,6 +7,7 @@ import { FlipIndicator } from './components/FlipIndicator';
 import { SamplesStatus } from './components/SamplesStatus';
 import { InstallPrompt } from './components/InstallPrompt';
 import { UpdateToast } from './components/UpdateToast';
+import { YouTubeControl } from './components/YouTubeControl';
 import styles from './App.module.css';
 
 function App() {
@@ -203,6 +204,18 @@ function App() {
           isReverbLoading={isReverbLoading}
           reverbWetLevel={reverbWetLevel}
           onReverbWetLevelChange={setReverbWetLevel}
+        />
+      </section>
+
+      {/* ── YouTube Sync ── */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>YouTube Sync</h2>
+        <YouTubeControl
+          isPlaying={isPlaying}
+          bpm={bpm}
+          onBpmChange={setBpm}
+          onStart={start}
+          onStop={stop}
         />
       </section>
 

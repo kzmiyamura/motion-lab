@@ -385,7 +385,7 @@ export class AudioEngine {
     this._reverbType = type;
   }
 
-  async start(): Promise<void> {
+  async start(delayMs = 0): Promise<void> {
     if (this._isPlaying) return;
     let ctx = this.getContext();
 
@@ -407,7 +407,7 @@ export class AudioEngine {
 
     this._isPlaying = true;
     this.currentBeat = 0;
-    this.nextBeatTime = ctx.currentTime + 0.05;
+    this.nextBeatTime = ctx.currentTime + 0.05 + Math.max(0, delayMs) / 1000;
     this.schedulerTimer = setInterval(() => this.schedule(), LOOKAHEAD_MS);
     this.startSilentLoop(ctx);
     this.attachVisibilityHandler();

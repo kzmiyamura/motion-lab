@@ -444,6 +444,10 @@ export function useAudioEngine() {
     }
   }, [applyBachataPattern, clearSectionGains]);
 
+  const adjustBeatOffset = useCallback((ms: number) => {
+    audioEngine.adjustBeatOffset(ms);
+  }, []);
+
   const loadAudioFile = useCallback(async (file: File) => {
     const arrayBuffer = await file.arrayBuffer();
     await audioEngine.loadBuffer(arrayBuffer);
@@ -520,6 +524,7 @@ export function useAudioEngine() {
     bachataSection, setBachataSection,
     samplesReady, samplesOffline,
     start, stop,
+    adjustBeatOffset,
     loadAudioFile,
     reverbType, setReverb, isReverbLoading,
     reverbWetLevel, setReverbWetLevel,

@@ -30,6 +30,7 @@ function App() {
     bachataSection, setBachataSection,
     samplesReady, samplesOffline,
     start, stop,
+    adjustBeatOffset,
     loadAudioFile,
     reverbType, setReverb, isReverbLoading,
     reverbWetLevel, setReverbWetLevel,
@@ -216,6 +217,7 @@ function App() {
           onBpmChange={setBpm}
           onStart={start}
           onStop={stop}
+          onAdjustOffset={adjustBeatOffset}
         />
       </section>
 

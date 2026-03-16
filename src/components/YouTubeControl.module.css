@@ -2,18 +2,26 @@
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+/* ── Block (each sub-section) ── */
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
   padding: 0.85rem;
   background: #0e0e1e;
   border-radius: 10px;
   border: 1px solid #1e1e3a;
 }
 
-.header {
+.blockHeader {
   display: flex;
   align-items: center;
+  justify-content: space-between;
 }
 
-.title {
+.blockLabel {
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.1em;
@@ -21,7 +29,135 @@
   color: #7070b0;
 }
 
-/* ── URL Input ── */
+/* ── Mode toggle ── */
+.modeToggle {
+  display: flex;
+  gap: 4px;
+}
+
+.modeBtn {
+  padding: 0.25rem 0.7rem;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  border-radius: 20px;
+  color: #5050a0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.modeBtnActive {
+  border-color: #7c6bff;
+  color: #c0b8ff;
+  background: #16143a;
+}
+
+/* ── Beat dots 1–8 ── */
+.beatDots {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+
+.beatDot {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  color: #40406a;
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.beatDotLit {
+  background: #1a1848;
+  border-color: #7c6bff;
+  color: #a090ff;
+}
+
+.beatDotCurrent {
+  background: #7c6bff;
+  border-color: #9d8fff;
+  color: #fff;
+  box-shadow: 0 0 8px rgba(124, 107, 255, 0.6);
+  animation: beatPulse 0.3s ease;
+}
+
+@keyframes beatPulse {
+  0%   { transform: scale(1.3); }
+  100% { transform: scale(1); }
+}
+
+/* ── Measure button ── */
+.measureBtn {
+  padding: 0.65rem 1rem;
+  background: #12122a;
+  border: 1.5px solid #3a3a6a;
+  border-radius: 9px;
+  color: #9090c0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.measureBtnActive {
+  background: #1a1848;
+  border-color: #7c6bff;
+  color: #c0b8ff;
+  animation: measurePulse 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes measurePulse {
+  from { box-shadow: 0 0 4px rgba(124, 107, 255, 0.3); }
+  to   { box-shadow: 0 0 14px rgba(124, 107, 255, 0.7); }
+}
+
+/* ── BPM result ── */
+.bpmResult {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(124, 107, 255, 0.08);
+  border-radius: 7px;
+  border: 1px solid rgba(124, 107, 255, 0.2);
+}
+
+.bpmResultValue {
+  font-size: 1.4rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #c0b8ff;
+}
+
+.bpmResultUnit {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #7070b0;
+  flex: 1;
+}
+
+.rateTag {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #7c6bff;
+  background: rgba(124, 107, 255, 0.12);
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+
+/* ── URL input ── */
 .urlRow {
   display: flex;
   gap: 0.5rem;
@@ -61,10 +197,9 @@
 
 .loadBtn:hover {
   border-color: #7c6bff;
-  background: #1a1a3a;
 }
 
-/* ── Player ── */
+/* ── YouTube player ── */
 .playerWrapper {
   position: relative;
   width: 100%;
@@ -81,58 +216,56 @@
   height: 100%;
 }
 
-/* react-youtube renders an iframe inside a div — target the iframe */
 .ytFrame iframe {
   width: 100% !important;
   height: 100% !important;
 }
 
-/* ── Tap Tempo ── */
-.tapRow {
+/* ── Volume ── */
+.volRow {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
 }
 
-.tapBtn {
-  padding: 0.5rem 1rem;
-  background: #1a1a3a;
-  border: 1.5px solid #4a42a0;
-  border-radius: 8px;
-  color: #b0a8ff;
-  font-size: 0.85rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.1s, transform 0.08s;
-  user-select: none;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.tapBtn:active {
-  transform: scale(0.94);
-  background: #20204a;
-}
-
-.tapInfo {
-  flex: 1;
-  font-size: 0.78rem;
-  color: #7070b0;
-  font-variant-numeric: tabular-nums;
-}
-
-.resetBtn {
+.muteBtn {
   background: none;
   border: none;
-  color: #404070;
-  font-size: 0.85rem;
+  font-size: 1.1rem;
   cursor: pointer;
-  padding: 0.2rem 0.4rem;
+  padding: 0.2rem;
   border-radius: 4px;
-  transition: color 0.15s;
+  line-height: 1;
+  opacity: 0.8;
+  transition: opacity 0.15s;
 }
 
-.resetBtn:hover {
-  color: #8080b0;
+.muteBtn:hover {
+  opacity: 1;
+}
+
+.muteBtnMuted {
+  opacity: 0.5;
+}
+
+.volSlider {
+  flex: 1;
+  accent-color: #7c6bff;
+  cursor: pointer;
+  height: 4px;
+}
+
+.volSlider:disabled {
+  opacity: 0.3;
+}
+
+.volValue {
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #7070b0;
+  min-width: 2.5rem;
+  text-align: right;
 }
 
 /* ── Offset ── */
@@ -148,12 +281,12 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #6060a0;
-  min-width: 4rem;
+  flex: 1;
 }
 
 .offsetBtn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: #12122a;
   border: 1.5px solid #2a2a4a;
@@ -166,14 +299,9 @@
   transition: border-color 0.15s, background 0.15s;
 }
 
-.offsetBtn:hover:not(:disabled) {
+.offsetBtn:hover {
   border-color: #7c6bff;
   background: #16143a;
-}
-
-.offsetBtn:disabled {
-  opacity: 0.3;
-  cursor: default;
 }
 
 .offsetValue {
@@ -181,19 +309,15 @@
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: #a0a0d0;
-  min-width: 3.5rem;
+  min-width: 4rem;
   text-align: center;
 }
 
-/* ── Sync Start / Stop ── */
-.syncRow {
-  display: flex;
-}
-
+/* ── Sync button ── */
 .syncBtn {
-  flex: 1;
-  padding: 0.6rem 1rem;
-  border-radius: 8px;
+  width: 100%;
+  padding: 0.65rem 1rem;
+  border-radius: 9px;
   font-size: 0.9rem;
   font-weight: 700;
   cursor: pointer;
@@ -229,8 +353,13 @@
 
 /* ── Mobile ── */
 @media (max-width: 480px) {
-  .tapBtn {
+  .beatDot {
+    width: 26px;
+    height: 26px;
+    font-size: 0.65rem;
+  }
+
+  .measureBtn {
     font-size: 0.8rem;
-    padding: 0.45rem 0.8rem;
   }
 }

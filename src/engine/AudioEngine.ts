@@ -413,6 +413,15 @@ export class AudioEngine {
     this.attachVisibilityHandler();
   }
 
+  /** Shift all future beats forward (positive ms) or backward (negative ms). */
+  adjustBeatOffset(ms: number) {
+    if (!this._isPlaying || !this.context) return;
+    this.nextBeatTime = Math.max(
+      this.context.currentTime,
+      this.nextBeatTime + ms / 1000,
+    );
+  }
+
   stop() {
     if (!this._isPlaying) return;
     this._isPlaying = false;

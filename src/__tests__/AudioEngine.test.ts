@@ -81,4 +81,53 @@ describe('AudioEngine', () => {
     // Should resolve without throwing (mock decodeAudioData returns {})
     await expect(engine.loadBuffer(fakeArrayBuffer)).resolves.toBeUndefined();
   });
+
+  // ── Stop / restart cycle ──────────────────────────────────────────────────
+
+  it('can restart after stop()', () => {
+    engine.start();
+    engine.stop();
+    engine.start();
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('fires onBeat after stop() then start()', async () => {
+    const cb = vi.fn();
+    engine.onBeat(cb);
+    engine.start();
+    engine.stop();
+    cb.mockClear();
+    engine.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(cb).toHaveBeenCalled();
+  });
+
+  it('stop() increments schedulerGeneration to invalidate zombie schedulers', () => {
+    engine.start();
+    const genBefore = (engine as any).schedulerGeneration;
+    engine.stop();
+    expect((engine as any).schedulerGeneration).toBeGreaterThan(genBefore);
+  });
+
+  it('noiseGate gain is reset to 0 on start()', () => {
+    engine.start();
+    engine.stop();
+    engine.start();
+    const noiseGate = (engine as any).noiseGateNode;
+    expect(noiseGate.gain.setValueAtTime).toHaveBeenCalledWith(0, expect.any(Number));
+  });
+
+  it('onBeat continues firing across multiple stop/start cycles', async () => {
+    const cb = vi.fn();
+    engine.onBeat(cb);
+    for (let i = 0; i < 3; i++) {
+      engine.start();
+      await vi.advanceTimersByTimeAsync(100);
+      engine.stop();
+      cb.mockClear();
+    }
+    engine.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(cb).toHaveBeenCalled();
+  });
 });

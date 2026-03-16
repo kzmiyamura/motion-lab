@@ -3,8 +3,6 @@ import YouTube, { type YouTubePlayer } from 'react-youtube';
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import styles from './YouTubeControl.module.css';
 
-const YT_PLAYING = 1;
-
 type Props = {
   isPlaying: boolean;
   bpm: number;
@@ -47,7 +45,6 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
 
   const playerRef = useRef<YouTubePlayer | null>(null);
   const playerReadyRef = useRef(false);
-  const pendingSyncRef = useRef(false);
 
   const handleMeasuredBpm = useCallback((measured: number) => {
     setBaseBpm(measured);
@@ -119,15 +116,9 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
     try { e.target.setVolume(ytVolume); } catch { /* ignore */ }
   }, [ytVolume]);
 
-  const handleStateChange = useCallback((e: { data: number }) => {
-    if (e.data === YT_PLAYING) {
-      if (!pendingSyncRef.current) {
-        // User used native YouTube play button (non-iOS path)
-        onStart(offset);
-      }
-      pendingSyncRef.current = false;
-    }
-  }, [onStart, offset]);
+  // State change is observed only to keep UI in sync — AudioEngine is
+  // started exclusively from handleSyncStart (same user gesture, iOS safe).
+  const handleStateChange = useCallback((_e: { data: number }) => {}, []);
 
   /**
    * Start Sync — iOS compatible: both calls in same user gesture.
@@ -135,7 +126,6 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
    * video beat 1 and AudioEngine beat 1 start at the same instant.
    */
   const handleSyncStart = useCallback(() => {
-    pendingSyncRef.current = true;
     try {
       playerRef.current?.seekTo(syncPoint ?? 0, true);
       playerRef.current?.playVideo();

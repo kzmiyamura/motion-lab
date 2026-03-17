@@ -1,4 +1,4 @@
-# Motion Lab — Salsa Rhythm Trainer
+# Motion Lab — Dance Rhythm Trainer
 
 **本番URL:** https://motion-lab-apa.pages.dev/
 
@@ -12,13 +12,27 @@
 
 ## 概要
 
-サルサダンス向けのリズムトレーナー PWA。
+サルサ・バチャータダンス練習用のリズムトレーナー PWA。
 
+### Salsa モード
 - **Salsa Clave** — Son / Rumba の 2-3 / 3-2 パターン表示・再生
 - **Flip Clave** — 次のバー境界でクラーベを即時反転（アバニコ合図付き）
 - **Rhythm Machine** — Conga Tumbao（Open / Slap / Heel）+ Cowbell（Low / High）
+
+### Bachata モード
+- **Bachata Rhythm** — 8カウント・Beat 4 & 8 アクセント表示
+- **セクション切替** — Derecho / Majao / Mambo の3パターン（ゲイン・Güiraパターンが変化）
+- **Rhythm Machine** — Bongo / Güira / Bass
+
+### YouTube BPM 同期
+- **BPM 測定** — 長押し（8拍）or 2タップでテンポを手動計測
+- **再生速度自動連動** — 計測した BPM を基準に、スライダーで BPM を変えると YouTube の再生速度が自動追従（baseBpm / currentBpm 比）
+- **URL 履歴** — Load した YouTube URL を最大5件保存（localStorage）、ワンタップで再ロード
+
+### 共通
 - **オフライン対応** — Service Worker で音源・UIをキャッシュ
 - **PWA インストール** — iOS Safari / Android Chrome からホーム画面に追加可能
+- **バックグラウンド再生** — iOS でも画面消灯・タブ切替後に継続再生
 
 ---
 
@@ -38,7 +52,7 @@ npm run lint       # ESLint
 ## テスト方針
 
 - **フレームワーク:** Vitest 4 + jsdom + @testing-library/react
-- テスト変更後は必ず `npm test -- --run` と `npm run build` で確認してからコミット
+- 変更後は必ず `npm test -- --run` と `npm run build` で確認してからコミット
 - タイマー系テストでは `vi.runAllTimersAsync()` を**使わない**（setInterval 無限ループになる）
   → 代わりに `vi.advanceTimersByTimeAsync(100)` を使う
 
@@ -63,8 +77,8 @@ npm run cf:deploy
 src/
 ├── App.tsx
 ├── components/      # UI コンポーネント + CSS Modules
-├── engine/          # AudioEngine（Web Audio API）、salsaPatterns、storage
-└── hooks/           # useAudioEngine、useInstallPrompt、useWakeLock 等
+├── engine/          # AudioEngine（Web Audio API）、パターン定義、storage
+└── hooks/           # useAudioEngine、useBpmMeasure、useInstallPrompt 等
 ```
 
 ---

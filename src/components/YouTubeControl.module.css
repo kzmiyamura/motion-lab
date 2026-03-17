@@ -311,6 +311,64 @@
   text-align: right;
 }
 
+/* ── Mode switcher row ── */
+.modeRow {
+  margin-bottom: 0.15rem;
+}
+
+/* ── Video player (large) ── */
+.videoPlayerOuter {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 65vh;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #000;
+  touch-action: none;
+}
+
+.zoomOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  touch-action: none;
+  cursor: grab;
+}
+
+.zoomOverlay:active {
+  cursor: grabbing;
+}
+
+.transformContainer {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+.zoomBadge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #7c6bff;
+  background: rgba(124, 107, 255, 0.12);
+  border: 1px solid rgba(124, 107, 255, 0.25);
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+
+/* ── Sync / rate note ── */
+.syncNote {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+}
+
+.syncNoteText {
+  color: #5050a0;
+  flex: 1;
+}
+
 /* ── URL History ── */
 .historyRow {
   display: flex;

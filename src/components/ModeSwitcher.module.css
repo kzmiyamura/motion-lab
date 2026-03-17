@@ -1,0 +1,22 @@
+.wrapper {
+  display: flex;
+  gap: 6px;
+}
+
+.btn {
+  padding: 0.28rem 0.9rem;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  border-radius: 20px;
+  color: #5050a0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.btnActive {
+  border-color: #7c6bff;
+  color: #c0b8ff;
+  background: #16143a;
+}

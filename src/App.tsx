@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { useUrlAnalysis } from './hooks/useUrlAnalysis';
 import { ControlPanel } from './components/ControlPanel';
@@ -38,6 +38,7 @@ function App() {
   } = useAudioEngine();
 
   const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
+  const [ytViewMode, setYtViewMode] = useState<'audio' | 'video'>('audio');
 
   useEffect(() => {
     if (urlBpm !== null) setBpm(urlBpm);
@@ -222,6 +223,8 @@ function App() {
           bpm={bpm}
           onBpmChange={setBpm}
           initialVideoId={urlVid}
+          viewMode={ytViewMode}
+          onViewModeChange={setYtViewMode}
         />
       </section>
 

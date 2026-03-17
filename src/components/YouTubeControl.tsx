@@ -12,6 +12,8 @@ type Props = {
   onAdjustOffset: (ms: number) => void;
   initialVideoId?: string | null;
   initialOffset?: number;
+  onVideoIdChange?: (id: string | null) => void;
+  onOffsetChange?: (offset: number) => void;
 };
 
 function extractVideoId(input: string): string | null {
@@ -35,7 +37,7 @@ function formatVideoTime(sec: number): string {
   return `${m}:${s}`;
 }
 
-export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, onAdjustOffset, initialVideoId, initialOffset }: Props) {
+export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, onAdjustOffset, initialVideoId, initialOffset, onVideoIdChange, onOffsetChange }: Props) {
   const [urlInput, setUrlInput] = useState(initialVideoId ?? '');
   const [videoId, setVideoId] = useState<string | null>(initialVideoId ?? null);
   const [baseBpm, setBaseBpm] = useState<number | null>(null);
@@ -109,8 +111,9 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
     if (id) {
       setVideoId(id);
       setSyncPoint(null); // reset on new video
+      onVideoIdChange?.(id);
     }
-  }, [urlInput]);
+  }, [urlInput, onVideoIdChange]);
 
   const handlePlayerReady = useCallback((e: { target: YouTubePlayer }) => {
     playerRef.current = e.target;
@@ -141,9 +144,13 @@ export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, o
   }, [onStop]);
 
   const handleOffsetAdjust = useCallback((delta: number) => {
-    setOffset(o => Math.max(-500, Math.min(500, o + delta)));
+    setOffset(o => {
+      const next = Math.max(-500, Math.min(500, o + delta));
+      onOffsetChange?.(next);
+      return next;
+    });
     if (isPlaying) onAdjustOffset(delta);
-  }, [isPlaying, onAdjustOffset]);
+  }, [isPlaying, onAdjustOffset, onOffsetChange]);
 
   const playbackRate = baseBpm ? Math.min(2, Math.max(0.25, bpm / baseBpm)) : 1;
 

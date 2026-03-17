@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { useUrlAnalysis } from './hooks/useUrlAnalysis';
 import { ControlPanel } from './components/ControlPanel';
@@ -40,6 +40,10 @@ function App() {
   } = useAudioEngine();
 
   const { bpm: urlBpm, youtubeId: urlVid, offset: urlOffset } = useUrlAnalysis();
+
+  // Track YouTubeControl's current videoId and offset for AudioAnalyzer sharing
+  const [ytVideoId, setYtVideoId] = useState<string | null>(urlVid ?? null);
+  const [ytOffset, setYtOffset] = useState<number>(urlOffset ?? 0);
 
   useEffect(() => {
     if (urlBpm !== null) setBpm(urlBpm);
@@ -229,6 +233,8 @@ function App() {
           onAdjustOffset={adjustBeatOffset}
           initialVideoId={urlVid}
           initialOffset={urlOffset}
+          onVideoIdChange={setYtVideoId}
+          onOffsetChange={setYtOffset}
         />
       </section>
 
@@ -237,8 +243,8 @@ function App() {
         <h2 className={styles.sectionTitle}>Audio Analysis</h2>
         <AudioAnalyzer
           bpm={bpm}
-          youtubeId={null}
-          offset={0}
+          youtubeId={ytVideoId}
+          offset={ytOffset}
           onBpmChange={setBpm}
         />
       </section>

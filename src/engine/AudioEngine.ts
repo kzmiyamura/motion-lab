@@ -79,13 +79,13 @@ const SAMPLE_URLS: Record<TrackId, string[]> = {
 // これにより compressor が見るレベルを低く保ち、メイクアップゲインによる
 // ノイズ床の持ち上げを最小化する。
 const TRACK_GAIN: Record<TrackId, number> = {
-  clave:         0.55,
-  'conga-open':  0.70,  // dominant hit
-  'conga-slap':  0.28,  // medium accent
-  'conga-heel':  0.42,  // synth-only; lowpass noise "gosogoso"
-  'cowbell-low':  0.30,
-  'cowbell-high': 0.35,
-  // Bachata instruments
+  clave:         0.85,  // +55% — YouTube mix でも埋もれないよう強調
+  'conga-open':  0.90,  // +29%
+  'conga-slap':  0.50,  // +79%
+  'conga-heel':  0.65,  // +55%
+  'cowbell-low':  0.55, // +83%
+  'cowbell-high': 0.60, // +71%
+  // Bachata instruments (unchanged)
   'bongo-low':  0.60,
   'bongo-high': 0.35,
   'guira':      0.20,

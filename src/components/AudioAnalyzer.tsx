@@ -31,10 +31,9 @@ export function AudioAnalyzer({ bpm, youtubeId, offset, onBpmChange }: Props) {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
 
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const progressRef = useRef(0);
+  const captureCtxRef = useRef<AudioContext | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const supportsDisplayMedia = typeof navigator !== 'undefined' && 'getDisplayMedia' in navigator.mediaDevices;
 
@@ -48,33 +47,11 @@ export function AudioAnalyzer({ bpm, youtubeId, offset, onBpmChange }: Props) {
     }).catch(() => setQrDataUrl(null));
   }, [shareUrl]);
 
-  const stopStream = useCallback((stream: MediaStream) => {
-    stream.getTracks().forEach(t => t.stop());
+  const stopCapture = useCallback(() => {
+    if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null; }
+    if (progressIntervalRef.current !== null) { clearInterval(progressIntervalRef.current); progressIntervalRef.current = null; }
+    if (captureCtxRef.current) { captureCtxRef.current.close().catch(() => {}); captureCtxRef.current = null; }
   }, []);
-
-  const handleRecordingStop = useCallback(async (stream: MediaStream) => {
-    const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-    chunksRef.current = [];
-    stopStream(stream);
-    try {
-      const arrayBuffer = await blob.arrayBuffer();
-      const ctx = new AudioContext();
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-      await ctx.close();
-      const detected = detectBpm(audioBuffer);
-      setDetectedBpm(detected);
-      const url = buildShareUrl(detected, youtubeId, offset);
-      setShareUrl(url);
-      // Save to localStorage if we have a youtubeId
-      if (youtubeId) {
-        analysisStorage.save(youtubeId, { bpm: detected, offset, analyzedAt: Date.now() });
-      }
-    } catch (e) {
-      setError('BPM検出に失敗しました: ' + String(e));
-    }
-    setRecording(false);
-    setProgress(100);
-  }, [youtubeId, offset, stopStream]);
 
   const startRecording = useCallback(async () => {
     setError(null);
@@ -82,14 +59,14 @@ export function AudioAnalyzer({ bpm, youtubeId, offset, onBpmChange }: Props) {
     setQrDataUrl(null);
     setShareUrl(null);
     setProgress(0);
-    progressRef.current = 0;
+    stopCapture();
 
     let stream: MediaStream;
     try {
       if (mode === 'tab') {
         stream = await (navigator.mediaDevices as unknown as { getDisplayMedia: (opts: unknown) => Promise<MediaStream> }).getDisplayMedia({
           audio: true,
-          video: { width: 1, height: 1 }, // Chrome requires video
+          video: { width: 1, height: 1 },
         });
       } else {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -99,48 +76,77 @@ export function AudioAnalyzer({ bpm, youtubeId, offset, onBpmChange }: Props) {
       return;
     }
 
-    // Check we have an audio track
     if (!stream.getAudioTracks().length) {
-      stopStream(stream);
+      stream.getTracks().forEach(t => t.stop());
       setError('音声トラックが取得できませんでした。タブ共有時は「音声を共有」を有効にしてください。');
       return;
     }
 
-    chunksRef.current = [];
-    const recorder = new MediaRecorder(stream);
-    recorderRef.current = recorder;
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-    recorder.onstop = () => handleRecordingStop(stream);
-    recorder.start(100);
+    // Use Web Audio API directly — avoids MediaRecorder encode/decode issues
+    const ctx = new AudioContext();
+    captureCtxRef.current = ctx;
+    const source = ctx.createMediaStreamSource(stream);
+    const bufferSize = 4096;
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
+    const collected: Float32Array[] = [];
+    let totalSamples = 0;
+    const targetSamples = ctx.sampleRate * RECORD_SEC;
+
+    processor.onaudioprocess = (e: AudioProcessingEvent) => {
+      if (totalSamples >= targetSamples) return;
+      const chunk = new Float32Array(e.inputBuffer.getChannelData(0));
+      collected.push(chunk);
+      totalSamples += chunk.length;
+    };
+
+    source.connect(processor);
+    processor.connect(ctx.destination);
     setRecording(true);
 
-    // Progress timer
-    const intervalMs = 200;
-    timerRef.current = setInterval(() => {
-      progressRef.current += (intervalMs / (RECORD_SEC * 1000)) * 100;
-      setProgress(Math.min(99, progressRef.current));
-      if (progressRef.current >= 100) {
-        if (timerRef.current !== null) clearInterval(timerRef.current);
-      }
-    }, intervalMs);
+    // Progress bar
+    const startTime = Date.now();
+    progressIntervalRef.current = setInterval(() => {
+      setProgress(Math.min(99, ((Date.now() - startTime) / (RECORD_SEC * 1000)) * 100));
+    }, 200);
 
-    setTimeout(() => {
-      if (timerRef.current !== null) clearInterval(timerRef.current);
-      if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    // Stop after RECORD_SEC
+    timerRef.current = setTimeout(() => {
+      processor.disconnect();
+      source.disconnect();
+      stream.getTracks().forEach(t => t.stop());
+      if (progressIntervalRef.current !== null) clearInterval(progressIntervalRef.current);
+
+      try {
+        const combined = new Float32Array(totalSamples);
+        let off = 0;
+        for (const c of collected) { combined.set(c, off); off += c.length; }
+        const audioBuffer = ctx.createBuffer(1, totalSamples, ctx.sampleRate);
+        audioBuffer.copyToChannel(combined, 0);
+        ctx.close().catch(() => {});
+        captureCtxRef.current = null;
+
+        const detected = detectBpm(audioBuffer);
+        setDetectedBpm(detected);
+        const url = buildShareUrl(detected, youtubeId, offset);
+        setShareUrl(url);
+        if (youtubeId) {
+          analysisStorage.save(youtubeId, { bpm: detected, offset, analyzedAt: Date.now() });
+        }
+      } catch (e) {
+        setError('BPM検出に失敗しました: ' + String(e));
+      }
+      setRecording(false);
+      setProgress(100);
     }, RECORD_SEC * 1000);
-  }, [mode, handleRecordingStop, stopStream]);
+  }, [mode, youtubeId, offset, stopCapture]);
 
   const applyBpm = useCallback(() => {
     if (detectedBpm !== null) onBpmChange(detectedBpm);
   }, [detectedBpm, onBpmChange]);
 
   // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (timerRef.current !== null) clearInterval(timerRef.current);
-      if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
-    };
-  }, []);
+  useEffect(() => () => stopCapture(), [stopCapture]);
 
   // Keep bpm in sync for share URL rebuilding
   void bpm;

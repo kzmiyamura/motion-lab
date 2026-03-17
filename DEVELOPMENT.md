@@ -53,7 +53,9 @@ src/
     ClaveBeatGrid        # クラーベグリッド表示
     ClavePatternSelector # クラーベパターン選択
     FlipIndicator        # Flip Clave 状態表示
-    YouTubeControl       # YouTube 埋め込み + BPM 計測
+    YouTubeControl       # YouTube 埋め込み、BPM 計測、モード切替
+    ModeSwitcher         # 音声/動画モードトグル
+    VideoControls        # 動画モード操作 UI（コマ送り/スロー/ループ/ズーム）
     InstallPrompt        # PWA インストール誘導 UI
     UpdateToast          # SW 更新通知
     SamplesStatus        # 音源ロード状態表示
@@ -342,23 +344,84 @@ const SCHEMA_VERSION = 2; // v1: cowbell分割, v2: conga分割
 
 ---
 
-## 7. YouTube BPM 同期
+## 7. YouTube BPM 同期 / 動画トレーニング
 
-### 仕組み
+### モード構成
 
-1. ユーザーが `YouTubeControl` の BPM 測定ボタン（長押し or 2タップ）でテンポを計測 → `baseBpm` に保存
-2. ControlPanel の BPM スライダーを動かすと `bpm`（currentBpm）が変化
-3. `useEffect` が `bpm / baseBpm` の比率を計算して YouTube の `setPlaybackRate()` を呼ぶ
+`YouTubeControl` は `viewMode: 'audio' | 'video'` プロップで2つのモードを切り替えます。状態（BPM・videoId など）は共有、UI と再生速度制御のみが異なります。
+
+```
+App.tsx
+  └ ytViewMode state ('audio' | 'video')
+      └ YouTubeControl (viewMode=...)
+          ├ ModeSwitcher     -- トグル UI
+          ├ useBpmMeasure    -- BPM 計測（両モード共通）
+          ├ useVideoTraining -- 動画モード固有状態
+          └ VideoControls    -- 動画モード操作 UI
+```
+
+### 音声モード: BPM 同期
+
+1. ユーザーが長押し or 2タップで `baseBpm` を計測
+2. BPM スライダーを動かすと `bpm`（currentBpm）が変化
+3. `useEffect` が `bpm / baseBpm` 比を計算して `setPlaybackRate()` を呼ぶ
 
 ```typescript
 useEffect(() => {
+  if (viewMode === 'video') return; // 動画モードでは無効
   if (!playerReadyRef.current || !baseBpm || !playerRef.current) return;
   const rate = Math.min(2, Math.max(0.25, bpm / baseBpm));
   playerRef.current.setPlaybackRate(rate);
-}, [bpm, baseBpm]);
+}, [bpm, baseBpm, viewMode]);
 ```
 
 **制約:** YouTube IFrame API の `setPlaybackRate` は 0.25〜2.0 の範囲のみ対応。
+
+### 動画モード: useVideoTraining フック
+
+`src/hooks/useVideoTraining.ts` が動画モード固有のすべての状態とロジックを管理します。
+
+| 機能 | state | 操作 |
+|------|-------|------|
+| ズーム | `zoom: { scale, x, y }` | ピンチ/ドラッグ/プリセット |
+| スロー再生 | `slowRate: SlowRate` | 0.25/0.5/0.75/1.0 |
+| 再生状態 | `ytPlaying: boolean` | onStateChange から更新 |
+| 区間ループ | `loopStart/loopEnd/isLooping` | A点B点マーク + 100ms ポーリング |
+
+#### ズームジェスチャー（オーバーレイ）
+
+`zoomOverlay` div がすべてのポインターイベントを取得。iframe には届かないため YouTube 本来のコントロールは無効化されます。
+
+```
+transform: translate(${x}px, ${y}px) scale(${scale})
+transform-origin: center center
+```
+
+- **ドラッグ（1本指）**: dx/dy を x, y に加算 → スケールと無関係に1:1で移動
+- **ピンチ（2本指）**: 指間距離の比率を scale に乗算（×1〜×3 でクランプ）
+- **タップ**: pointerDown→pointerUp の変位 < 8px かつ < 250ms → 再生/一時停止
+
+#### 区間ループ
+
+100ms ポーリングで現在位置を監視し、`loopEnd` を超えたら `seekTo(loopStart)` します。
+
+```typescript
+loopIntervalRef.current = setInterval(() => {
+  const t = playerRef.current?.getCurrentTime?.();
+  if (typeof t === 'number' && t >= loopEnd) {
+    playerRef.current?.seekTo(loopStart, true);
+  }
+}, 100);
+```
+
+#### コマ送り
+
+```typescript
+playerRef.current?.seekTo(currentTime + direction * 0.033, true);
+// 約 0.033s = 30fps 換算の 1 フレーム
+```
+
+`VideoControls` でポインターダウン時に 120ms 間隔の `setInterval` を起動し、長押しを実現します。
 
 ### URL 履歴
 
@@ -366,7 +429,7 @@ useEffect(() => {
 
 ### URL パラメータ連携
 
-`useUrlAnalysis` フックが `?bpm=` を読んで初期 BPM を適用します。スマホとPCで同じ設定を共有したい場合に URL をコピーして渡すことができます。
+`useUrlAnalysis` フックが `?bpm=` を読んで初期 BPM を適用します。
 
 ---
 

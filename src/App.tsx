@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { useUrlAnalysis } from './hooks/useUrlAnalysis';
 import { ControlPanel } from './components/ControlPanel';
@@ -10,7 +10,6 @@ import { SamplesStatus } from './components/SamplesStatus';
 import { InstallPrompt } from './components/InstallPrompt';
 import { UpdateToast } from './components/UpdateToast';
 import { YouTubeControl } from './components/YouTubeControl';
-import { AudioAnalyzer } from './components/AudioAnalyzer';
 import styles from './App.module.css';
 
 function App() {
@@ -33,17 +32,12 @@ function App() {
     bachataSection, setBachataSection,
     samplesReady, samplesOffline,
     start, stop,
-    adjustBeatOffset,
     loadAudioFile,
     reverbType, setReverb, isReverbLoading,
     reverbWetLevel, setReverbWetLevel,
   } = useAudioEngine();
 
-  const { bpm: urlBpm, youtubeId: urlVid, offset: urlOffset } = useUrlAnalysis();
-
-  // Track YouTubeControl's current videoId and offset for AudioAnalyzer sharing
-  const [ytVideoId, setYtVideoId] = useState<string | null>(urlVid ?? null);
-  const [ytOffset, setYtOffset] = useState<number>(urlOffset ?? 0);
+  const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
 
   useEffect(() => {
     if (urlBpm !== null) setBpm(urlBpm);
@@ -221,31 +215,13 @@ function App() {
         />
       </section>
 
-      {/* ── YouTube Sync ── */}
+      {/* ── YouTube ── */}
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>YouTube Sync</h2>
+        <h2 className={styles.sectionTitle}>YouTube</h2>
         <YouTubeControl
-          isPlaying={isPlaying}
           bpm={bpm}
           onBpmChange={setBpm}
-          onStart={start}
-          onStop={stop}
-          onAdjustOffset={adjustBeatOffset}
           initialVideoId={urlVid}
-          initialOffset={urlOffset}
-          onVideoIdChange={setYtVideoId}
-          onOffsetChange={setYtOffset}
-        />
-      </section>
-
-      {/* ── Audio Analysis (PC only) ── */}
-      <section className={`${styles.section} ${styles.pcOnly}`}>
-        <h2 className={styles.sectionTitle}>Audio Analysis</h2>
-        <AudioAnalyzer
-          bpm={bpm}
-          youtubeId={ytVideoId}
-          offset={ytOffset}
-          onBpmChange={setBpm}
         />
       </section>
 

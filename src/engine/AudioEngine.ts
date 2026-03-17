@@ -79,7 +79,7 @@ const SAMPLE_URLS: Record<TrackId, string[]> = {
 // これにより compressor が見るレベルを低く保ち、メイクアップゲインによる
 // ノイズ床の持ち上げを最小化する。
 const TRACK_GAIN: Record<TrackId, number> = {
-  clave:         0.85,  // +55% — YouTube mix でも埋もれないよう強調
+  clave:         1.10,  // YouTube mix でも埋もれないよう強調
   'conga-open':  0.90,  // +29%
   'conga-slap':  0.50,  // +79%
   'conga-heel':  0.65,  // +55%

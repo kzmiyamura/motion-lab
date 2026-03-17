@@ -1,0 +1,239 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+/* ── Mode row ── */
+.modeRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.modeBtn {
+  padding: 0.25rem 0.7rem;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  border-radius: 20px;
+  color: #5050a0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.modeBtn:hover:not(:disabled) {
+  border-color: #7c6bff;
+  color: #c0b8ff;
+}
+
+.modeBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.modeBtnActive {
+  border-color: #7c6bff;
+  color: #c0b8ff;
+  background: #16143a;
+}
+
+.hint {
+  font-size: 0.7rem;
+  color: #4040a0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Record button ── */
+.recordBtn {
+  width: 100%;
+  padding: 0.65rem 1rem;
+  background: #12122a;
+  border: 1.5px solid #3a3a6a;
+  border-radius: 9px;
+  color: #9090c0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.recordBtn:hover:not(:disabled) {
+  border-color: #7c6bff;
+  color: #c0b8ff;
+  background: #16143a;
+}
+
+.recordBtn:disabled {
+  cursor: not-allowed;
+}
+
+.recordBtnActive {
+  background: #1a1848;
+  border-color: #7c6bff;
+  color: #c0b8ff;
+  animation: recordPulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes recordPulse {
+  from { box-shadow: 0 0 4px rgba(124, 107, 255, 0.3); }
+  to   { box-shadow: 0 0 16px rgba(124, 107, 255, 0.7); }
+}
+
+/* ── Progress bar ── */
+.progressBar {
+  width: 100%;
+  height: 4px;
+  background: #1a1a30;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: linear-gradient(90deg, #7c6bff, #ff6bcd);
+  border-radius: 2px;
+  transition: width 0.2s linear;
+}
+
+/* ── Error ── */
+.error {
+  font-size: 0.78rem;
+  color: #e06060;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: rgba(224, 96, 96, 0.08);
+  border: 1px solid rgba(224, 96, 96, 0.2);
+  border-radius: 7px;
+}
+
+/* ── Result ── */
+.result {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(124, 107, 255, 0.08);
+  border: 1px solid rgba(124, 107, 255, 0.2);
+  border-radius: 8px;
+}
+
+.resultBpm {
+  font-size: 1.6rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #c0b8ff;
+}
+
+.resultUnit {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #7070b0;
+  flex: 1;
+}
+
+.applyBtn {
+  padding: 0.3rem 0.8rem;
+  background: #1e1e3a;
+  border: 1.5px solid #7c6bff;
+  border-radius: 7px;
+  color: #c0b8ff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.applyBtn:hover {
+  background: #28245a;
+  border-color: #a090ff;
+}
+
+/* ── Share block ── */
+.shareBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #0e0e1e;
+  border: 1px solid #1e1e3a;
+  border-radius: 10px;
+}
+
+.qrImg {
+  width: 160px;
+  height: 160px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 4px;
+}
+
+.shareUrlRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.shareUrlLabel {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5050a0;
+  white-space: nowrap;
+}
+
+.shareUrlInput {
+  flex: 1;
+  min-width: 0;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  border-radius: 6px;
+  color: #8080c0;
+  font-size: 0.72rem;
+  padding: 0.3rem 0.5rem;
+  outline: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shareUrlInput:focus {
+  border-color: #7c6bff;
+  color: #c0c0e0;
+}
+
+.copyBtn {
+  padding: 0.3rem 0.65rem;
+  background: #1e1e3a;
+  border: 1.5px solid #3a3a6a;
+  border-radius: 6px;
+  color: #a0a0d0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.copyBtn:hover {
+  border-color: #7c6bff;
+  background: #16143a;
+}
+
+.shareHint {
+  font-size: 0.72rem;
+  color: #4040a0;
+  margin: 0;
+  text-align: center;
+  line-height: 1.5;
+}

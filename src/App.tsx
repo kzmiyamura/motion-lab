@@ -1,4 +1,6 @@
+import { useEffect } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
+import { useUrlAnalysis } from './hooks/useUrlAnalysis';
 import { ControlPanel } from './components/ControlPanel';
 import { RhythmMachine } from './components/RhythmMachine';
 import { ClaveBeatGrid } from './components/ClaveBeatGrid';
@@ -8,6 +10,7 @@ import { SamplesStatus } from './components/SamplesStatus';
 import { InstallPrompt } from './components/InstallPrompt';
 import { UpdateToast } from './components/UpdateToast';
 import { YouTubeControl } from './components/YouTubeControl';
+import { AudioAnalyzer } from './components/AudioAnalyzer';
 import styles from './App.module.css';
 
 function App() {
@@ -35,6 +38,12 @@ function App() {
     reverbType, setReverb, isReverbLoading,
     reverbWetLevel, setReverbWetLevel,
   } = useAudioEngine();
+
+  const { bpm: urlBpm, youtubeId: urlVid, offset: urlOffset } = useUrlAnalysis();
+
+  useEffect(() => {
+    if (urlBpm !== null) setBpm(urlBpm);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
@@ -218,6 +227,19 @@ function App() {
           onStart={start}
           onStop={stop}
           onAdjustOffset={adjustBeatOffset}
+          initialVideoId={urlVid}
+          initialOffset={urlOffset}
+        />
+      </section>
+
+      {/* ── Audio Analysis (PC only) ── */}
+      <section className={`${styles.section} ${styles.pcOnly}`}>
+        <h2 className={styles.sectionTitle}>Audio Analysis</h2>
+        <AudioAnalyzer
+          bpm={bpm}
+          youtubeId={null}
+          offset={0}
+          onBpmChange={setBpm}
         />
       </section>
 

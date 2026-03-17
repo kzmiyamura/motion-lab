@@ -320,6 +320,11 @@
   border-radius: 0 6px 6px 0;
 }
 
+/* ── PC only (hidden on mobile) ── */
+@media (max-width: 768px) {
+  .pcOnly { display: none; }
+}
+
 /* ── Footer ── */
 .footer {
   margin-top: 2rem;

@@ -10,6 +10,8 @@ type Props = {
   onStart: (delayMs?: number) => void;
   onStop: () => void;
   onAdjustOffset: (ms: number) => void;
+  initialVideoId?: string | null;
+  initialOffset?: number;
 };
 
 function extractVideoId(input: string): string | null {
@@ -33,15 +35,15 @@ function formatVideoTime(sec: number): string {
   return `${m}:${s}`;
 }
 
-export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, onAdjustOffset }: Props) {
-  const [urlInput, setUrlInput] = useState('');
-  const [videoId, setVideoId] = useState<string | null>(null);
+export function YouTubeControl({ isPlaying, bpm, onBpmChange, onStart, onStop, onAdjustOffset, initialVideoId, initialOffset }: Props) {
+  const [urlInput, setUrlInput] = useState(initialVideoId ?? '');
+  const [videoId, setVideoId] = useState<string | null>(initialVideoId ?? null);
   const [baseBpm, setBaseBpm] = useState<number | null>(null);
   /** Video timestamp (seconds) captured when the user started measuring beat 1 */
   const [syncPoint, setSyncPoint] = useState<number | null>(null);
   const [ytVolume, setYtVolume] = useState(80);
   const [ytMuted, setYtMuted] = useState(false);
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffset] = useState(initialOffset ?? 0);
 
   const playerRef = useRef<YouTubePlayer | null>(null);
   const playerReadyRef = useRef(false);

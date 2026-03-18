@@ -209,13 +209,21 @@ export function YouTubeControl({
             <div className={styles.bpmResult}>
               <button
                 className={styles.bpmAdjBtn}
-                onClick={() => setBaseBpm(b => Math.max(1, (b ?? 1) - 1))}
+                onClick={() => {
+                  const next = Math.max(1, (baseBpm ?? 1) - 1);
+                  setBaseBpm(next);
+                  onBpmChange(next);
+                }}
                 aria-label="BPM基準 −1"
               >−</button>
               <span className={styles.bpmResultValue}>{baseBpm}</span>
               <button
                 className={styles.bpmAdjBtn}
-                onClick={() => setBaseBpm(b => (b ?? 1) + 1)}
+                onClick={() => {
+                  const next = (baseBpm ?? 1) + 1;
+                  setBaseBpm(next);
+                  onBpmChange(next);
+                }}
                 aria-label="BPM基準 +1"
               >＋</button>
               <span className={styles.bpmResultUnit}>BPM 基準</span>

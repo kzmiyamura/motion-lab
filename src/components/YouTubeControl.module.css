@@ -141,6 +141,28 @@
   color: #c0b8ff;
 }
 
+.bpmAdjBtn {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  color: #8080c0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.bpmAdjBtn:hover {
+  border-color: #7c6bff;
+  background: #16143a;
+  color: #c0b8ff;
+}
+
 .bpmResultUnit {
   font-size: 0.75rem;
   font-weight: 600;

@@ -338,6 +338,140 @@
   margin-bottom: 0.15rem;
 }
 
+/* ── Player size buttons (block header) ── */
+.sizeButtons {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.sizeBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  color: #5050a0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+
+.sizeBtn:hover {
+  border-color: #7c6bff;
+  color: #c0b8ff;
+  background: #16143a;
+}
+
+.sizeBtnActive {
+  border-color: #7c6bff;
+  color: #c0b8ff;
+  background: #16143a;
+}
+
+/* ── Player section: normal (inline) ── */
+.sectionNormal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+/* ── Player section: theater (fixed browser overlay) ── */
+.sectionTheater {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #080818;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Fullscreen: applied by browser via Fullscreen API ── */
+.sectionNormal:fullscreen,
+.sectionNormal:-webkit-full-screen,
+.sectionTheater:fullscreen,
+.sectionTheater:-webkit-full-screen {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Theater top bar ── */
+.theaterBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.6);
+  flex-shrink: 0;
+}
+
+.theaterBarTitle {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5050a0;
+}
+
+.theaterBarBtns {
+  display: flex;
+  gap: 6px;
+}
+
+.theaterBarBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
+  color: #a0a0c0;
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.theaterBarBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+/* ── Theater video area (flex-fill) ── */
+.theaterVideoArea {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: #000;
+  overflow: hidden;
+}
+
+/* Video fills theater/fullscreen area */
+.theaterVideoArea .transformContainer {
+  position: absolute;
+  inset: 0;
+}
+
+/* ── Theater controls area (scrollable) ── */
+.theaterControls {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  background: #08081a;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  overflow-y: auto;
+  max-height: 35vh;
+  border-top: 1px solid #1a1a2e;
+}
+
 /* ── Video player (large) ── */
 .videoPlayerOuter {
   position: relative;

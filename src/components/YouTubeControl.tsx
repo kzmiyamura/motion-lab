@@ -21,6 +21,8 @@ function saveHistory(url: string, prev: string[]): string[] {
   return next;
 }
 
+type PlayerSize = 'normal' | 'theater';
+
 type Props = {
   bpm: number;
   onBpmChange: (bpm: number) => void;
@@ -44,7 +46,6 @@ function extractVideoId(input: string): string | null {
   return null;
 }
 
-
 export function YouTubeControl({
   bpm, onBpmChange,
   initialVideoId, onVideoIdChange,
@@ -56,10 +57,47 @@ export function YouTubeControl({
   const [ytVolume, setYtVolume] = useState(80);
   const [ytMuted, setYtMuted] = useState(false);
   const [history, setHistory] = useState<string[]>(() => loadHistory());
+  const [playerSize, setPlayerSize] = useState<PlayerSize>('normal');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const playerRef = useRef<YouTubePlayer | null>(null);
   const playerReadyRef = useRef(false);
+  const playerSectionRef = useRef<HTMLDivElement>(null);
 
+  // ── Fullscreen detection ──────────────────────────────────────────────
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    document.addEventListener('webkitfullscreenchange', handler);
+    return () => {
+      document.removeEventListener('fullscreenchange', handler);
+      document.removeEventListener('webkitfullscreenchange', handler);
+    };
+  }, []);
+
+  // ── Prevent body scroll in theater mode ───────────────────────────────
+  useEffect(() => {
+    document.body.style.overflow = playerSize === 'theater' ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [playerSize]);
+
+  const enterFullscreen = useCallback(async () => {
+    try {
+      const el = playerSectionRef.current as HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void>;
+      };
+      await (el.requestFullscreen?.() ?? el.webkitRequestFullscreen?.());
+    } catch { /* ignore */ }
+  }, []);
+
+  const exitFullscreen = useCallback(async () => {
+    try {
+      const doc = document as Document & { webkitExitFullscreen?: () => void };
+      await (document.exitFullscreen?.() ?? doc.webkitExitFullscreen?.());
+    } catch { /* ignore */ }
+  }, []);
+
+  // ── BPM / Audio ───────────────────────────────────────────────────────
   const handleMeasuredBpm = useCallback((measured: number) => {
     setBaseBpm(measured);
     onBpmChange(measured);
@@ -74,15 +112,13 @@ export function YouTubeControl({
 
   const video = useVideoTraining(playerRef, viewMode === 'video');
 
-  // ── BPM sync (audio mode only) ──────────────────────────────────────────
   useEffect(() => {
-    if (viewMode === 'video') return; // video mode uses slowRate
+    if (viewMode === 'video') return;
     if (!playerReadyRef.current || !baseBpm || !playerRef.current) return;
     const rate = Math.min(2, Math.max(0.25, bpm / baseBpm));
     try { playerRef.current.setPlaybackRate(rate); } catch { /* ignore */ }
   }, [bpm, baseBpm, viewMode]);
 
-  // Apply slow rate when switching to video mode
   useEffect(() => {
     if (viewMode === 'video' && playerReadyRef.current) {
       video.activateSlowRate();
@@ -90,16 +126,11 @@ export function YouTubeControl({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]);
 
-  // ── YouTube volume / mute ───────────────────────────────────────────────
   useEffect(() => {
     if (!playerReadyRef.current || !playerRef.current) return;
     try {
-      if (ytMuted) {
-        playerRef.current.mute();
-      } else {
-        playerRef.current.unMute();
-        playerRef.current.setVolume(ytVolume);
-      }
+      if (ytMuted) { playerRef.current.mute(); }
+      else { playerRef.current.unMute(); playerRef.current.setVolume(ytVolume); }
     } catch { /* ignore */ }
   }, [ytVolume, ytMuted]);
 
@@ -118,7 +149,6 @@ export function YouTubeControl({
     playerRef.current = e.target;
     playerReadyRef.current = true;
     try { e.target.setVolume(ytVolume); } catch { /* ignore */ }
-    // Apply mode-appropriate rate
     if (viewMode === 'video') {
       try { e.target.setPlaybackRate(video.slowRate); } catch { /* ignore */ }
     }
@@ -127,7 +157,6 @@ export function YouTubeControl({
 
   const { setYtPlaying } = video;
   const handleStateChange = useCallback((e: { data: number }) => {
-    // YouTube player states: 1=playing, 2=paused, 0=ended, 3=buffering
     setYtPlaying(e.data === 1 || e.data === 3);
   }, [setYtPlaying]);
 
@@ -137,11 +166,67 @@ export function YouTubeControl({
 
   const playbackRate = baseBpm ? Math.min(2, Math.max(0.25, bpm / baseBpm)) : 1;
 
-  // ── Zoom CSS ──────────────────────────────────────────────────────────
   const { scale, x, y } = video.zoom;
   const transformStyle = viewMode === 'video' && (scale !== 1 || x !== 0 || y !== 0)
     ? { transform: `translate(${x}px, ${y}px) scale(${scale})`, transformOrigin: 'center center' }
     : {};
+
+  // ── Derived layout flags ──────────────────────────────────────────────
+  const isExpanded = playerSize === 'theater' || isFullscreen;
+
+  const videoAreaClass = isExpanded
+    ? styles.theaterVideoArea
+    : viewMode === 'video'
+      ? styles.videoPlayerOuter
+      : styles.playerWrapper;
+
+  // Controls rendered in both normal and theater/fullscreen
+  const controls = (
+    <>
+      <div className={styles.volRow}>
+        <button
+          className={`${styles.muteBtn} ${ytMuted ? styles.muteBtnMuted : ''}`}
+          onClick={() => setYtMuted(m => !m)}
+          title={ytMuted ? 'ミュート解除' : 'ミュート'}
+        >
+          {ytMuted ? '🔇' : '🔊'}
+        </button>
+        <input
+          type="range" min={0} max={100} step={1}
+          value={ytVolume}
+          onChange={(e) => setYtVolume(Number(e.target.value))}
+          className={styles.volSlider}
+          disabled={ytMuted}
+          aria-label="YouTube 音量"
+        />
+        <span className={styles.volValue}>{ytMuted ? '–' : `${ytVolume}%`}</span>
+      </div>
+
+      {viewMode === 'video' && (
+        <VideoControls
+          ytPlaying={video.ytPlaying}
+          onTogglePlay={video.togglePlay}
+          onStep={video.stepFrame}
+          slowRate={video.slowRate}
+          onSlowRate={handleSlowRate}
+          loopStart={video.loopStart}
+          loopEnd={video.loopEnd}
+          isLooping={video.isLooping}
+          onMarkLoop={video.markLoop}
+          onClearLoop={video.clearLoop}
+          onToggleLoop={() => video.setIsLooping(v => !v)}
+          onPreset={video.applyPreset}
+        />
+      )}
+
+      {viewMode === 'audio' && baseBpm !== null && playbackRate !== 1 && (
+        <div className={styles.syncNote}>
+          <span className={styles.syncNoteText}>再生速度</span>
+          <span className={styles.rateTag}>×{playbackRate.toFixed(2)}</span>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div className={styles.wrapper}>
@@ -151,7 +236,7 @@ export function YouTubeControl({
         <ModeSwitcher mode={viewMode} onChange={onViewModeChange} />
       </div>
 
-      {/* ── BPM 測定（audio mode のみ表示）── */}
+      {/* ── BPM 測定（audio mode のみ）── */}
       {viewMode === 'audio' && (
         <div className={styles.block}>
           <div className={styles.blockHeader}>
@@ -199,9 +284,7 @@ export function YouTubeControl({
               className={`${styles.measureBtn} ${(isPressing || firstTapSet) ? styles.measureBtnActive : ''}`}
               onClick={handleTap}
             >
-              {!firstTapSet
-                ? '「1」でタップ'
-                : `${(elapsedMs / 1000).toFixed(1)} s — 「次の1」でタップ`}
+              {!firstTapSet ? '「1」でタップ' : `${(elapsedMs / 1000).toFixed(1)} s — 「次の1」でタップ`}
             </button>
           )}
 
@@ -209,21 +292,13 @@ export function YouTubeControl({
             <div className={styles.bpmResult}>
               <button
                 className={styles.bpmAdjBtn}
-                onClick={() => {
-                  const next = Math.max(1, (baseBpm ?? 1) - 1);
-                  setBaseBpm(next);
-                  onBpmChange(next);
-                }}
+                onClick={() => { const n = Math.max(1, (baseBpm ?? 1) - 1); setBaseBpm(n); onBpmChange(n); }}
                 aria-label="BPM基準 −1"
               >−</button>
               <span className={styles.bpmResultValue}>{baseBpm}</span>
               <button
                 className={styles.bpmAdjBtn}
-                onClick={() => {
-                  const next = (baseBpm ?? 1) + 1;
-                  setBaseBpm(next);
-                  onBpmChange(next);
-                }}
+                onClick={() => { const n = (baseBpm ?? 1) + 1; setBaseBpm(n); onBpmChange(n); }}
                 aria-label="BPM基準 +1"
               >＋</button>
               <span className={styles.bpmResultUnit}>BPM 基準</span>
@@ -241,6 +316,20 @@ export function YouTubeControl({
           <span className={styles.blockLabel}>YouTube</span>
           {viewMode === 'video' && video.zoom.scale > 1 && (
             <span className={styles.zoomBadge}>{video.zoom.scale.toFixed(1)}×</span>
+          )}
+          {videoId && (
+            <div className={styles.sizeButtons}>
+              <button
+                className={`${styles.sizeBtn} ${playerSize === 'theater' ? styles.sizeBtnActive : ''}`}
+                onClick={() => setPlayerSize(s => s === 'theater' ? 'normal' : 'theater')}
+                title="ブラウザ最大化"
+              >⊞</button>
+              <button
+                className={styles.sizeBtn}
+                onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+                title={isFullscreen ? '全画面解除' : '全画面'}
+              >{isFullscreen ? '⊠' : '⛶'}</button>
+            </div>
           )}
         </div>
 
@@ -272,19 +361,39 @@ export function YouTubeControl({
         )}
 
         {videoId && (
-          <>
-            {/* Player */}
-            <div className={viewMode === 'video' ? styles.videoPlayerOuter : styles.playerWrapper}>
+          /* playerSectionRef: CSS class changes with playerSize.
+             <YouTube> stays mounted here — never re-created. */
+          <div
+            ref={playerSectionRef}
+            className={playerSize === 'theater' ? styles.sectionTheater : styles.sectionNormal}
+          >
+            {/* Theater / fullscreen top bar */}
+            {isExpanded && (
+              <div className={styles.theaterBar}>
+                <span className={styles.theaterBarTitle}>YouTube</span>
+                <div className={styles.theaterBarBtns}>
+                  <button
+                    className={styles.theaterBarBtn}
+                    onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+                    title={isFullscreen ? '全画面解除' : '全画面'}
+                  >{isFullscreen ? '⊠' : '⛶'}</button>
+                  {playerSize === 'theater' && !isFullscreen && (
+                    <button
+                      className={styles.theaterBarBtn}
+                      onClick={() => setPlayerSize('normal')}
+                      title="閉じる"
+                    >✕</button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Video player */}
+            <div className={videoAreaClass}>
               {viewMode === 'video' && (
-                <div
-                  className={styles.zoomOverlay}
-                  {...video.overlayHandlers}
-                />
+                <div className={styles.zoomOverlay} {...video.overlayHandlers} />
               )}
-              <div
-                className={styles.transformContainer}
-                style={transformStyle}
-              >
+              <div className={styles.transformContainer} style={transformStyle}>
                 <YouTube
                   videoId={videoId}
                   opts={{ width: '100%', height: '100%', playerVars: { autoplay: 0 } }}
@@ -295,53 +404,12 @@ export function YouTubeControl({
               </div>
             </div>
 
-            {/* Volume */}
-            <div className={styles.volRow}>
-              <button
-                className={`${styles.muteBtn} ${ytMuted ? styles.muteBtnMuted : ''}`}
-                onClick={() => setYtMuted(m => !m)}
-                title={ytMuted ? 'ミュート解除' : 'ミュート'}
-              >
-                {ytMuted ? '🔇' : '🔊'}
-              </button>
-              <input
-                type="range"
-                min={0} max={100} step={1}
-                value={ytVolume}
-                onChange={(e) => setYtVolume(Number(e.target.value))}
-                className={styles.volSlider}
-                disabled={ytMuted}
-                aria-label="YouTube 音量"
-              />
-              <span className={styles.volValue}>{ytMuted ? '–' : `${ytVolume}%`}</span>
-            </div>
-
-            {/* Video controls (video mode only) */}
-            {viewMode === 'video' && (
-              <VideoControls
-                ytPlaying={video.ytPlaying}
-                onTogglePlay={video.togglePlay}
-                onStep={video.stepFrame}
-                slowRate={video.slowRate}
-                onSlowRate={handleSlowRate}
-                loopStart={video.loopStart}
-                loopEnd={video.loopEnd}
-                isLooping={video.isLooping}
-                onMarkLoop={video.markLoop}
-                onClearLoop={video.clearLoop}
-                onToggleLoop={() => video.setIsLooping(v => !v)}
-                onPreset={video.applyPreset}
-              />
-            )}
-
-            {/* Rate indicator (audio mode only, when BPM sync active) */}
-            {viewMode === 'audio' && baseBpm !== null && playbackRate !== 1 && (
-              <div className={styles.syncNote}>
-                <span className={styles.syncNoteText}>再生速度</span>
-                <span className={styles.rateTag}>×{playbackRate.toFixed(2)}</span>
-              </div>
-            )}
-          </>
+            {/* Controls */}
+            {isExpanded
+              ? <div className={styles.theaterControls}>{controls}</div>
+              : controls
+            }
+          </div>
         )}
       </div>
     </div>

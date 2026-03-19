@@ -22,6 +22,7 @@ export type ZoomPresetId = typeof ZOOM_PRESETS[number]['id'];
 export function useVideoTraining(
   playerRef: React.MutableRefObject<YouTubePlayer | null>,
   enabled: boolean,
+  onTapRef?: React.MutableRefObject<(() => void) | undefined>,
 ) {
   const [zoom, setZoom] = useState<ZoomState>({ scale: 1, x: 0, y: 0 });
   const [slowRate, setSlowRateState] = useState<SlowRate>(1.0);
@@ -154,7 +155,7 @@ export function useVideoTraining(
   }, []);
 
   const onOverlayPointerUp = useCallback((e: React.PointerEvent) => {
-    // Detect tap → toggle play/pause
+    // Detect tap → call onTapRef if provided, else toggle play/pause
     if (
       tapStartRef.current !== null &&
       pointersRef.current.size === 1 &&
@@ -164,15 +165,19 @@ export function useVideoTraining(
         e.clientY - tapStartRef.current.y,
       ) < 8
     ) {
-      try {
-        if (ytPlaying) playerRef.current?.pauseVideo();
-        else playerRef.current?.playVideo();
-      } catch { /* ignore */ }
+      if (onTapRef?.current) {
+        onTapRef.current();
+      } else {
+        try {
+          if (ytPlaying) playerRef.current?.pauseVideo();
+          else playerRef.current?.playVideo();
+        } catch { /* ignore */ }
+      }
     }
     pointersRef.current.delete(e.pointerId);
     if (pointersRef.current.size < 2) lastDistRef.current = null;
     tapStartRef.current = null;
-  }, [ytPlaying, playerRef]);
+  }, [ytPlaying, playerRef, onTapRef]);
 
   const overlayHandlers = {
     onPointerDown: onOverlayPointerDown,

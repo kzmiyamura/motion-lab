@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, type MutableRefObject } from 'react';
 import YouTube, { type YouTubePlayer } from 'react-youtube';
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import { useVideoTraining } from '../hooks/useVideoTraining';
@@ -59,10 +59,13 @@ export function YouTubeControl({
   const [history, setHistory] = useState<string[]>(() => loadHistory());
   const [playerSize, setPlayerSize] = useState<PlayerSize>('normal');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(false);
 
   const playerRef = useRef<YouTubePlayer | null>(null);
   const playerReadyRef = useRef(false);
   const playerSectionRef = useRef<HTMLDivElement>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const overlayTapRef = useRef<(() => void) | undefined>(undefined) as MutableRefObject<(() => void) | undefined>;
 
   // ── Fullscreen detection ──────────────────────────────────────────────
   useEffect(() => {
@@ -97,6 +100,18 @@ export function YouTubeControl({
     } catch { /* ignore */ }
   }, []);
 
+  // ── Controls show/hide (expanded mode) ───────────────────────────────
+  const showControls = useCallback(() => {
+    setControlsVisible(true);
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => setControlsVisible(false), 3000);
+  }, []);
+
+  const resetHideTimer = useCallback(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => setControlsVisible(false), 3000);
+  }, []);
+
   // ── BPM / Audio ───────────────────────────────────────────────────────
   const handleMeasuredBpm = useCallback((measured: number) => {
     setBaseBpm(measured);
@@ -110,7 +125,7 @@ export function YouTubeControl({
     handlePressStart, handlePressEnd, handleTap,
   } = useBpmMeasure(handleMeasuredBpm, bpm);
 
-  const video = useVideoTraining(playerRef, viewMode === 'video');
+  const video = useVideoTraining(playerRef, viewMode === 'video', overlayTapRef);
 
   useEffect(() => {
     if (viewMode === 'video') return;
@@ -173,6 +188,31 @@ export function YouTubeControl({
 
   // ── Derived layout flags ──────────────────────────────────────────────
   const isExpanded = playerSize === 'theater' || isFullscreen;
+
+  // Auto-show controls when entering expanded mode; hide on exit
+  useEffect(() => {
+    if (isExpanded) {
+      showControls();
+    } else {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      setControlsVisible(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExpanded]);
+
+  // Keep overlayTapRef current so useVideoTraining always calls latest handler
+  overlayTapRef.current = isExpanded
+    ? () => {
+        if (controlsVisible) {
+          if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+          setControlsVisible(false);
+        } else {
+          showControls();
+        }
+      }
+    : () => {
+        video.togglePlay();
+      };
 
   const videoAreaClass = isExpanded
     ? styles.theaterVideoArea
@@ -406,7 +446,17 @@ export function YouTubeControl({
 
             {/* Controls */}
             {isExpanded
-              ? <div className={styles.theaterControls}>{controls}</div>
+              ? (
+                <div
+                  className={[
+                    styles.theaterControls,
+                    !controlsVisible ? styles.theaterControlsHidden : '',
+                  ].filter(Boolean).join(' ')}
+                  onPointerDown={resetHideTimer}
+                >
+                  {controls}
+                </div>
+              )
               : controls
             }
           </div>

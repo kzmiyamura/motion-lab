@@ -470,6 +470,13 @@
   overflow-y: auto;
   max-height: 35vh;
   border-top: 1px solid #1a1a2e;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+.theaterControlsHidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* ── Video player (large) ── */
@@ -605,5 +612,12 @@
     padding-right: max(14px, env(safe-area-inset-right));
     padding-bottom: max(10px, env(safe-area-inset-bottom));
     overflow-y: auto;
+    transition: transform 0.3s ease, opacity 0.25s ease, visibility 0.25s ease;
+  }
+
+  .sectionTheater .theaterControlsHidden,
+  .sectionNormal:fullscreen .theaterControlsHidden,
+  .sectionNormal:-webkit-full-screen .theaterControlsHidden {
+    transform: translateY(100%);
   }
 }

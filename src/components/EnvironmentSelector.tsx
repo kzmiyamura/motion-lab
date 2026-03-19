@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import styles from './EnvironmentSelector.module.css';
 import type { ReverbType } from '../engine/AudioEngine';
 
@@ -32,6 +33,9 @@ export function EnvironmentSelector({
   onWetLevelChange,
 }: Props) {
   const isActive = reverbType !== 'none';
+
+  const [localWet, setLocalWet] = useState(Math.round(reverbWetLevel * 100));
+  useEffect(() => { setLocalWet(Math.round(reverbWetLevel * 100)); }, [reverbWetLevel]);
 
   return (
     <div className={styles.wrapper}>
@@ -74,12 +78,14 @@ export function EnvironmentSelector({
             min={0}
             max={100}
             step={1}
-            value={Math.round(reverbWetLevel * 100)}
-            onChange={e => onWetLevelChange(Number(e.target.value) / 100)}
+            value={localWet}
+            onChange={e => setLocalWet(Number(e.target.value))}
+            onPointerUp={e => onWetLevelChange(Number((e.target as HTMLInputElement).value) / 100)}
+            onKeyUp={e => onWetLevelChange(Number((e.target as HTMLInputElement).value) / 100)}
             className={styles.wetSlider}
             aria-label="Reverb wet level"
           />
-          <span className={styles.wetValue}>{Math.round(reverbWetLevel * 100)}%</span>
+          <span className={styles.wetValue}>{localWet}%</span>
         </div>
       )}
     </div>

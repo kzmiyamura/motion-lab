@@ -60,10 +60,12 @@ describe('ControlPanel', () => {
     expect(onStop).toHaveBeenCalledOnce();
   });
 
-  it('calls onBpmChange with numeric value on slider change', () => {
+  it('calls onBpmChange with numeric value on slider pointer-up', () => {
     const onBpmChange = vi.fn();
     render(<ControlPanel {...baseProps} onBpmChange={onBpmChange} />);
-    fireEvent.change(screen.getByLabelText('BPM'), { target: { value: '180' } });
+    const slider = screen.getByLabelText('BPM');
+    fireEvent.change(slider, { target: { value: '180' } });
+    fireEvent.pointerUp(slider, { target: { value: '180' } });
     expect(onBpmChange).toHaveBeenCalledWith(180);
   });
 

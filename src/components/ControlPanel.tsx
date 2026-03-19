@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { BPM_CATEGORIES, getActiveCategoryId } from '../engine/bpmCategories';
 import { BACHATA_PATTERNS } from '../engine/bachataPatterns';
 import { type Genre, BPM_RANGE } from '../hooks/useAudioEngine';
@@ -73,9 +73,22 @@ export function ControlPanel({
 }: Props) {
   const activeCategoryId = getActiveCategoryId(bpm);
 
+  // Local display states — commit to global only on pointer-up to avoid re-render lag
+  const [localBpm, setLocalBpm] = useState(bpm);
+  const [localVol, setLocalVol] = useState(Math.round(masterVolume * 100));
+
+  useEffect(() => { setLocalBpm(bpm); }, [bpm]);
+  useEffect(() => { setLocalVol(Math.round(masterVolume * 100)); }, [masterVolume]);
+
   const handleSlider = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      onBpmChange(Number(e.target.value));
+      setLocalBpm(Number(e.target.value));
+    },
+    []
+  );
+  const commitBpm = useCallback(
+    (e: React.SyntheticEvent<HTMLInputElement>) => {
+      onBpmChange(Number((e.target as HTMLInputElement).value));
     },
     [onBpmChange]
   );
@@ -133,11 +146,13 @@ export function ControlPanel({
           min={0}
           max={100}
           step={1}
-          value={Math.round(masterVolume * 100)}
-          onChange={(e) => onMasterVolumeChange(Number(e.target.value) / 100)}
+          value={localVol}
+          onChange={(e) => setLocalVol(Number(e.target.value))}
+          onPointerUp={(e) => onMasterVolumeChange(Number((e.target as HTMLInputElement).value) / 100)}
+          onKeyUp={(e) => onMasterVolumeChange(Number((e.target as HTMLInputElement).value) / 100)}
           className={styles.slider}
         />
-        <span className={styles.bpmValue}>{Math.round(masterVolume * 100)}%</span>
+        <span className={styles.bpmValue}>{localVol}%</span>
       </div>
 
       {/* ── BPM スライダー（ジャンル別レンジ） ── */}
@@ -149,11 +164,13 @@ export function ControlPanel({
           type="range"
           min={BPM_RANGE[genre].min}
           max={BPM_RANGE[genre].max}
-          value={bpm}
+          value={localBpm}
           onChange={handleSlider}
+          onPointerUp={commitBpm}
+          onKeyUp={commitBpm}
           className={styles.slider}
         />
-        <span className={styles.bpmValue}>{bpm}</span>
+        <span className={styles.bpmValue}>{localBpm}</span>
       </div>
 
       {/* ── 再生 / 停止 ── */}

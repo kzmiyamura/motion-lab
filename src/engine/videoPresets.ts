@@ -8,7 +8,7 @@ export interface PresetVideo {
   title: string;
   artist: string;
   genre: PresetGenre;
-  bpm: number;
+  bpm?: number;    // 不明な場合は省略可
 }
 
 export const PRESET_VIDEOS: PresetVideo[] = [
@@ -21,53 +21,9 @@ export const PRESET_VIDEOS: PresetVideo[] = [
     bpm: 188,
   },
   {
-    id: 'hNVG22UJoiA',
-    title: 'La Vida Es Un Carnaval',
-    artist: 'Celia Cruz',
+    id: 'A2Jp7uzAEWY',
+    title: 'Via',
+    artist: 'Donna De Lory',
     genre: 'salsa',
-    bpm: 174,
-  },
-  {
-    id: 'Xoz_J1GUcI8',
-    title: 'Pedro Navaja',
-    artist: 'Rubén Blades',
-    genre: 'salsa',
-    bpm: 162,
-  },
-  {
-    id: '5NV6Rdv1h3Q',
-    title: 'Llorarás',
-    artist: "Oscar D'León",
-    genre: 'salsa',
-    bpm: 156,
-  },
-  // ── Bachata ────────────────────────────────────────────────────────────
-  {
-    id: 'xMCPoFEfzwI',
-    title: 'Propuesta Indecente',
-    artist: 'Romeo Santos',
-    genre: 'bachata',
-    bpm: 128,
-  },
-  {
-    id: 'YxO1pQGlTR4',
-    title: 'Obsesión',
-    artist: 'Aventura',
-    genre: 'bachata',
-    bpm: 124,
-  },
-  {
-    id: 'f4V1QPfXFug',
-    title: 'Darte un Beso',
-    artist: 'Prince Royce',
-    genre: 'bachata',
-    bpm: 130,
-  },
-  {
-    id: 'C7dSwSGI0_4',
-    title: 'Eres Mía',
-    artist: 'Romeo Santos',
-    genre: 'bachata',
-    bpm: 120,
   },
 ];

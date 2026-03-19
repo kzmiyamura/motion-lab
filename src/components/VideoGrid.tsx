@@ -157,7 +157,7 @@ export function VideoGrid({ history, onSelect }: Props) {
                 artist={p.artist}
                 bpm={p.bpm}
                 genre={p.genre}
-                onClick={() => onSelect(p.id, p.bpm)}
+                onClick={() => onSelect(p.id, p.bpm ?? null)}
               />
             ))}
           </div>

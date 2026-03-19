@@ -25,5 +25,6 @@ export const PRESET_VIDEOS: PresetVideo[] = [
     title: 'Via',
     artist: 'Donna De Lory',
     genre: 'salsa',
+    bpm: 191,
   },
 ];

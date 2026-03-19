@@ -22,6 +22,8 @@ type Props = {
   onClearLoop: () => void;
   onToggleLoop: () => void;
   onPreset: (id: ZoomPresetId) => void;
+  isMirrored?: boolean;
+  onMirrorToggle?: () => void;
 };
 
 export function VideoControls({
@@ -30,6 +32,7 @@ export function VideoControls({
   loopStart, loopEnd, isLooping,
   onMarkLoop, onClearLoop, onToggleLoop,
   onPreset,
+  isMirrored = false, onMirrorToggle,
 }: Props) {
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -77,6 +80,18 @@ export function VideoControls({
         >
           ⏭
         </button>
+
+        {/* Mirror */}
+        {onMirrorToggle && (
+          <button
+            className={`${styles.mirrorBtn} ${isMirrored ? styles.mirrorBtnActive : ''}`}
+            onClick={onMirrorToggle}
+            title={isMirrored ? 'ミラー解除' : 'ミラー反転'}
+            aria-label="ミラー反転"
+          >
+            ↔
+          </button>
+        )}
 
         {/* Slow rate */}
         <div className={styles.rateGroup}>

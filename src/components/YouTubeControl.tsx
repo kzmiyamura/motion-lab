@@ -77,6 +77,7 @@ export function YouTubeControl({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(false);
   const [searchHasResults, setSearchHasResults] = useState(false);
+  const [isMirrored, setIsMirrored] = useState(false);
 
   const playerRef = useRef<YouTubePlayer | null>(null);
   const playerReadyRef = useRef(false);
@@ -216,8 +217,11 @@ export function YouTubeControl({
   const playbackRate = baseBpm ? Math.min(2, Math.max(0.25, bpm / baseBpm)) : 1;
 
   const { scale, x, y } = video.zoom;
-  const transformStyle = viewMode === 'video' && (scale !== 1 || x !== 0 || y !== 0)
-    ? { transform: `translate(${x}px, ${y}px) scale(${scale})`, transformOrigin: 'center center' }
+  const transformStyle = (viewMode === 'video' && (scale !== 1 || x !== 0 || y !== 0)) || isMirrored
+    ? {
+        transform: `translate(${x}px, ${y}px) scale(${scale})${isMirrored ? ' scaleX(-1)' : ''}`,
+        transformOrigin: 'center center',
+      }
     : {};
 
   // ── Derived layout flags ──────────────────────────────────────────────
@@ -290,6 +294,8 @@ export function YouTubeControl({
           onClearLoop={video.clearLoop}
           onToggleLoop={() => video.setIsLooping(v => !v)}
           onPreset={video.applyPreset}
+          isMirrored={isMirrored}
+          onMirrorToggle={() => setIsMirrored(v => !v)}
         />
       )}
 

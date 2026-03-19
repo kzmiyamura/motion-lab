@@ -617,6 +617,34 @@
   min-width: 2rem; text-align: right;
 }
 
+/* ── Mirror button ── */
+.mirrorBtn {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
+  color: var(--color-ui-text);
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+
+.mirrorBtn:hover {
+  border-color: var(--color-accent);
+  background: var(--color-ui-medium);
+}
+
+.mirrorBtnActive {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+}
+
 /* ── Mobile ── */
 @media (max-width: 480px) {
   .rateGroup { margin-left: 0; }

@@ -46,6 +46,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const [playerSize, setPlayerSize] = useState<PlayerSize>('normal');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(false);
+  const [isMirrored, setIsMirrored] = useState(false);
 
   // Local stored files
   const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
@@ -410,6 +411,14 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           onPointerLeave={stopStep} onPointerCancel={stopStep}
           title="コマ送り（長押し）"
         >⏭</button>
+        {source.isVideo && (
+          <button
+            className={`${styles.mirrorBtn} ${isMirrored ? styles.mirrorBtnActive : ''}`}
+            onClick={() => setIsMirrored(v => !v)}
+            title={isMirrored ? 'ミラー解除' : 'ミラー反転'}
+            aria-label="ミラー反転"
+          >↔</button>
+        )}
         <div className={styles.rateGroup}>
           {SLOW_RATES.map(r => (
             <button
@@ -517,7 +526,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               className={styles.videoEl}
               style={{
                 transform: source.isVideo
-                  ? `scale(${zoom.scale}) translate(${zoom.x / zoom.scale}px, ${zoom.y / zoom.scale}px)`
+                  ? `${isMirrored ? 'scaleX(-1) ' : ''}scale(${zoom.scale}) translate(${zoom.x / zoom.scale}px, ${zoom.y / zoom.scale}px)`
                   : undefined,
               }}
               onPlay={() => setIsPlaying(true)}
@@ -603,7 +612,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                 onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click(); }}
               >
                 <input
-                  ref={fileInputRef} type="file" accept="audio/*,video/*"
+                  ref={fileInputRef} type="file" accept="video/*,audio/*"
                   className={styles.fileInputHidden}
                   onChange={e => {
                     const f = e.target.files?.[0];

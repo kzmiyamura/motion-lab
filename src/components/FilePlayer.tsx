@@ -8,6 +8,7 @@ import styles from './FilePlayer.module.css';
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
 
 type FileSource = { name: string; url: string; isVideo: boolean };
+type PlayerSize = 'normal' | 'theater';
 
 type Props = { bpm: number; onBpmChange: (bpm: number) => void };
 
@@ -41,6 +42,11 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const [isLooping, setIsLooping] = useState(false);
   const [zoom, setZoom] = useState<ZoomState>({ scale: 1, x: 0, y: 0 });
 
+  // Layout state
+  const [playerSize, setPlayerSize] = useState<PlayerSize>('normal');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(false);
+
   // Local stored files
   const [storedFiles, setStoredFiles] = useState<StoredFile[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -59,9 +65,32 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevBlobUrl = useRef<string | null>(null);
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const playerSectionRef = useRef<HTMLDivElement>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Zoom gesture refs
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
+
+  // Derived
+  const isTheater = playerSize === 'theater';
+  const isExpanded = isTheater || isFullscreen;
+
+  // ── Fullscreen detection ───────────────────────────────────────────────
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    document.addEventListener('webkitfullscreenchange', handler);
+    return () => {
+      document.removeEventListener('fullscreenchange', handler);
+      document.removeEventListener('webkitfullscreenchange', handler);
+    };
+  }, []);
+
+  // Prevent body scroll in theater mode
+  useEffect(() => {
+    document.body.style.overflow = playerSize === 'theater' ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [playerSize]);
 
   // Sync BPM slider from external changes
   useEffect(() => { setSliderBpm(bpm); }, [bpm]);
@@ -76,7 +105,46 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     return () => { if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current); };
   }, []);
 
-  // ── File opening ─────────────────────────────────────────────────────────
+  // ── Fullscreen helpers ─────────────────────────────────────────────────
+  const enterFullscreen = useCallback(async () => {
+    try {
+      const el = playerSectionRef.current as HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void>;
+      };
+      await (el.requestFullscreen?.() ?? el.webkitRequestFullscreen?.());
+    } catch { /* ignore */ }
+  }, []);
+
+  const exitFullscreen = useCallback(async () => {
+    try {
+      const doc = document as Document & { webkitExitFullscreen?: () => void };
+      await (document.exitFullscreen?.() ?? doc.webkitExitFullscreen?.());
+    } catch { /* ignore */ }
+  }, []);
+
+  // ── Controls show/hide (expanded mode) ────────────────────────────────
+  const showControls = useCallback(() => {
+    setControlsVisible(true);
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => setControlsVisible(false), 3000);
+  }, []);
+
+  const resetHideTimer = useCallback(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => setControlsVisible(false), 3000);
+  }, []);
+
+  useEffect(() => {
+    if (isExpanded) {
+      showControls();
+    } else {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      setControlsVisible(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExpanded]);
+
+  // ── File opening ───────────────────────────────────────────────────────
   const openFileSource = useCallback((
     name: string, url: string, mimeType: string,
   ) => {
@@ -98,7 +166,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const handleFileSelect = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
     openFileSource(file.name, url, file.type);
-    // IndexedDB に保存（録画・選択ファイル問わず）
     setIsSaving(true);
     saveFile(file.name, file, file.type)
       .then(() => listFiles())
@@ -126,7 +193,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     setStoredFiles(await listFiles().catch(() => []));
   };
 
-  // ── Google Drive ──────────────────────────────────────────────────────────
+  // ── Google Drive ───────────────────────────────────────────────────────
   const loadDriveFiles = useCallback(async (t: string, q: string) => {
     setIsLoadingFiles(true);
     setDriveError('');
@@ -186,7 +253,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     setDriveError('');
   };
 
-  // ── Player controls ───────────────────────────────────────────────────────
+  // ── Player controls ────────────────────────────────────────────────────
   const togglePlay = () => {
     const el = mediaRef.current;
     if (!el) return;
@@ -204,30 +271,25 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     if (!el) return;
     const t = el.currentTime;
     setCurrentTime(t);
-    // A-B ループ
     if (isLooping && loopStart !== null && loopEnd !== null && t >= loopEnd) {
       el.currentTime = loopStart;
     }
   };
 
-  // Slow rate button
   const applySlowRate = (rate: SlowRate) => {
     setSlowRateState(rate);
     if (mediaRef.current) mediaRef.current.playbackRate = rate;
   };
 
-  // BPM slider commit
   const commitBpm = (val: number) => {
     onBpmChange(val);
     if (!baseBpm) setBaseBpm(val);
-    // BPMスライダーが変化したら再生速度を更新（slowRateは維持）
     const base = baseBpm ?? val;
     if (mediaRef.current) {
       mediaRef.current.playbackRate = Math.max(0.25, Math.min(2, slowRate * (val / base)));
     }
   };
 
-  // Frame step
   const stepFrame = (dir: 1 | -1) => {
     const el = mediaRef.current;
     if (!el) return;
@@ -243,7 +305,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     if (stepIntervalRef.current) { clearInterval(stepIntervalRef.current); stepIntervalRef.current = null; }
   };
 
-  // Loop
   const markLoop = (point: 'start' | 'end') => {
     const t = mediaRef.current?.currentTime;
     if (t === undefined) return;
@@ -253,10 +314,23 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
 
   const clearLoop = () => { setLoopStart(null); setLoopEnd(null); setIsLooping(false); };
 
-  // Zoom presets
   const applyPreset = (id: string) => {
     const p = ZOOM_PRESETS.find(pr => pr.id === id);
     if (p) setZoom({ scale: p.scale, x: p.x, y: p.y });
+  };
+
+  // Overlay click: toggle controls in expanded mode, play/pause in normal
+  const handleOverlayClick = () => {
+    if (isExpanded) {
+      if (controlsVisible) {
+        if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+        setControlsVisible(false);
+      } else {
+        showControls();
+      }
+    } else {
+      togglePlay();
+    }
   };
 
   // Pinch-to-zoom & drag overlay handlers
@@ -297,155 +371,216 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
 
   const goHome = () => {
     mediaRef.current?.pause();
+    if (playerSize === 'theater') setPlayerSize('normal');
+    if (isFullscreen) exitFullscreen();
     setSource(null);
     setBaseBpm(null);
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Player controls content (shared between normal and theater layout) ──
+  const playerControlsContent = source ? (
+    <>
+      {/* Seek bar */}
+      <div className={styles.seekRow}>
+        <span className={styles.timeLabel}>{formatTime(currentTime)}</span>
+        <input
+          type="range" min={0} max={isFinite(duration) ? duration : 100} step={0.1}
+          value={currentTime} onChange={handleSeek} className={styles.seekBar}
+        />
+        <span className={styles.timeLabel}>{formatTime(duration)}</span>
+      </div>
+
+      {/* Row 1: Play / Step / Rate buttons */}
+      <div className={styles.ctrlRow}>
+        <button
+          className={`${styles.playBtn} ${isPlaying ? styles.playBtnPlaying : ''}`}
+          onClick={togglePlay}
+        >
+          {isPlaying ? '⏸' : '▶'}
+        </button>
+        <button
+          className={styles.stepBtn}
+          onPointerDown={() => startStep(-1)} onPointerUp={stopStep}
+          onPointerLeave={stopStep} onPointerCancel={stopStep}
+          title="コマ戻し（長押し）"
+        >⏮</button>
+        <button
+          className={styles.stepBtn}
+          onPointerDown={() => startStep(1)} onPointerUp={stopStep}
+          onPointerLeave={stopStep} onPointerCancel={stopStep}
+          title="コマ送り（長押し）"
+        >⏭</button>
+        <div className={styles.rateGroup}>
+          {SLOW_RATES.map(r => (
+            <button
+              key={r}
+              className={`${styles.rateBtn} ${slowRate === r ? styles.rateBtnActive : ''}`}
+              onClick={() => applySlowRate(r)}
+            >
+              {r === 1.0 ? '1×' : `${r}×`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Row 2: A-B Loop */}
+      <div className={styles.ctrlRow}>
+        <span className={styles.ctrlLabel}>Loop</span>
+        <button className={styles.loopBtn} onClick={() => markLoop('start')}>
+          {loopStart !== null ? `A: ${formatTime(loopStart)}` : 'A 点'}
+        </button>
+        <button className={styles.loopBtn} onClick={() => markLoop('end')}>
+          {loopEnd !== null ? `B: ${formatTime(loopEnd)}` : 'B 点'}
+        </button>
+        {(loopStart !== null || loopEnd !== null) && (
+          <button className={styles.loopClear} onClick={clearLoop}>✕</button>
+        )}
+        <button
+          className={`${styles.loopToggle} ${isLooping ? styles.loopToggleOn : ''}`}
+          onClick={() => setIsLooping(v => !v)}
+          disabled={loopStart === null || loopEnd === null}
+        >
+          {isLooping ? '⟳ ON' : '⟳ OFF'}
+        </button>
+      </div>
+
+      {/* Row 3: Zoom presets (video only) */}
+      {source.isVideo && (
+        <div className={styles.ctrlRow}>
+          <span className={styles.ctrlLabel}>Zoom</span>
+          {ZOOM_PRESETS.map(p => (
+            <button key={p.id} className={styles.presetBtn} onClick={() => applyPreset(p.id)}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* BPM slider */}
+      <div className={styles.bpmRow}>
+        <span className={styles.bpmLabel}>
+          BPM
+          <span className={styles.rateHint}> ×{(slowRate * (baseBpm ? sliderBpm / baseBpm : 1)).toFixed(2)}</span>
+        </span>
+        <input
+          type="range" min={60} max={220} step={1} value={sliderBpm}
+          onChange={e => setSliderBpm(Number(e.target.value))}
+          onPointerUp={e => commitBpm(Number((e.target as HTMLInputElement).value))}
+          onKeyUp={e => commitBpm(Number((e.target as HTMLInputElement).value))}
+          className={styles.bpmSlider}
+        />
+        <span className={styles.bpmValue}>{sliderBpm}</span>
+      </div>
+    </>
+  ) : null;
+
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div className={styles.wrapper}>
 
-      {/* Hidden / visible video element */}
+      {/* ── Player section (video + controls) ── */}
       {source && (
-        <div className={source.isVideo ? styles.videoContainer : styles.audioOnlyWrap}>
-          <video
-            ref={mediaRef}
-            src={source.url}
-            className={styles.videoEl}
-            style={{
-              transform: source.isVideo
-                ? `scale(${zoom.scale}) translate(${zoom.x / zoom.scale}px, ${zoom.y / zoom.scale}px)`
-                : undefined,
-            }}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            onTimeUpdate={handleTimeUpdate}
-            onLoadedMetadata={() => {
-              setDuration(mediaRef.current?.duration ?? 0);
-              if (mediaRef.current) mediaRef.current.playbackRate = slowRate;
-            }}
-            onEnded={() => setIsPlaying(false)}
-            playsInline
-            controls={false}
-          />
-          {/* Overlay for pinch/drag zoom (video only) */}
-          {source.isVideo && (
-            <div
-              className={styles.videoOverlay}
-              onPointerDown={onOverlayPointerDown}
-              onPointerMove={onOverlayPointerMove}
-              onPointerUp={onOverlayPointerUp}
-              onPointerCancel={onOverlayPointerUp}
-              onClick={togglePlay}
+        <div
+          ref={playerSectionRef}
+          className={playerSize === 'theater' ? styles.sectionTheater : styles.sectionNormal}
+        >
+          {/* Theater / fullscreen top bar */}
+          {isExpanded && (
+            <div className={styles.theaterBar}>
+              <span className={styles.theaterBarTitle}>{source.name}</span>
+              <div className={styles.theaterBarBtns}>
+                <button
+                  className={styles.theaterBarBtn}
+                  onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+                  title={isFullscreen ? '全画面解除' : '全画面'}
+                >{isFullscreen ? '⊠' : '⛶'}</button>
+                {isTheater && !isFullscreen && (
+                  <button
+                    className={styles.theaterBarBtn}
+                    onClick={() => setPlayerSize('normal')}
+                    title="閉じる"
+                  >✕</button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Video element */}
+          <div className={
+            source.isVideo
+              ? (isExpanded ? styles.theaterVideoArea : styles.videoContainer)
+              : styles.audioOnlyWrap
+          }>
+            <video
+              ref={mediaRef}
+              src={source.url}
+              className={styles.videoEl}
+              style={{
+                transform: source.isVideo
+                  ? `scale(${zoom.scale}) translate(${zoom.x / zoom.scale}px, ${zoom.y / zoom.scale}px)`
+                  : undefined,
+              }}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onTimeUpdate={handleTimeUpdate}
+              onLoadedMetadata={() => {
+                setDuration(mediaRef.current?.duration ?? 0);
+                if (mediaRef.current) mediaRef.current.playbackRate = slowRate;
+              }}
+              onEnded={() => setIsPlaying(false)}
+              playsInline
+              controls={false}
             />
+            {source.isVideo && (
+              <div
+                className={styles.videoOverlay}
+                onPointerDown={onOverlayPointerDown}
+                onPointerMove={onOverlayPointerMove}
+                onPointerUp={onOverlayPointerUp}
+                onPointerCancel={onOverlayPointerUp}
+                onClick={handleOverlayClick}
+              />
+            )}
+          </div>
+
+          {/* Controls — theater overlay or normal card */}
+          {isExpanded ? (
+            <div
+              className={[
+                styles.theaterControls,
+                !controlsVisible ? styles.theaterControlsHidden : '',
+              ].filter(Boolean).join(' ')}
+              onPointerDown={resetHideTimer}
+            >
+              {playerControlsContent}
+            </div>
+          ) : (
+            <div className={styles.playerWrap}>
+              {/* Header */}
+              <div className={styles.playerHeader}>
+                <button className={styles.homeBtn} onClick={goHome} title="ファイル選択に戻る">⌂</button>
+                <p className={styles.fileName} title={source.name}>{source.name}</p>
+                <div className={styles.sizeButtons}>
+                  <button
+                    className={`${styles.sizeBtn} ${isTheater ? styles.sizeBtnActive : ''}`}
+                    onClick={() => setPlayerSize(s => s === 'theater' ? 'normal' : 'theater')}
+                    title="ブラウザ最大化"
+                  >⊞</button>
+                  <button
+                    className={styles.sizeBtn}
+                    onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+                    title={isFullscreen ? '全画面解除' : '全画面'}
+                  >{isFullscreen ? '⊠' : '⛶'}</button>
+                </div>
+              </div>
+              {playerControlsContent}
+            </div>
           )}
         </div>
       )}
 
-      {source ? (
-        // ── Player UI ─────────────────────────────────────────────────────
-        <div className={styles.playerWrap}>
-          {/* Header */}
-          <div className={styles.playerHeader}>
-            <button className={styles.homeBtn} onClick={goHome} title="ファイル選択に戻る">⌂</button>
-            <p className={styles.fileName} title={source.name}>{source.name}</p>
-          </div>
-
-          {/* Seek bar */}
-          <div className={styles.seekRow}>
-            <span className={styles.timeLabel}>{formatTime(currentTime)}</span>
-            <input
-              type="range" min={0} max={isFinite(duration) ? duration : 100} step={0.1}
-              value={currentTime} onChange={handleSeek} className={styles.seekBar}
-            />
-            <span className={styles.timeLabel}>{formatTime(duration)}</span>
-          </div>
-
-          {/* Row 1: Play / Step / Rate buttons */}
-          <div className={styles.ctrlRow}>
-            <button
-              className={`${styles.playBtn} ${isPlaying ? styles.playBtnPlaying : ''}`}
-              onClick={togglePlay}
-            >
-              {isPlaying ? '⏸' : '▶'}
-            </button>
-            <button
-              className={styles.stepBtn}
-              onPointerDown={() => startStep(-1)} onPointerUp={stopStep}
-              onPointerLeave={stopStep} onPointerCancel={stopStep}
-              title="コマ戻し（長押し）"
-            >⏮</button>
-            <button
-              className={styles.stepBtn}
-              onPointerDown={() => startStep(1)} onPointerUp={stopStep}
-              onPointerLeave={stopStep} onPointerCancel={stopStep}
-              title="コマ送り（長押し）"
-            >⏭</button>
-            <div className={styles.rateGroup}>
-              {SLOW_RATES.map(r => (
-                <button
-                  key={r}
-                  className={`${styles.rateBtn} ${slowRate === r ? styles.rateBtnActive : ''}`}
-                  onClick={() => applySlowRate(r)}
-                >
-                  {r === 1.0 ? '1×' : `${r}×`}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Row 2: A-B Loop */}
-          <div className={styles.ctrlRow}>
-            <span className={styles.ctrlLabel}>Loop</span>
-            <button className={styles.loopBtn} onClick={() => markLoop('start')}>
-              {loopStart !== null ? `A: ${formatTime(loopStart)}` : 'A 点'}
-            </button>
-            <button className={styles.loopBtn} onClick={() => markLoop('end')}>
-              {loopEnd !== null ? `B: ${formatTime(loopEnd)}` : 'B 点'}
-            </button>
-            {(loopStart !== null || loopEnd !== null) && (
-              <button className={styles.loopClear} onClick={clearLoop}>✕</button>
-            )}
-            <button
-              className={`${styles.loopToggle} ${isLooping ? styles.loopToggleOn : ''}`}
-              onClick={() => setIsLooping(v => !v)}
-              disabled={loopStart === null || loopEnd === null}
-            >
-              {isLooping ? '⟳ ON' : '⟳ OFF'}
-            </button>
-          </div>
-
-          {/* Row 3: Zoom presets (video only) */}
-          {source.isVideo && (
-            <div className={styles.ctrlRow}>
-              <span className={styles.ctrlLabel}>Zoom</span>
-              {ZOOM_PRESETS.map(p => (
-                <button key={p.id} className={styles.presetBtn} onClick={() => applyPreset(p.id)}>
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* BPM slider */}
-          <div className={styles.bpmRow}>
-            <span className={styles.bpmLabel}>
-              BPM
-              <span className={styles.rateHint}> ×{(slowRate * (baseBpm ? sliderBpm / baseBpm : 1)).toFixed(2)}</span>
-            </span>
-            <input
-              type="range" min={60} max={220} step={1} value={sliderBpm}
-              onChange={e => setSliderBpm(Number(e.target.value))}
-              onPointerUp={e => commitBpm(Number((e.target as HTMLInputElement).value))}
-              onKeyUp={e => commitBpm(Number((e.target as HTMLInputElement).value))}
-              className={styles.bpmSlider}
-            />
-            <span className={styles.bpmValue}>{sliderBpm}</span>
-          </div>
-        </div>
-
-      ) : (
-        // ── File selection UI ──────────────────────────────────────────────
+      {/* ── File selection UI ── */}
+      {!source && (
         <div className={styles.selectWrap}>
           <div className={styles.subTabs}>
             <button
@@ -460,7 +595,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
 
           {subTab === 'local' ? (
             <div className={styles.localWrap}>
-              {/* Drop zone */}
               <div
                 className={styles.dropZone}
                 onDrop={handleDrop} onDragOver={e => e.preventDefault()}
@@ -483,7 +617,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                 {isSaving && <p className={styles.savingMsg}>保存中…</p>}
               </div>
 
-              {/* Saved files list */}
               {storedFiles.length > 0 && (
                 <div className={styles.savedSection}>
                   <p className={styles.savedLabel}>保存済みファイル</p>
@@ -510,7 +643,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             </div>
 
           ) : (
-            // ── Google Drive ───────────────────────────────────────────────
             <div className={styles.driveWrap}>
               {!token ? (
                 <div className={styles.driveAuth}>

@@ -51,6 +51,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isLoadingFile, setIsLoadingFile] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const [driveQuery, setDriveQuery] = useState('');
   const [driveError, setDriveError] = useState('');
 
@@ -164,15 +165,17 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const handleDriveFileSelect = async (file: DriveFile) => {
     if (!token) return;
     setIsLoadingFile(true);
+    setDownloadProgress(0);
     setDriveError('');
     try {
-      const blob = await fetchFileBlob(token, file.id);
+      const blob = await fetchFileBlob(token, file.id, pct => setDownloadProgress(pct));
       const url = URL.createObjectURL(blob);
       openFileSource(file.name, url, file.mimeType);
     } catch {
       setDriveError('ファイルの読み込みに失敗しました。');
     } finally {
       setIsLoadingFile(false);
+      setDownloadProgress(null);
     }
   };
 
@@ -532,7 +535,17 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                     <button className={styles.signOutBtn} onClick={handleSignOut}>サインアウト</button>
                   </div>
                   {driveError && <p className={styles.errorMsg}>{driveError}</p>}
-                  {(isLoadingFiles || isLoadingFile) ? (
+                  {isLoadingFile ? (
+                    <div className={styles.progressWrap}>
+                      <div
+                        className={styles.progressBar}
+                        style={{ width: `${downloadProgress ?? 0}%` }}
+                      />
+                      <span className={styles.progressLabel}>
+                        {downloadProgress !== null ? `${downloadProgress}%` : '読み込み中…'}
+                      </span>
+                    </div>
+                  ) : isLoadingFiles ? (
                     <p className={styles.statusMsg}>読み込み中…</p>
                   ) : driveFiles.length === 0 ? (
                     <p className={styles.statusMsg}>音楽・動画ファイルが見つかりません</p>

@@ -57,11 +57,35 @@ export async function listMediaFiles(
   return data.files ?? [];
 }
 
-/** ファイルを Blob としてダウンロード */
-export async function fetchFileBlob(token: string, fileId: string): Promise<Blob> {
+/** ファイルを Blob としてダウンロード（進捗コールバック付き） */
+export async function fetchFileBlob(
+  token: string,
+  fileId: string,
+  onProgress?: (percent: number) => void,
+): Promise<Blob> {
   const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new DriveApiError(`Download failed: HTTP ${res.status}`, res.status);
-  return res.blob();
+
+  const total = Number(res.headers.get('Content-Length') ?? '0');
+  if (!res.body || total === 0) {
+    // Content-Length 不明 → そのまま blob 取得
+    onProgress?.(100);
+    return res.blob();
+  }
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let loaded = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.byteLength;
+    onProgress?.(Math.round((loaded / total) * 100));
+  }
+
+  return new Blob(chunks, { type: res.headers.get('Content-Type') ?? '' });
 }

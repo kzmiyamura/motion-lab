@@ -96,6 +96,7 @@ export function YouTubeControl({
   const setRateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayTapRef = useRef<(() => void) | undefined>(undefined) as MutableRefObject<(() => void) | undefined>;
   const isSeekingRef = useRef(false);
+  const savedScrollYRef = useRef(0);
 
   // ── Fullscreen detection ──────────────────────────────────────────────
   useEffect(() => {
@@ -139,17 +140,17 @@ export function YouTubeControl({
   // position:fixed + top trick to lock scroll position.
   useEffect(() => {
     if (playerSize === 'theater') {
-      const scrollY = window.scrollY;
+      savedScrollYRef.current = window.scrollY;
       document.body.style.overflow = 'hidden';
       document.body.style.position = 'fixed';
-      document.body.style.top = `-${scrollY}px`;
+      document.body.style.top = `-${savedScrollYRef.current}px`;
       document.body.style.width = '100%';
     } else {
       document.body.style.overflow = '';
       document.body.style.position = '';
       document.body.style.top = '';
       document.body.style.width = '';
-      window.scrollTo(0, 0);
+      window.scrollTo(0, savedScrollYRef.current);
     }
     return () => {
       document.body.style.overflow = '';

@@ -96,7 +96,6 @@ export function YouTubeControl({
   const setRateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayTapRef = useRef<(() => void) | undefined>(undefined) as MutableRefObject<(() => void) | undefined>;
   const isSeekingRef = useRef(false);
-  const savedScrollYRef = useRef(0);
 
   // ── Fullscreen detection ──────────────────────────────────────────────
   useEffect(() => {
@@ -137,17 +136,7 @@ export function YouTubeControl({
 
   // ── Prevent body scroll in theater mode ──────────────────────────────
   useEffect(() => {
-    if (playerSize === 'theater') {
-      savedScrollYRef.current = window.scrollY;
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-      // rAF で body スタイル解除後のレイアウト確定を待ってから復元
-      requestAnimationFrame(() => {
-        window.scrollTo(0, savedScrollYRef.current);
-        window.dispatchEvent(new Event('resize'));
-      });
-    }
+    document.body.style.overflow = playerSize === 'theater' ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
   }, [playerSize]);
 

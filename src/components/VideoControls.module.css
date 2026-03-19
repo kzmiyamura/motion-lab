@@ -48,9 +48,9 @@
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
-  color: #8080c0;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
+  color: var(--color-ui-text);
   font-size: 1rem;
   cursor: pointer;
   display: flex;
@@ -62,8 +62,8 @@
 }
 
 .stepBtn:hover {
-  border-color: #7c6bff;
-  background: #16143a;
+  border-color: var(--color-accent);
+  background: var(--color-ui-medium);
 }
 
 /* ── Slow rate ── */
@@ -75,10 +75,10 @@
 
 .rateBtn {
   padding: 0.28rem 0.55rem;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
   border-radius: 6px;
-  color: #5050a0;
+  color: var(--color-ui-text-dim);
   font-size: 0.72rem;
   font-weight: 700;
   cursor: pointer;
@@ -86,9 +86,9 @@
 }
 
 .rateBtnActive {
-  border-color: #7c6bff;
-  color: #c0b8ff;
-  background: #16143a;
+  border-color: var(--color-accent);
+  color: var(--color-ui-text-bright);
+  background: var(--color-ui-medium);
 }
 
 /* ── Loop ── */
@@ -97,16 +97,16 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #5050a0;
+  color: var(--color-ui-text-dim);
   min-width: 2.5rem;
 }
 
 .loopBtn {
   padding: 0.3rem 0.6rem;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
   border-radius: 6px;
-  color: #7070a0;
+  color: var(--color-fg-dim);
   font-size: 0.72rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -115,8 +115,8 @@
 }
 
 .loopBtn:hover {
-  border-color: #7c6bff;
-  color: #a090ff;
+  border-color: var(--color-accent);
+  color: var(--color-accent-light);
 }
 
 .loopClear {
@@ -141,10 +141,10 @@
 
 .loopToggle {
   padding: 0.3rem 0.6rem;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
   border-radius: 6px;
-  color: #5050a0;
+  color: var(--color-ui-text-dim);
   font-size: 0.72rem;
   font-weight: 700;
   cursor: pointer;
@@ -165,10 +165,10 @@
 /* ── Zoom presets ── */
 .presetBtn {
   padding: 0.3rem 0.65rem;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
   border-radius: 6px;
-  color: #7070a0;
+  color: var(--color-fg-dim);
   font-size: 0.72rem;
   font-weight: 600;
   cursor: pointer;
@@ -176,8 +176,8 @@
 }
 
 .presetBtn:hover {
-  border-color: #7c6bff;
-  color: #a090ff;
+  border-color: var(--color-accent);
+  color: var(--color-accent-light);
 }
 
 /* ── Mobile ── */

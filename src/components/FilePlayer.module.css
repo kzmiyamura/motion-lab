@@ -13,10 +13,10 @@
 
 .subTab {
   padding: 0.4rem 1rem;
-  border: 1.5px solid var(--color-border, #1e1e3a);
+  border: 1.5px solid var(--color-border);
   border-radius: 20px;
   background: transparent;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   font-size: 0.82rem;
   font-weight: 700;
   cursor: pointer;
@@ -24,14 +24,14 @@
 }
 
 .subTab:hover {
-  border-color: var(--color-accent, #7c6bff);
+  border-color: var(--color-accent);
   color: var(--color-fg, #e0e0ff);
 }
 
 .subTabActive {
-  border-color: var(--color-accent, #7c6bff);
-  background: color-mix(in srgb, var(--color-accent, #7c6bff) 15%, transparent);
-  color: var(--color-accent, #7c6bff);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
 }
 
 /* ── Select wrapper ── */
@@ -57,9 +57,9 @@
   justify-content: center;
   gap: 0.35rem;
   padding: 1.75rem 1rem;
-  border: 2px dashed var(--color-border, #1e1e3a);
+  border: 2px dashed var(--color-border);
   border-radius: 14px;
-  background: var(--color-surface, #0e0e1e);
+  background: var(--color-surface);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
   -webkit-tap-highlight-color: transparent;
@@ -67,8 +67,8 @@
 
 .dropZone:hover,
 .dropZone:focus-visible {
-  border-color: var(--color-accent, #7c6bff);
-  background: color-mix(in srgb, var(--color-accent, #7c6bff) 5%, var(--color-surface, #0e0e1e));
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 5%, var(--color-surface));
   outline: none;
 }
 
@@ -76,8 +76,8 @@
 
 .dropIcon { font-size: 2rem; margin: 0; line-height: 1; }
 .dropText { font-size: 0.88rem; font-weight: 700; color: var(--color-fg, #e0e0ff); margin: 0; }
-.dropHint { font-size: 0.7rem; color: var(--color-fg-dim, #6060a0); margin: 0; }
-.savingMsg { font-size: 0.68rem; color: var(--color-accent, #7c6bff); margin: 0; }
+.dropHint { font-size: 0.7rem; color: var(--color-fg-dim); margin: 0; }
+.savingMsg { font-size: 0.68rem; color: var(--color-accent); margin: 0; }
 
 /* ── Saved files section ── */
 .savedSection {
@@ -91,7 +91,7 @@
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #5050a0;
+  color: var(--color-ui-text-dim);
   margin: 0;
 }
 
@@ -113,8 +113,8 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.65rem;
-  background: var(--color-surface, #0e0e1e);
-  border: 1.5px solid var(--color-border, #1e1e3a);
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
   border-radius: 8px;
   text-align: left;
   cursor: pointer;
@@ -123,8 +123,8 @@
 }
 
 .fileItem:hover {
-  border-color: var(--color-accent, #7c6bff);
-  background: color-mix(in srgb, var(--color-accent, #7c6bff) 6%, var(--color-surface, #0e0e1e));
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 6%, var(--color-surface));
 }
 
 .fileItem:active { transform: scale(0.98); }
@@ -142,14 +142,14 @@
 
 .fileDate {
   font-size: 0.62rem;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .fileSize {
   font-size: 0.62rem;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -186,14 +186,14 @@
   align-items: center;
   gap: 1rem;
   padding: 2rem 1rem;
-  background: var(--color-surface, #0e0e1e);
-  border: 1px solid var(--color-border, #1e1e3a);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 14px;
 }
 
 .driveAuthDesc {
   font-size: 0.82rem;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   text-align: center;
   margin: 0;
   line-height: 1.6;
@@ -222,19 +222,19 @@
 .driveSearchInput {
   flex: 1; min-width: 0;
   padding: 0.45rem 0.75rem;
-  background: var(--color-surface, #0e0e1e);
-  border: 1.5px solid var(--color-border, #1e1e3a);
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
   border-radius: 8px;
   color: var(--color-fg, #e0e0ff);
   font-size: 0.82rem;
   outline: none;
   transition: border-color 0.15s;
 }
-.driveSearchInput:focus { border-color: var(--color-accent, #7c6bff); }
+.driveSearchInput:focus { border-color: var(--color-accent); }
 
 .driveSearchBtn {
   padding: 0.45rem 0.7rem;
-  background: var(--color-accent, #7c6bff);
+  background: var(--color-accent);
   border: none; border-radius: 8px;
   font-size: 0.85rem; cursor: pointer;
   flex-shrink: 0; transition: opacity 0.15s;
@@ -252,7 +252,7 @@
 }
 .signOutBtn:hover { border-color: #a04060; color: #d08090; }
 
-.statusMsg { font-size: 0.8rem; color: var(--color-fg-dim, #6060a0); text-align: center; margin: 0.5rem 0; }
+.statusMsg { font-size: 0.8rem; color: var(--color-fg-dim); text-align: center; margin: 0.5rem 0; }
 .errorMsg { font-size: 0.78rem; color: #e05060; margin: 0; line-height: 1.5; }
 
 /* ── Download progress bar ── */
@@ -260,8 +260,8 @@
   position: relative;
   width: 100%;
   height: 2rem;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -270,7 +270,7 @@
   position: absolute;
   inset: 0;
   height: 100%;
-  background: linear-gradient(90deg, var(--color-accent, #7c6bff) 0%, #a090ff 100%);
+  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-accent-light) 100%);
   border-radius: 8px;
   transition: width 0.2s ease;
 }
@@ -325,8 +325,8 @@
   gap: 0.6rem;
   width: 100%;
   padding: 0.85rem 0.9rem;
-  background: var(--color-surface, #0e0e1e);
-  border: 1px solid var(--color-border, #1e1e3a);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 12px;
 }
 
@@ -340,15 +340,15 @@
 .homeBtn {
   flex-shrink: 0;
   background: transparent;
-  border: 1.5px solid var(--color-border, #1e1e3a);
+  border: 1.5px solid var(--color-border);
   border-radius: 6px;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   font-size: 1rem;
   padding: 0.22rem 0.5rem;
   cursor: pointer;
   transition: border-color 0.12s, color 0.12s;
 }
-.homeBtn:hover { border-color: var(--color-accent, #7c6bff); color: var(--color-fg, #e0e0ff); }
+.homeBtn:hover { border-color: var(--color-accent); color: var(--color-fg, #e0e0ff); }
 
 .fileName {
   font-size: 0.78rem;
@@ -366,13 +366,13 @@
 .seekBar {
   flex: 1;
   height: 4px;
-  accent-color: var(--color-accent, #7c6bff);
+  accent-color: var(--color-accent);
   cursor: pointer;
 }
 
 .timeLabel {
   font-size: 0.65rem;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   white-space: nowrap;
   flex-shrink: 0;
   min-width: 3rem;
@@ -408,46 +408,46 @@
 .stepBtn {
   width: 34px; height: 34px;
   border-radius: 8px;
-  background: #12122a; border: 1.5px solid #2a2a4a;
-  color: #8080c0; font-size: 0.95rem;
+  background: var(--color-ui-dark2); border: 1.5px solid var(--color-border2);
+  color: var(--color-ui-text); font-size: 0.95rem;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   touch-action: none; user-select: none;
   flex-shrink: 0;
   transition: border-color 0.12s, background 0.12s;
 }
-.stepBtn:hover { border-color: #7c6bff; background: #16143a; }
+.stepBtn:hover { border-color: var(--color-accent); background: var(--color-ui-medium); }
 
 /* Rate buttons */
 .rateGroup { display: flex; gap: 3px; margin-left: auto; flex-wrap: wrap; }
 
 .rateBtn {
   padding: 0.25rem 0.5rem;
-  background: #12122a; border: 1.5px solid #2a2a4a;
-  border-radius: 6px; color: #5050a0;
+  background: var(--color-ui-dark2); border: 1.5px solid var(--color-border2);
+  border-radius: 6px; color: var(--color-ui-text-dim);
   font-size: 0.7rem; font-weight: 700;
   cursor: pointer;
   transition: border-color 0.12s, color 0.12s, background 0.12s;
 }
-.rateBtnActive { border-color: #7c6bff; color: #c0b8ff; background: #16143a; }
+.rateBtnActive { border-color: var(--color-accent); color: var(--color-ui-text-bright); background: var(--color-ui-medium); }
 
 /* Loop */
 .ctrlLabel {
   font-size: 0.68rem; font-weight: 700;
   letter-spacing: 0.08em; text-transform: uppercase;
-  color: #5050a0; min-width: 2.5rem; flex-shrink: 0;
+  color: var(--color-ui-text-dim); min-width: 2.5rem; flex-shrink: 0;
 }
 
 .loopBtn {
   padding: 0.28rem 0.55rem;
-  background: #12122a; border: 1.5px solid #2a2a4a;
-  border-radius: 6px; color: #7070a0;
+  background: var(--color-ui-dark2); border: 1.5px solid var(--color-border2);
+  border-radius: 6px; color: var(--color-fg-dim);
   font-size: 0.7rem; font-weight: 600;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   transition: border-color 0.12s, color 0.12s;
 }
-.loopBtn:hover { border-color: #7c6bff; color: #a090ff; }
+.loopBtn:hover { border-color: var(--color-accent); color: var(--color-accent-light); }
 
 .loopClear {
   width: 24px; height: 24px;
@@ -462,8 +462,8 @@
 
 .loopToggle {
   padding: 0.28rem 0.55rem;
-  background: #12122a; border: 1.5px solid #2a2a4a;
-  border-radius: 6px; color: #5050a0;
+  background: var(--color-ui-dark2); border: 1.5px solid var(--color-border2);
+  border-radius: 6px; color: var(--color-ui-text-dim);
   font-size: 0.7rem; font-weight: 700;
   cursor: pointer;
   transition: border-color 0.12s, color 0.12s, background 0.12s;
@@ -474,28 +474,28 @@
 /* Zoom presets */
 .presetBtn {
   padding: 0.28rem 0.6rem;
-  background: #12122a; border: 1.5px solid #2a2a4a;
-  border-radius: 6px; color: #7070a0;
+  background: var(--color-ui-dark2); border: 1.5px solid var(--color-border2);
+  border-radius: 6px; color: var(--color-fg-dim);
   font-size: 0.7rem; font-weight: 600;
   cursor: pointer;
   transition: border-color 0.12s, color 0.12s;
 }
-.presetBtn:hover { border-color: #7c6bff; color: #a090ff; }
+.presetBtn:hover { border-color: var(--color-accent); color: var(--color-accent-light); }
 
 /* ── BPM slider ── */
 .bpmRow { display: flex; align-items: center; gap: 0.55rem; }
 
 .bpmLabel {
   font-size: 0.7rem; font-weight: 700;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   white-space: nowrap; min-width: 4.5rem;
 }
 
-.rateHint { font-size: 0.63rem; color: var(--color-accent, #7c6bff); font-weight: 600; }
+.rateHint { font-size: 0.63rem; color: var(--color-accent); font-weight: 600; }
 
 .bpmSlider {
   flex: 1; height: 4px;
-  accent-color: var(--color-accent, #7c6bff);
+  accent-color: var(--color-accent);
   cursor: pointer;
 }
 

@@ -25,7 +25,7 @@
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #5050a0;
+  color: var(--color-ui-text-dim);
   margin: 0;
 }
 
@@ -37,10 +37,10 @@
 
 .filterBtn {
   padding: 0.2rem 0.6rem;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
   border-radius: 20px;
-  color: #5050a0;
+  color: var(--color-ui-text-dim);
   font-size: 0.65rem;
   font-weight: 600;
   cursor: pointer;
@@ -48,9 +48,9 @@
 }
 
 .filterBtnActive {
-  border-color: #7c6bff;
-  color: #c0b8ff;
-  background: #16143a;
+  border-color: var(--color-accent);
+  color: var(--color-ui-text-bright);
+  background: var(--color-ui-medium);
 }
 
 /* ── 2-column grid ── */
@@ -64,8 +64,8 @@
 .card {
   display: flex;
   flex-direction: column;
-  background: #0e0e1e;
-  border: 1.5px solid #1e1e3a;
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
   border-radius: 10px;
   overflow: hidden;
   cursor: pointer;
@@ -76,8 +76,8 @@
 }
 
 .card:hover {
-  border-color: #7c6bff;
-  box-shadow: 0 0 8px rgba(124, 107, 255, 0.28);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 28%, transparent);
 }
 
 .card:active {
@@ -89,7 +89,7 @@
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: #080818;
+  background: var(--color-bg);
   overflow: hidden;
 }
 
@@ -115,7 +115,7 @@
 .title {
   font-size: 0.71rem;
   font-weight: 700;
-  color: #c0c0e0;
+  color: var(--color-fg);
   margin: 0;
   line-height: 1.35;
   display: -webkit-box;
@@ -126,7 +126,7 @@
 
 .artist {
   font-size: 0.6rem;
-  color: #5858a0;
+  color: var(--color-fg-dim);
   margin: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -144,9 +144,9 @@
 .bpmBadge {
   font-size: 0.6rem;
   font-weight: 700;
-  color: #7c6bff;
-  background: rgba(124, 107, 255, 0.12);
-  border: 1px solid rgba(124, 107, 255, 0.25);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
   padding: 1px 5px;
   border-radius: 20px;
 }
@@ -165,9 +165,9 @@
 }
 
 .genreBachata {
-  color: #ff6bcd;
-  background: rgba(255, 107, 205, 0.1);
-  border: 1px solid rgba(255, 107, 205, 0.25);
+  color: var(--color-accent2);
+  background: color-mix(in srgb, var(--color-accent2) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent2) 25%, transparent);
 }
 
 /* ── Personalized reco extras ── */
@@ -176,7 +176,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #7c6bff;
+  background: var(--color-accent);
   margin-left: 6px;
   vertical-align: middle;
   animation: recoPulse 1.2s ease-in-out infinite;

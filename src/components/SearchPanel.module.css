@@ -29,10 +29,10 @@
 
 .input {
   width: 100%;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
   border-radius: 8px;
-  color: #c0c0e0;
+  color: var(--color-fg);
   font-size: 0.85rem;
   padding: 0.45rem 0.6rem 0.45rem 2rem;
   outline: none;
@@ -42,11 +42,11 @@
 }
 
 .input:focus {
-  border-color: #7c6bff;
+  border-color: var(--color-accent);
 }
 
 .input::placeholder {
-  color: #40406a;
+  color: var(--color-fg-dim);
 }
 
 /* iOS が type=search に追加する × ボタンを非表示 */
@@ -57,7 +57,7 @@
 .searchBtn {
   flex-shrink: 0;
   padding: 0.45rem 1rem;
-  background: #7c6bff;
+  background: var(--color-accent);
   border: none;
   border-radius: 8px;
   color: #fff;
@@ -89,7 +89,7 @@
   font-size: 0.65rem;
   font-weight: 700;
   letter-spacing: 0.06em;
-  color: #5050a0;
+  color: var(--color-ui-text-dim);
   flex-shrink: 0;
 }
 
@@ -101,10 +101,10 @@
 
 .chip {
   padding: 0.2rem 0.65rem;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
   border-radius: 20px;
-  color: #7070b0;
+  color: var(--color-fg-dim);
   font-size: 0.7rem;
   font-weight: 600;
   cursor: pointer;
@@ -113,9 +113,9 @@
 }
 
 .chip:hover {
-  border-color: #7c6bff;
-  color: #c0b8ff;
-  background: #16143a;
+  border-color: var(--color-accent);
+  color: var(--color-ui-text-bright);
+  background: var(--color-ui-medium);
 }
 
 /* ── ローディング ── */
@@ -124,15 +124,15 @@
   align-items: center;
   gap: 0.6rem;
   padding: 0.75rem 0;
-  color: #6060a0;
+  color: var(--color-fg-dim);
   font-size: 0.8rem;
 }
 
 .spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid #2a2a5a;
-  border-top-color: #7c6bff;
+  border: 2px solid var(--color-border2);
+  border-top-color: var(--color-accent);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   flex-shrink: 0;
@@ -181,16 +181,16 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #5050a0;
+  color: var(--color-ui-text-dim);
 }
 
 .clearBtn {
   flex-shrink: 0;
   padding: 0.2rem 0.6rem;
-  background: #12122a;
-  border: 1.5px solid #2a2a4a;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
   border-radius: 20px;
-  color: #6060a0;
+  color: var(--color-fg-dim);
   font-size: 0.65rem;
   font-weight: 600;
   cursor: pointer;
@@ -198,8 +198,8 @@
 }
 
 .clearBtn:hover {
-  border-color: #7c6bff;
-  color: #c0b8ff;
+  border-color: var(--color-accent);
+  color: var(--color-ui-text-bright);
 }
 
 /* ── 2カラムグリッド ── */
@@ -213,8 +213,8 @@
 .card {
   display: flex;
   flex-direction: column;
-  background: #0e0e1e;
-  border: 1.5px solid #1e1e3a;
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
   border-radius: 10px;
   overflow: hidden;
   cursor: pointer;
@@ -225,8 +225,8 @@
 }
 
 .card:hover {
-  border-color: #7c6bff;
-  box-shadow: 0 0 8px rgba(124, 107, 255, 0.28);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 28%, transparent);
 }
 
 .card:active {
@@ -238,7 +238,7 @@
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: #080818;
+  background: var(--color-bg);
   overflow: hidden;
 }
 
@@ -263,7 +263,7 @@
 .title {
   font-size: 0.7rem;
   font-weight: 700;
-  color: #c0c0e0;
+  color: var(--color-fg);
   margin: 0;
   line-height: 1.35;
   display: -webkit-box;
@@ -274,7 +274,7 @@
 
 .channel {
   font-size: 0.6rem;
-  color: #5858a0;
+  color: var(--color-fg-dim);
   margin: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -285,7 +285,7 @@
 .empty {
   text-align: center;
   padding: 1.5rem 1rem;
-  color: #5050a0;
+  color: var(--color-ui-text-dim);
   font-size: 0.82rem;
   display: flex;
   flex-direction: column;

@@ -20,7 +20,7 @@
   font-size: 2.5rem;
   font-weight: 800;
   letter-spacing: -0.02em;
-  background: linear-gradient(135deg, var(--color-accent, #7c6bff) 0%, var(--color-accent2, #ff6bcd) 100%);
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent2) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -29,7 +29,7 @@
 
 .subtitle {
   font-size: 0.85rem;
-  color: #6060a0;
+  color: var(--color-fg-dim);
   letter-spacing: 0.05em;
   margin: 0;
 }
@@ -46,7 +46,7 @@
 }
 
 .section + .section {
-  border-top: 1px solid var(--color-border, #1e1e3a);
+  border-top: 1px solid var(--color-border);
   padding-top: 2rem;
 }
 
@@ -55,7 +55,7 @@
   font-weight: 700;
   letter-spacing: 0.15em;
   text-transform: uppercase;
-  color: var(--color-section-title, #4040a0);
+  color: var(--color-section-title);
   margin: 0;
   align-self: flex-start;
 }
@@ -67,15 +67,15 @@
   gap: 0.75rem;
   width: 100%;
   padding: 0.9rem 1rem;
-  background: var(--color-surface, #0e0e1e);
-  border: 1px solid var(--color-border, #1e1e3a);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 10px;
 }
 
 .flipHelp {
   font-size: 0.75rem;
   line-height: 1.7;
-  color: #5858a0;
+  color: var(--color-fg-dim);
   margin: 0;
 }
 
@@ -86,7 +86,7 @@
 
 .flipHelp em {
   font-style: normal;
-  color: #7c6bff;
+  color: var(--color-accent);
   font-weight: 600;
 }
 
@@ -100,10 +100,10 @@
 .flipBtn {
   flex-shrink: 0;
   padding: 0.55rem 1.25rem;
-  border: 1.5px solid #4a42a0;
+  border: 1.5px solid var(--color-ui-border-hover);
   border-radius: 8px;
-  background: #0e0e22;
-  color: #a090e0;
+  background: var(--color-ui-dark);
+  color: var(--color-ui-text-bright);
   font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -113,9 +113,9 @@
 }
 
 .flipBtn:hover:not(:disabled) {
-  border-color: #7c6bff;
-  color: #c0b0ff;
-  background: #13132a;
+  border-color: var(--color-accent);
+  color: var(--color-ui-text-bright);
+  background: var(--color-ui-dark3);
 }
 
 .flipBtn:disabled {
@@ -124,8 +124,8 @@
 }
 
 .flipBtnPending {
-  border-color: #7c6bff;
-  color: #c0b0ff;
+  border-color: var(--color-accent);
+  color: var(--color-ui-text-bright);
   animation: flipPulse 1.2s ease-in-out infinite;
 }
 
@@ -144,10 +144,10 @@
 
 .mainTabBtn {
   padding: 0.55rem 1.75rem;
-  border: 1.5px solid var(--color-border, #1e1e3a);
+  border: 1.5px solid var(--color-border);
   border-radius: 24px;
   background: transparent;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   font-size: 0.88rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -156,15 +156,15 @@
 }
 
 .mainTabBtn:hover {
-  border-color: var(--color-accent, #7c6bff);
+  border-color: var(--color-accent);
   color: var(--color-fg, #e0e0ff);
 }
 
 .mainTabBtnActive {
-  border-color: var(--color-accent, #7c6bff);
-  background: color-mix(in srgb, var(--color-accent, #7c6bff) 18%, transparent);
-  color: var(--color-accent, #7c6bff);
-  box-shadow: 0 0 10px rgba(124, 107, 255, 0.3);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
 /* ── Tab panels ── */
@@ -186,10 +186,10 @@
 
 .genreBtn {
   padding: 0.45rem 1.2rem;
-  border: 1.5px solid var(--color-border, #1e1e3a);
+  border: 1.5px solid var(--color-border);
   border-radius: 20px;
   background: transparent;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -198,22 +198,22 @@
 }
 
 .genreBtn:hover {
-  border-color: var(--color-accent, #7c6bff);
+  border-color: var(--color-accent);
   color: var(--color-fg, #e0e0ff);
 }
 
 .genreBtnActive {
-  border-color: var(--color-accent, #7c6bff);
-  background: color-mix(in srgb, var(--color-accent, #7c6bff) 15%, transparent);
-  color: var(--color-accent, #7c6bff);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
 }
 
 /* ── Bachata Info ── */
 .bachataInfo {
   width: 100%;
   padding: 1rem;
-  background: var(--color-surface, #0e0e1e);
-  border: 1px solid var(--color-border, #1e1e3a);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 10px;
   display: flex;
   flex-direction: column;
@@ -223,12 +223,12 @@
 .bachataDesc {
   font-size: 0.8rem;
   line-height: 1.8;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   margin: 0;
 }
 
 .bachataDesc strong {
-  color: var(--color-accent, #7c6bff);
+  color: var(--color-accent);
 }
 
 .bachataBeats {
@@ -244,17 +244,17 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--color-border2, #2a2a4a);
+  border: 1px solid var(--color-border2);
   border-radius: 6px;
   font-size: 0.9rem;
   font-weight: 700;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
 }
 
 .bachataBeatAccent {
-  border-color: var(--color-accent, #7c6bff);
-  color: var(--color-accent, #7c6bff);
-  background: color-mix(in srgb, var(--color-accent, #7c6bff) 12%, transparent);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
 .bachataTap {
@@ -266,22 +266,22 @@
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--color-accent, #7c6bff);
+  color: var(--color-accent);
   white-space: nowrap;
 }
 
 /* Active (current) non-accent beat — subtle pulse */
 .bachataBeatCurrent {
-  border-color: var(--color-accent2, #ff6bcd);
-  background: color-mix(in srgb, var(--color-accent2, #ff6bcd) 10%, transparent);
+  border-color: var(--color-accent2);
+  background: color-mix(in srgb, var(--color-accent2) 10%, transparent);
 }
 
 /* Active accent beat (Beat 4 / Beat 8) — strong glow for hip-move cue */
 .bachataBeatLive {
-  border-color: var(--color-accent, #7c6bff) !important;
-  background: color-mix(in srgb, var(--color-accent, #7c6bff) 35%, transparent) !important;
+  border-color: var(--color-accent) !important;
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent) !important;
   color: #fff !important;
-  box-shadow: 0 0 12px rgba(124, 107, 255, 0.8), 0 0 24px rgba(124, 107, 255, 0.4);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--color-accent) 80%, transparent), 0 0 24px color-mix(in srgb, var(--color-accent) 40%, transparent);
   animation: bachataBeatPulse 0.15s ease-out;
 }
 
@@ -303,7 +303,7 @@
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--color-section-title, #4040a0);
+  color: var(--color-section-title);
 }
 
 .bachataSectionBtns {
@@ -319,24 +319,24 @@
   align-items: center;
   gap: 0.15rem;
   padding: 0.55rem 0.5rem;
-  border: 1.5px solid var(--color-border, #1e1e3a);
+  border: 1.5px solid var(--color-border);
   border-radius: 10px;
   background: transparent;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   cursor: pointer;
   transition: border-color 0.18s, background 0.18s, color 0.18s, box-shadow 0.18s;
 }
 
 .bachataSectionBtn:hover {
-  border-color: var(--color-accent, #7c6bff);
+  border-color: var(--color-accent);
   color: var(--color-fg, #e0e0ff);
 }
 
 .bachataSectionBtnActive {
-  border-color: var(--color-accent, #7c6bff);
-  background: color-mix(in srgb, var(--color-accent, #7c6bff) 18%, transparent);
-  color: var(--color-accent, #7c6bff);
-  box-shadow: 0 0 8px rgba(124, 107, 255, 0.35);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
 .bachataSectionBtnLabel {
@@ -354,11 +354,11 @@
 .bachataSectionDesc {
   font-size: 0.75rem;
   line-height: 1.65;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   margin: 0;
   padding: 0.5rem 0.75rem;
-  border-left: 2px solid var(--color-accent, #7c6bff);
-  background: color-mix(in srgb, var(--color-accent, #7c6bff) 6%, transparent);
+  border-left: 2px solid var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
   border-radius: 0 6px 6px 0;
 }
 
@@ -371,7 +371,7 @@
 .footer {
   margin-top: 2rem;
   padding-top: 1.5rem;
-  border-top: 1px solid var(--color-border, #1e1e3a);
+  border-top: 1px solid var(--color-border);
   text-align: center;
 }
 
@@ -379,7 +379,7 @@
   font-size: 0.7rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--color-fg-dim, #6060a0);
+  color: var(--color-fg-dim);
   margin: 0;
 }
 

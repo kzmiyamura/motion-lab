@@ -139,16 +139,25 @@ export async function createPublicPermission(
   if (!res.ok) throw new DriveApiError(`Permission create failed: HTTP ${res.status}`, res.status);
 }
 
+/** uploadFileResumable の進捗情報 */
+export interface UploadStats {
+  percent: number;   // 0–100
+  loaded: number;    // 送信済みバイト
+  total: number;     // 合計バイト
+  speedBps: number;  // 現在の転送速度 (bytes/sec, 開始からの平均)
+  etaSec: number;    // 残り推定秒数
+}
+
 /**
  * 再開可能アップロード（大容量ファイル対応）
- * XMLHttpRequest を使用してアップロード進捗を取得する
+ * XMLHttpRequest を使用してアップロード進捗・速度・残り時間を取得する
  * @returns 作成されたファイルの Drive ID
  */
 export async function uploadFileResumable(
   token: string,
   folderId: string,
   file: File,
-  onProgress?: (percent: number) => void,
+  onProgress?: (stats: UploadStats) => void,
 ): Promise<string> {
   // Step 1: アップロードセッションを開始してアップロード URI を取得
   const initRes = await fetch(
@@ -176,15 +185,26 @@ export async function uploadFileResumable(
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
+    const startTime = Date.now();
+
     xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable) {
-        onProgress?.(Math.round((e.loaded / e.total) * 100));
-      }
+      if (!e.lengthComputable) return;
+      const elapsedSec = (Date.now() - startTime) / 1000;
+      const speedBps   = elapsedSec > 0 ? e.loaded / elapsedSec : 0;
+      const remaining  = e.total - e.loaded;
+      const etaSec     = speedBps > 0 ? remaining / speedBps : 0;
+      onProgress?.({
+        percent:  Math.round((e.loaded / e.total) * 100),
+        loaded:   e.loaded,
+        total:    e.total,
+        speedBps,
+        etaSec,
+      });
     });
 
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress?.(100);
+        onProgress?.({ percent: 100, loaded: file.size, total: file.size, speedBps: 0, etaSec: 0 });
         // レスポンスボディからファイル ID を取得
         try {
           const result = JSON.parse(xhr.responseText) as { id?: string };

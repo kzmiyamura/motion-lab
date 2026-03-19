@@ -145,6 +145,7 @@ export function YouTubeControl({
       // rAF で body スタイル解除後のレイアウト確定を待ってから復元
       requestAnimationFrame(() => {
         window.scrollTo(0, savedScrollYRef.current);
+        window.dispatchEvent(new Event('resize'));
       });
     }
     return () => { document.body.style.overflow = ''; };

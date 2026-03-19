@@ -115,7 +115,9 @@ export function YouTubeControl({
       playerReadyRef.current = false;
       setSeekPos(0);
       setDuration(0);
+      video.setYtPlaying(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);
 
   // ── Seek position polling (500ms) ────────────────────────────────────

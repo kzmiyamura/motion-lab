@@ -144,6 +144,8 @@ export function YouTubeControl({
         const block = document.querySelector('[class*="block"]');
         const section = document.querySelector('[class*="section"]');
         const main = document.querySelector('main');
+        const blockParent = block?.parentElement;
+        const wrapperParent = wrapper?.parentElement;
         const info = [
           `innerWidth: ${window.innerWidth}`,
           `body.offsetWidth: ${document.body.offsetWidth}`,
@@ -154,6 +156,10 @@ export function YouTubeControl({
           `block.offsetWidth: ${(block as HTMLElement)?.offsetWidth ?? 'n/a'}`,
           `section.offsetWidth: ${(section as HTMLElement)?.offsetWidth ?? 'n/a'}`,
           `main.offsetWidth: ${(main as HTMLElement)?.offsetWidth ?? 'n/a'}`,
+          `blockParent.offsetWidth: ${blockParent?.offsetWidth ?? 'n/a'}`,
+          `blockParent.class: ${blockParent?.className ?? 'n/a'}`,
+          `wrapperParent.offsetWidth: ${wrapperParent?.offsetWidth ?? 'n/a'}`,
+          `wrapperParent.class: ${wrapperParent?.className ?? 'n/a'}`,
         ].join('\n');
         setDebugInfo(info);
         setTimeout(() => setDebugInfo(null), 3000);

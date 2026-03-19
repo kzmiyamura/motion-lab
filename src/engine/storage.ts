@@ -49,6 +49,24 @@ function save(key: string, value: string) {
   }
 })();
 
+// ── 検索ワード履歴 ────────────────────────────────────────────────────────
+const SEARCH_HISTORY_KEY = 'motionlab:search-history';
+const MAX_SEARCH_HISTORY = 6;
+
+export const searchHistory = {
+  load: (): string[] => {
+    try { return JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) ?? '[]'); }
+    catch { return []; }
+  },
+  push: (query: string): string[] => {
+    const prev = searchHistory.load();
+    const next = [query, ...prev.filter(q => q !== query)].slice(0, MAX_SEARCH_HISTORY);
+    try { localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next)); } catch { /* quota */ }
+    return next;
+  },
+};
+
+// ── メイン storage ─────────────────────────────────────────────────────────
 export const storage = {
   getBpm:       ()         => load(KEYS.bpm, 180, Number),
   setBpm:       (v: number) => save(KEYS.bpm, String(v)),

@@ -1,0 +1,313 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  width: 100%;
+}
+
+/* ── 検索フォーム ── */
+.searchRow {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.inputWrap {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 0.55rem;
+  font-size: 0.85rem;
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.input {
+  width: 100%;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  border-radius: 8px;
+  color: #c0c0e0;
+  font-size: 0.85rem;
+  padding: 0.45rem 0.6rem 0.45rem 2rem;
+  outline: none;
+  transition: border-color 0.15s;
+  /* iOS: type=search の × ボタン非表示 */
+  -webkit-appearance: none;
+}
+
+.input:focus {
+  border-color: #7c6bff;
+}
+
+.input::placeholder {
+  color: #40406a;
+}
+
+/* iOS が type=search に追加する × ボタンを非表示 */
+.input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.searchBtn {
+  flex-shrink: 0;
+  padding: 0.45rem 1rem;
+  background: #7c6bff;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.searchBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.searchBtn:not(:disabled):hover {
+  opacity: 0.85;
+}
+
+/* ── 最近の検索 ── */
+.historyRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.historyLabel {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #5050a0;
+  flex-shrink: 0;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.chip {
+  padding: 0.2rem 0.65rem;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  border-radius: 20px;
+  color: #7070b0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  border-color: #7c6bff;
+  color: #c0b8ff;
+  background: #16143a;
+}
+
+/* ── ローディング ── */
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 0;
+  color: #6060a0;
+  font-size: 0.8rem;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #2a2a5a;
+  border-top-color: #7c6bff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── エラー ── */
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  background: rgba(180, 60, 60, 0.08);
+  border: 1px solid rgba(180, 60, 60, 0.2);
+  border-radius: 8px;
+}
+
+.errorText {
+  flex: 1;
+  font-size: 0.78rem;
+  color: #c07070;
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+/* ── 検索結果 ── */
+.resultsSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.resultHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.resultLabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5050a0;
+}
+
+.clearBtn {
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  background: #12122a;
+  border: 1.5px solid #2a2a4a;
+  border-radius: 20px;
+  color: #6060a0;
+  font-size: 0.65rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.clearBtn:hover {
+  border-color: #7c6bff;
+  color: #c0b8ff;
+}
+
+/* ── 2カラムグリッド ── */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+/* ── カード ── */
+.card {
+  display: flex;
+  flex-direction: column;
+  background: #0e0e1e;
+  border: 1.5px solid #1e1e3a;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.card:hover {
+  border-color: #7c6bff;
+  box-shadow: 0 0 8px rgba(124, 107, 255, 0.28);
+}
+
+.card:active {
+  transform: scale(0.97);
+}
+
+/* ── サムネイル ── */
+.thumbWrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #080818;
+  overflow: hidden;
+}
+
+.thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ── カード情報 ── */
+.info {
+  padding: 0.4rem 0.5rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1;
+}
+
+.title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #c0c0e0;
+  margin: 0;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.channel {
+  font-size: 0.6rem;
+  color: #5858a0;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── 結果なし ── */
+.empty {
+  text-align: center;
+  padding: 1.5rem 1rem;
+  color: #5050a0;
+  font-size: 0.82rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.empty p {
+  margin: 0;
+}
+
+/* ── モバイル ── */
+@media (max-width: 380px) {
+  .grid {
+    gap: 0.45rem;
+  }
+
+  .info {
+    padding: 0.35rem 0.4rem 0.4rem;
+  }
+
+  .title {
+    font-size: 0.65rem;
+  }
+}

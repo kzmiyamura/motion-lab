@@ -6,6 +6,7 @@ import type { SlowRate } from '../hooks/useVideoTraining';
 import { ModeSwitcher } from './ModeSwitcher';
 import { VideoControls } from './VideoControls';
 import { VideoGrid } from './VideoGrid';
+import { SearchPanel } from './SearchPanel';
 import styles from './YouTubeControl.module.css';
 
 const HISTORY_KEY = 'motionlab:yt-history';
@@ -75,6 +76,7 @@ export function YouTubeControl({
   const [playerSize, setPlayerSize] = useState<PlayerSize>('normal');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(false);
+  const [searchHasResults, setSearchHasResults] = useState(false);
 
   const playerRef = useRef<YouTubePlayer | null>(null);
   const playerReadyRef = useRef(false);
@@ -324,7 +326,7 @@ export function YouTubeControl({
               {/* 動画選択グリッドに戻る */}
               <button
                 className={styles.sizeBtn}
-                onClick={() => { setVideoId(null); setUrlInput(''); onVideoIdChange?.(null); }}
+                onClick={() => { setVideoId(null); setUrlInput(''); setSearchHasResults(false); onVideoIdChange?.(null); }}
                 title="別の動画を選択"
               >⌂</button>
               <button
@@ -356,15 +358,27 @@ export function YouTubeControl({
           </div>
         )}
 
-        {/* 動画未選択時: レコメンドグリッド */}
+        {/* 動画未選択時: 検索 + レコメンドグリッド */}
         {!videoId && (
-          <VideoGrid
-            history={history}
-            onSelect={(id, bpm) => {
-              setUrlInput(id);
-              handleLoad(id, bpm);
-            }}
-          />
+          <>
+            <SearchPanel
+              onSelect={(id, bpm) => {
+                setUrlInput(id);
+                handleLoad(id, bpm);
+              }}
+              onSearchStateChange={setSearchHasResults}
+            />
+            {/* 検索結果表示中は VideoGrid を非表示 */}
+            {!searchHasResults && (
+              <VideoGrid
+                history={history}
+                onSelect={(id, bpm) => {
+                  setUrlInput(id);
+                  handleLoad(id, bpm);
+                }}
+              />
+            )}
+          </>
         )}
 
         {videoId && (

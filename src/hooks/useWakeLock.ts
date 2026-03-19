@@ -1,59 +1,53 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 
 /**
- * Screen Wake Lock API フック
+ * 再生中に画面スリープ（省電力モード）を抑制する
+ * Wake Lock API 非対応環境では無音で無効化される
  *
- * isPlaying が true の間、画面のスリープを防ぐ。
- * タブ切り替えで自動解除された場合は復帰時に再取得する。
- * 未対応ブラウザでは何もしない（クラッシュしない）。
+ * @param active  true のとき Wake Lock を要求し、false で解放する
  */
-export function useWakeLock(isPlaying: boolean) {
-  const lockRef = useRef<WakeLockSentinel | null>(null);
+export function useWakeLock(active: boolean) {
+  const sentinelRef = useRef<WakeLockSentinel | null>(null);
+  const activeRef   = useRef(active);
+  activeRef.current = active;
 
-  // Wake Lock を取得する。失敗してもアプリには影響させない
-  async function acquire() {
+  const acquire = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
+    if (sentinelRef.current) return; // 既に保持中
     try {
-      lockRef.current = await navigator.wakeLock.request('screen');
+      sentinelRef.current = await navigator.wakeLock.request('screen');
+      // ブラウザ側で自動解放されたとき（タブ非表示など）参照をクリア
+      sentinelRef.current.addEventListener('release', () => {
+        sentinelRef.current = null;
+      });
     } catch {
-      // 省電力モードや権限拒否など — 無視して続行
+      /* 非対応 or 権限拒否 — 無視 */
     }
-  }
+  }, []);
 
-  // Wake Lock を解放する
-  async function release() {
-    if (!lockRef.current) return;
-    try {
-      await lockRef.current.release();
-    } catch {
-      // already released など — 無視
-    } finally {
-      lockRef.current = null;
-    }
-  }
+  const release = useCallback(() => {
+    sentinelRef.current?.release().catch(() => {});
+    sentinelRef.current = null;
+  }, []);
 
-  // isPlaying に連動して取得 / 解放
+  // active が変わったとき取得 / 解放
   useEffect(() => {
-    if (isPlaying) {
+    if (active) {
       acquire();
     } else {
       release();
     }
-    // アンマウント時にも確実に解放
-    return () => { release(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying]);
+    return release; // アンマウント時も解放
+  }, [active, acquire, release]);
 
-  // タブを離れると OS が自動で Wake Lock を解除するので、
-  // 戻ってきたときに再生中なら再取得する
+  // タブが前面に戻ったとき再取得（非表示で自動解放されるため）
   useEffect(() => {
-    function handleVisibilityChange() {
-      if (document.visibilityState === 'visible' && isPlaying) {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && activeRef.current) {
         acquire();
       }
-    }
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying]);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [acquire]);
 }

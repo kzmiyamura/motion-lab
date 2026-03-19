@@ -3,6 +3,7 @@ import { requestDriveToken, revokeDriveToken } from '../engine/googleAuth';
 import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, createPublicPermission, type DriveFile } from '../engine/googleDrive';
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
+import { useWakeLock } from '../hooks/useWakeLock';
 import styles from './FilePlayer.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -105,6 +106,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     document.body.style.overflow = playerSize === 'theater' ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
   }, [playerSize]);
+
+  useWakeLock(isPlaying);
 
   // Sync BPM slider from external changes
   useEffect(() => { setSliderBpm(bpm); }, [bpm]);

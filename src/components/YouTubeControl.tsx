@@ -7,6 +7,7 @@ import { ModeSwitcher } from './ModeSwitcher';
 import { VideoControls } from './VideoControls';
 import { VideoGrid } from './VideoGrid';
 import { SearchPanel } from './SearchPanel';
+import { useWakeLock } from '../hooks/useWakeLock';
 import styles from './YouTubeControl.module.css';
 
 const HISTORY_KEY = 'motionlab:yt-history';
@@ -145,6 +146,7 @@ export function YouTubeControl({
   } = useBpmMeasure(handleMeasuredBpm, bpm);
 
   const video = useVideoTraining(playerRef, viewMode === 'video', overlayTapRef);
+  useWakeLock(video.ytPlaying);
 
   // ── Unified playback rate effect ──────────────────────────────────────
   // audio mode: bpm/baseBpm ratio  (slowRate ignored)

@@ -16,6 +16,7 @@
     "cf:r2:create": "wrangler r2 bucket create motion-lab-storage"
   },
   "dependencies": {
+    "@mediapipe/pose": "^0.5.1675469404",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

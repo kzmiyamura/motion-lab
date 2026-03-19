@@ -4,6 +4,7 @@ import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable,
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import { useWakeLock } from '../hooks/useWakeLock';
+import { usePoseEstimation } from '../hooks/usePoseEstimation';
 import styles from './FilePlayer.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -102,9 +103,15 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playerSectionRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Pose estimation
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [poseEnabled, setPoseEnabled] = useState(false);
+
   // Zoom gesture refs
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
+
+  usePoseEstimation(mediaRef, canvasRef, poseEnabled && !!(source?.isVideo));
 
   // Derived
   const isTheater = playerSize === 'theater';
@@ -553,6 +560,14 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             aria-label="ミラー反転"
           >↔</button>
         )}
+        {source.isVideo && (
+          <button
+            className={`${styles.poseToggle} ${poseEnabled ? styles.poseToggleActive : ''}`}
+            onClick={() => setPoseEnabled(v => !v)}
+            title={poseEnabled ? '骨格推定 OFF' : '骨格推定 ON'}
+            aria-label="骨格推定 ON/OFF"
+          >骨格</button>
+        )}
         <div className={styles.rateGroup}>
           {SLOW_RATES.map(r => (
             <button
@@ -750,14 +765,24 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               controls={false}
             />
             {source.isVideo && (
-              <div
-                className={styles.videoOverlay}
-                onPointerDown={onOverlayPointerDown}
-                onPointerMove={onOverlayPointerMove}
-                onPointerUp={onOverlayPointerUp}
-                onPointerCancel={onOverlayPointerUp}
-                onClick={handleOverlayClick}
-              />
+              <>
+                <canvas
+                  ref={canvasRef}
+                  className={styles.poseCanvas}
+                  style={{
+                    transform: `${isMirrored ? 'scaleX(-1) ' : ''}scale(${zoom.scale}) translate(${zoom.x / zoom.scale}px, ${zoom.y / zoom.scale}px)`,
+                    display: poseEnabled ? 'block' : 'none',
+                  }}
+                />
+                <div
+                  className={styles.videoOverlay}
+                  onPointerDown={onOverlayPointerDown}
+                  onPointerMove={onOverlayPointerMove}
+                  onPointerUp={onOverlayPointerUp}
+                  onPointerCancel={onOverlayPointerUp}
+                  onClick={handleOverlayClick}
+                />
+              </>
             )}
           </div>
 

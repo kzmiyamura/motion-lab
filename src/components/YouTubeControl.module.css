@@ -578,6 +578,36 @@
   margin-left: 4px;
 }
 
+/* ── BPM slider (audio mode) ── */
+.bpmSliderRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.bpmSliderLabel {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #7070b0;
+  min-width: 2rem;
+}
+
+.bpmSlider {
+  flex: 1;
+  accent-color: #7c6bff;
+  cursor: pointer;
+  height: 4px;
+}
+
+.bpmSliderValue {
+  font-size: 0.9rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #c0b8ff;
+  min-width: 2.5rem;
+  text-align: right;
+}
+
 /* ── Mobile portrait ── */
 @media (max-width: 480px) {
   .beatDot {

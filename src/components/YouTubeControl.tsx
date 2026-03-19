@@ -296,80 +296,6 @@ export function YouTubeControl({
         <ModeSwitcher mode={viewMode} onChange={onViewModeChange} />
       </div>
 
-      {/* ── BPM 測定（audio mode のみ）── */}
-      {viewMode === 'audio' && (
-        <div className={styles.block}>
-          <div className={styles.blockHeader}>
-            <span className={styles.blockLabel}>BPM 測定</span>
-            <div className={styles.modeToggle}>
-              <button
-                className={`${styles.modeBtn} ${mode === 'longpress' ? styles.modeBtnActive : ''}`}
-                onClick={() => switchMode('longpress')}
-              >長押し</button>
-              <button
-                className={`${styles.modeBtn} ${mode === 'twotap' ? styles.modeBtnActive : ''}`}
-                onClick={() => switchMode('twotap')}
-              >2タップ</button>
-            </div>
-          </div>
-
-          <div className={styles.beatDots}>
-            {Array.from({ length: 8 }, (_, i) => (
-              <div
-                key={i}
-                className={[
-                  styles.beatDot,
-                  isPressing && i < estimatedBeat ? styles.beatDotLit : '',
-                  isPressing && i === estimatedBeat - 1 ? styles.beatDotCurrent : '',
-                ].filter(Boolean).join(' ')}
-              >
-                {i + 1}
-              </div>
-            ))}
-          </div>
-
-          {mode === 'longpress' ? (
-            <button
-              className={`${styles.measureBtn} ${isPressing ? styles.measureBtnActive : ''}`}
-              onPointerDown={handlePressStart}
-              onPointerUp={handlePressEnd}
-              onPointerLeave={handlePressEnd}
-            >
-              {isPressing
-                ? `${(elapsedMs / 1000).toFixed(1)} s 計測中…`
-                : '① 押す  →  ⑧ 離す（8拍分）'}
-            </button>
-          ) : (
-            <button
-              className={`${styles.measureBtn} ${(isPressing || firstTapSet) ? styles.measureBtnActive : ''}`}
-              onClick={handleTap}
-            >
-              {!firstTapSet ? '「1」でタップ' : `${(elapsedMs / 1000).toFixed(1)} s — 「次の1」でタップ`}
-            </button>
-          )}
-
-          {baseBpm !== null && (
-            <div className={styles.bpmResult}>
-              <button
-                className={styles.bpmAdjBtn}
-                onClick={() => { const n = Math.max(1, (baseBpm ?? 1) - 1); setBaseBpm(n); onBpmChange(n); }}
-                aria-label="BPM基準 −1"
-              >−</button>
-              <span className={styles.bpmResultValue}>{baseBpm}</span>
-              <button
-                className={styles.bpmAdjBtn}
-                onClick={() => { const n = (baseBpm ?? 1) + 1; setBaseBpm(n); onBpmChange(n); }}
-                aria-label="BPM基準 +1"
-              >＋</button>
-              <span className={styles.bpmResultUnit}>BPM 基準</span>
-              {bpm !== baseBpm && (
-                <span className={styles.rateTag}>×{playbackRate.toFixed(2)}</span>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* ── YouTube ── */}
       <div className={styles.block}>
         <div className={styles.blockHeader}>
@@ -487,6 +413,97 @@ export function YouTubeControl({
           </div>
         )}
       </div>
+
+      {/* ── BPM 測定（audio mode のみ）── */}
+      {viewMode === 'audio' && (
+        <div className={styles.block}>
+          <div className={styles.blockHeader}>
+            <span className={styles.blockLabel}>BPM 測定</span>
+            <div className={styles.modeToggle}>
+              <button
+                className={`${styles.modeBtn} ${mode === 'longpress' ? styles.modeBtnActive : ''}`}
+                onClick={() => switchMode('longpress')}
+              >長押し</button>
+              <button
+                className={`${styles.modeBtn} ${mode === 'twotap' ? styles.modeBtnActive : ''}`}
+                onClick={() => switchMode('twotap')}
+              >2タップ</button>
+            </div>
+          </div>
+
+          <div className={styles.beatDots}>
+            {Array.from({ length: 8 }, (_, i) => (
+              <div
+                key={i}
+                className={[
+                  styles.beatDot,
+                  isPressing && i < estimatedBeat ? styles.beatDotLit : '',
+                  isPressing && i === estimatedBeat - 1 ? styles.beatDotCurrent : '',
+                ].filter(Boolean).join(' ')}
+              >
+                {i + 1}
+              </div>
+            ))}
+          </div>
+
+          {mode === 'longpress' ? (
+            <button
+              className={`${styles.measureBtn} ${isPressing ? styles.measureBtnActive : ''}`}
+              onPointerDown={handlePressStart}
+              onPointerUp={handlePressEnd}
+              onPointerLeave={handlePressEnd}
+            >
+              {isPressing
+                ? `${(elapsedMs / 1000).toFixed(1)} s 計測中…`
+                : '① 押す  →  ⑧ 離す（8拍分）'}
+            </button>
+          ) : (
+            <button
+              className={`${styles.measureBtn} ${(isPressing || firstTapSet) ? styles.measureBtnActive : ''}`}
+              onClick={handleTap}
+            >
+              {!firstTapSet ? '「1」でタップ' : `${(elapsedMs / 1000).toFixed(1)} s — 「次の1」でタップ`}
+            </button>
+          )}
+
+          {baseBpm !== null && (
+            <div className={styles.bpmResult}>
+              <button
+                className={styles.bpmAdjBtn}
+                onClick={() => { const n = Math.max(1, (baseBpm ?? 1) - 1); setBaseBpm(n); onBpmChange(n); }}
+                aria-label="BPM基準 −1"
+              >−</button>
+              <span className={styles.bpmResultValue}>{baseBpm}</span>
+              <button
+                className={styles.bpmAdjBtn}
+                onClick={() => { const n = (baseBpm ?? 1) + 1; setBaseBpm(n); onBpmChange(n); }}
+                aria-label="BPM基準 +1"
+              >＋</button>
+              <span className={styles.bpmResultUnit}>BPM 基準</span>
+              {bpm !== baseBpm && (
+                <span className={styles.rateTag}>×{playbackRate.toFixed(2)}</span>
+              )}
+            </div>
+          )}
+
+          {/* ── BPM スライダー ── */}
+          <div className={styles.bpmSliderRow}>
+            <label className={styles.bpmSliderLabel} htmlFor="yt-bpm-slider">BPM</label>
+            <input
+              id="yt-bpm-slider"
+              type="range"
+              min={80}
+              max={220}
+              step={1}
+              value={bpm}
+              onChange={(e) => onBpmChange(Number(e.target.value))}
+              className={styles.bpmSlider}
+              aria-label="BPM"
+            />
+            <span className={styles.bpmSliderValue}>{bpm}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -184,5 +184,11 @@
 @media (max-width: 480px) {
   .rateGroup {
     margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .rateBtn {
+    padding: 0.18rem 0.38rem;
+    font-size: 0.65rem;
   }
 }

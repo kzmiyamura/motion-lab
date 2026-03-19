@@ -1,5 +1,5 @@
 /**
- * Google Drive API v3 — 音楽・動画ファイルの一覧取得とダウンロード
+ * Google Drive API v3 — 音楽・動画ファイルの一覧取得・ダウンロード・アップロード
  */
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
@@ -88,4 +88,100 @@ export async function fetchFileBlob(
   }
 
   return new Blob(chunks, { type: res.headers.get('Content-Type') ?? '' });
+}
+
+/**
+ * 指定名のフォルダを root 直下で探し、なければ作成して ID を返す
+ */
+export async function findOrCreateFolder(
+  token: string,
+  folderName: string,
+): Promise<string> {
+  const q = `mimeType='application/vnd.google-apps.folder' and name='${folderName.replace(/'/g, "\\'")}' and trashed=false and 'root' in parents`;
+  const params = new URLSearchParams({ q, fields: 'files(id)', pageSize: '1' });
+
+  const searchRes = await fetch(`${DRIVE_API}/files?${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!searchRes.ok) throw new DriveApiError(`Folder search failed: HTTP ${searchRes.status}`, searchRes.status);
+
+  const searchData = await searchRes.json() as { files?: { id: string }[] };
+  if (searchData.files && searchData.files.length > 0) return searchData.files[0].id;
+
+  // 存在しない場合は新規作成
+  const createRes = await fetch(`${DRIVE_API}/files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: folderName,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: ['root'],
+    }),
+  });
+  if (!createRes.ok) throw new DriveApiError(`Folder create failed: HTTP ${createRes.status}`, createRes.status);
+
+  const folder = await createRes.json() as { id: string };
+  return folder.id;
+}
+
+/**
+ * 再開可能アップロード（大容量ファイル対応）
+ * XMLHttpRequest を使用してアップロード進捗を取得する
+ */
+export async function uploadFileResumable(
+  token: string,
+  folderId: string,
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<void> {
+  // Step 1: アップロードセッションを開始してアップロード URI を取得
+  const initRes = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-Upload-Content-Type': file.type || 'application/octet-stream',
+        'X-Upload-Content-Length': String(file.size),
+      },
+      body: JSON.stringify({ name: file.name, parents: [folderId] }),
+    },
+  );
+  if (!initRes.ok) throw new DriveApiError(`Upload init failed: HTTP ${initRes.status}`, initRes.status);
+
+  const uploadUrl = initRes.headers.get('Location');
+  if (!uploadUrl) throw new DriveApiError('Upload session URL が取得できませんでした');
+
+  // Step 2: XHR でファイル本体を送信（upload.progress で進捗を取得）
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        onProgress?.(Math.round((e.loaded / e.total) * 100));
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(100);
+        resolve();
+      } else {
+        reject(new DriveApiError(`Upload failed: HTTP ${xhr.status}`, xhr.status));
+      }
+    });
+
+    xhr.addEventListener('error', () =>
+      reject(new DriveApiError('アップロード中にネットワークエラーが発生しました')),
+    );
+    xhr.addEventListener('abort', () =>
+      reject(new DriveApiError('アップロードがキャンセルされました')),
+    );
+
+    xhr.send(file);
+  });
 }

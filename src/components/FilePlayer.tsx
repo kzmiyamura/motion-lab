@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { requestDriveToken, revokeDriveToken } from '../engine/googleAuth';
-import { listMediaFiles, fetchFileBlob, type DriveFile } from '../engine/googleDrive';
+import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, type DriveFile } from '../engine/googleDrive';
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import styles from './FilePlayer.module.css';
@@ -62,9 +62,17 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const [driveQuery, setDriveQuery] = useState('');
   const [driveError, setDriveError] = useState('');
 
+  // Upload state
+  type UploadStatus = 'idle' | 'authing' | 'folder' | 'uploading' | 'done' | 'error';
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle');
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState('');
+
   const mediaRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevBlobUrl = useRef<string | null>(null);
+  /** アップロード用に元の File オブジェクトを保持（Drive ファイルは null） */
+  const sourceFileRef = useRef<File | null>(null);
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playerSectionRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -166,6 +174,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
 
   const handleFileSelect = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
+    sourceFileRef.current = file;
+    setUploadStatus('idle');
     openFileSource(file.name, url, file.type);
     setIsSaving(true);
     saveFile(file.name, file, file.type)
@@ -185,6 +195,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
 
   const handleStoredFileOpen = (sf: StoredFile) => {
     const url = URL.createObjectURL(sf.blob);
+    sourceFileRef.current = new File([sf.blob], sf.name, { type: sf.mimeType });
+    setUploadStatus('idle');
     openFileSource(sf.name, url, sf.mimeType);
   };
 
@@ -238,6 +250,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     try {
       const blob = await fetchFileBlob(token, file.id, pct => setDownloadProgress(pct));
       const url = URL.createObjectURL(blob);
+      sourceFileRef.current = null; // Drive ファイルはバックアップ不要
+      setUploadStatus('idle');
       openFileSource(file.name, url, file.mimeType);
     } catch {
       setDriveError('ファイルの読み込みに失敗しました。');
@@ -376,6 +390,60 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     if (isFullscreen) exitFullscreen();
     setSource(null);
     setBaseBpm(null);
+    sourceFileRef.current = null;
+    setUploadStatus('idle');
+  };
+
+  // ── Google Drive バックアップ ───────────────────────────────────────────
+  const BACKUP_FOLDER = 'MotionLab_Videos';
+
+  const handleUpload = async () => {
+    const file = sourceFileRef.current;
+    if (!file) return;
+
+    setUploadError('');
+    setUploadProgress(0);
+
+    // 未認証なら認証を挟む
+    let uploadToken = token;
+    if (!uploadToken) {
+      if (!CLIENT_ID) {
+        setUploadError('VITE_GOOGLE_CLIENT_ID が設定されていません。');
+        setUploadStatus('error');
+        return;
+      }
+      setUploadStatus('authing');
+      try {
+        const { requestDriveToken } = await import('../engine/googleAuth');
+        uploadToken = await requestDriveToken(CLIENT_ID);
+        setToken(uploadToken);
+      } catch {
+        setUploadError('Google 認証に失敗しました。ポップアップがブロックされていないか確認してください。');
+        setUploadStatus('error');
+        return;
+      }
+    }
+
+    // フォルダ取得 or 作成
+    setUploadStatus('folder');
+    let folderId: string;
+    try {
+      folderId = await findOrCreateFolder(uploadToken, BACKUP_FOLDER);
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : 'フォルダの作成に失敗しました。');
+      setUploadStatus('error');
+      return;
+    }
+
+    // アップロード
+    setUploadStatus('uploading');
+    try {
+      await uploadFileResumable(uploadToken, folderId, file, pct => setUploadProgress(pct));
+      setUploadStatus('done');
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : 'アップロードに失敗しました。');
+      setUploadStatus('error');
+    }
   };
 
   // ── Player controls content (shared between normal and theater layout) ──
@@ -480,6 +548,43 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         />
         <span className={styles.bpmValue}>{sliderBpm}</span>
       </div>
+
+      {/* Google Drive バックアップ（ローカルファイルのみ） */}
+      {sourceFileRef.current && (
+        <div className={styles.uploadSection}>
+          {uploadStatus === 'idle' || uploadStatus === 'error' ? (
+            <>
+              <button
+                className={styles.uploadBtn}
+                onClick={handleUpload}
+              >
+                ☁ Google Drive にバックアップ
+              </button>
+              {uploadStatus === 'error' && (
+                <p className={styles.uploadError}>{uploadError}</p>
+              )}
+            </>
+          ) : uploadStatus === 'done' ? (
+            <p className={styles.uploadSuccess}>
+              ✅ Google ドライブに保存しました。端末の空き容量を増やすために、写真アプリから元の動画を削除しても大丈夫です。
+            </p>
+          ) : (
+            <div className={styles.uploadProgressWrap}>
+              <div className={styles.uploadProgressBar}>
+                <div
+                  className={styles.uploadProgressFill}
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+              <span className={styles.uploadProgressLabel}>
+                {uploadStatus === 'authing' && '認証中…'}
+                {uploadStatus === 'folder' && 'フォルダ確認中…'}
+                {uploadStatus === 'uploading' && `アップロード中… ${uploadProgress}%`}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </>
   ) : null;
 

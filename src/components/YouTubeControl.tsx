@@ -44,6 +44,12 @@ type Props = {
   onViewModeChange: (mode: 'audio' | 'video') => void;
 };
 
+function formatTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 function extractVideoId(input: string): string | null {
   const trimmed = input.trim();
   if (/^[\w-]{11}$/.test(trimmed)) return trimmed;
@@ -80,12 +86,16 @@ export function YouTubeControl({
   const [searchHasResults, setSearchHasResults] = useState(false);
   const [isMirrored, setIsMirrored] = useState(false);
 
+  const [seekPos, setSeekPos] = useState(0);
+  const [duration, setDuration] = useState(0);
+
   const playerRef = useRef<YouTubePlayer | null>(null);
   const playerReadyRef = useRef(false);
   const playerSectionRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setRateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayTapRef = useRef<(() => void) | undefined>(undefined) as MutableRefObject<(() => void) | undefined>;
+  const isSeekingRef = useRef(false);
 
   // ── Fullscreen detection ──────────────────────────────────────────────
   useEffect(() => {
@@ -96,6 +106,20 @@ export function YouTubeControl({
       document.removeEventListener('fullscreenchange', handler);
       document.removeEventListener('webkitfullscreenchange', handler);
     };
+  }, []);
+
+  // ── Seek position polling (500ms) ────────────────────────────────────
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!playerReadyRef.current || !playerRef.current || isSeekingRef.current) return;
+      try {
+        const cur = playerRef.current.getCurrentTime() ?? 0;
+        const dur = playerRef.current.getDuration() ?? 0;
+        setSeekPos(cur);
+        if (dur > 0) setDuration(dur);
+      } catch { /* ignore */ }
+    }, 500);
+    return () => clearInterval(id);
   }, []);
 
   // ── Prevent body scroll in theater mode ───────────────────────────────
@@ -263,6 +287,33 @@ export function YouTubeControl({
   // Controls rendered in both normal and theater/fullscreen
   const controls = (
     <>
+      <div className={styles.seekRow}>
+        <span className={styles.seekTime}>{formatTime(seekPos)}</span>
+        <input
+          type="range"
+          min={0}
+          max={duration || 1}
+          step={0.5}
+          value={seekPos}
+          onPointerDown={() => {
+            isSeekingRef.current = true;
+            if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+          }}
+          onChange={(e) => setSeekPos(Number(e.target.value))}
+          onPointerUp={(e) => {
+            const val = Number((e.target as HTMLInputElement).value);
+            setSeekPos(val);
+            try { playerRef.current?.seekTo(val, true); } catch { /* ignore */ }
+            isSeekingRef.current = false;
+            showControls();
+          }}
+          className={styles.seekSlider}
+          aria-label="シーク"
+          disabled={duration === 0}
+        />
+        <span className={styles.seekTime}>{formatTime(duration)}</span>
+      </div>
+
       <div className={styles.volRow}>
         <button
           className={`${styles.muteBtn} ${ytMuted ? styles.muteBtnMuted : ''}`}

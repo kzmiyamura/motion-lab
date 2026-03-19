@@ -286,6 +286,33 @@
   height: 100% !important;
 }
 
+/* ── Seek bar ── */
+.seekRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.seekSlider {
+  flex: 1;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+  height: 4px;
+}
+
+.seekSlider:disabled {
+  opacity: 0.3;
+}
+
+.seekTime {
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-dim);
+  min-width: 2.8rem;
+  text-align: center;
+}
+
 /* ── Volume ── */
 .volRow {
   display: flex;

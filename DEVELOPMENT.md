@@ -423,6 +423,50 @@ playerRef.current?.seekTo(currentTime + direction * 0.033, true);
 
 `VideoControls` でポインターダウン時に 120ms 間隔の `setInterval` を起動し、長押しを実現します。
 
+### プレイヤーサイズ（3モード）
+
+| モード | 実装 | 用途 |
+|--------|------|------|
+| normal | インライン（デフォルト） | 通常閲覧 |
+| theater | `position: fixed; inset: 0; z-index: 200` | iPhone でのブラウザ最大化 |
+| fullscreen | Fullscreen API (`requestFullscreen`) | デスクトップ全画面 |
+
+`<YouTube>` コンポーネントは常に同一の React ツリー位置にマウントされ、コンテナの CSS クラスだけ切り替えます（モード変更で動画がリセットされない）。
+
+```
+<div ref={playerSectionRef} className={sectionTheater | sectionNormal}>
+  <div theaterBar />          ← 最大化/全画面時のみ
+  <div theaterVideoArea />    ← <YouTube> を内包
+  <div theaterControls />     ← 音量・VideoControls
+</div>
+```
+
+Theater モード中は `document.body.style.overflow = 'hidden'` でページスクロールを封じます。
+
+#### 横画面（landscape）対応
+
+`@media (orientation: landscape) and (max-height: 500px)` で検出。
+
+- `theaterVideoArea` が全高を占有
+- `theaterControls` が `position: absolute; bottom: 0` の半透明オーバーレイに切替
+- `env(safe-area-inset-*)` で iPhone ノッチ/Dynamic Island に対応
+
+```css
+.theaterControls {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(8, 8, 24, 0.92);
+  backdrop-filter: blur(8px);
+  padding-left:  max(14px, env(safe-area-inset-left));
+  padding-right: max(14px, env(safe-area-inset-right));
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+}
+```
+
+### BPM 基準の微調整ボタン
+
+BPM 計測後、結果表示の横に − / ＋ ボタンを表示。押すと `baseBpm` と `bpm`（Rhythm Machine）を同時に ±1 更新するため、YouTube の再生速度（`bpm / baseBpm = 1.0`）は変わらず Rhythm Machine のテンポだけ変わります。
+
 ### URL 履歴
 
 `motionlab:yt-history` キーで最大5件を localStorage に保存。Load ボタン押下時に追記し、重複は除去します。
@@ -468,3 +512,5 @@ await vi.advanceTimersByTimeAsync(100);
 | LINE ブラウザでインストールできない | in-app ブラウザは PWA インストール非対応 | `?openExternalBrowser=1` リダイレクト |
 | iOS Chrome でインストールできない | Apple 制限で PWA インストールは Safari 限定 | CriOS 検出 → Safari 誘導 |
 | Cloudflare Pages ビルドエラー（lockfile 競合） | Node.js バージョン違いで `npm ci` が失敗 | `package-lock.json` を削除 → `npm install` |
+| iPhone 横画面でシアターモードが潰れる | コントロールが縦空間を食いすぎる | landscape + max-height 500px で controls を absolute overlay に変更 |
+| iOS で `requestFullscreen()` が効かない | iOS は `<div>` の Fullscreen API 非対応 | theater モード（`position: fixed`）が iOS 向け最大化の実質的な手段 |

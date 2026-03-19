@@ -106,12 +106,15 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   // Pose estimation
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [vizMode, setVizMode] = useState<VizMode>('off');
+  const [lockModeActive, setLockModeActive] = useState(false);
 
   // Zoom gesture refs
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
 
-  usePoseEstimation(mediaRef, canvasRef, source?.isVideo ? vizMode : 'off');
+  const { lockAt, unlock, isLocked } = usePoseEstimation(
+    mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
+  );
 
   // Derived
   const isTheater = playerSize === 'theater';
@@ -205,7 +208,10 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     setLoopEnd(null);
     setIsLooping(false);
     setZoom({ scale: 1, x: 0, y: 0 });
-  }, [bpm]);
+    // ロック状態をリセット
+    unlock();
+    setLockModeActive(false);
+  }, [bpm, unlock]);
 
   const handleFileSelect = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
@@ -369,8 +375,14 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     if (p) setZoom({ scale: p.scale, x: p.x, y: p.y });
   };
 
-  // Overlay click: toggle controls in expanded mode, play/pause in normal
-  const handleOverlayClick = () => {
+  // Overlay click: lock-on → controls toggle → play/pause
+  const handleOverlayClick = (e: React.MouseEvent) => {
+    // ロック待機中 & 骨格表示 ON → その座標の人物をロックオン
+    if (lockModeActive && source?.isVideo && vizMode !== 'off') {
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      lockAt(e.clientX - rect.left, e.clientY - rect.top);
+      return;
+    }
     if (isExpanded) {
       if (controlsVisible) {
         if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -428,6 +440,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     sourceFileRef.current = null;
     setUploadStatus('idle');
     setUploadedFileId(null);
+    unlock();
+    setLockModeActive(false);
   };
 
   // ── Toast ─────────────────────────────────────────────────────────────
@@ -566,13 +580,41 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               <button
                 key={m}
                 className={`${styles.vizModeBtn} ${vizMode === m ? styles.vizModeBtnActive : ''}`}
-                onClick={() => setVizMode(m)}
+                onClick={() => {
+                  setVizMode(m);
+                  // 骨格OFFにしたらロックも解除
+                  if (m === 'off') { unlock(); setLockModeActive(false); }
+                }}
                 title={m === 'off' ? '骨格表示 OFF' : m === 'full' ? '全身表示' : 'サルサ軸解析'}
               >
                 {m === 'off' ? 'OFF' : m === 'full' ? '全身' : '軸'}
               </button>
             ))}
           </div>
+        )}
+        {source.isVideo && vizMode !== 'off' && (
+          <button
+            className={
+              `${styles.lockBtn} ` +
+              (isLocked ? styles.lockBtnLocked : lockModeActive ? styles.lockBtnWaiting : '')
+            }
+            onClick={() => {
+              if (isLocked || lockModeActive) {
+                unlock();
+                setLockModeActive(false);
+              } else {
+                setLockModeActive(true);
+              }
+            }}
+            title={
+              isLocked ? 'ロック解除' :
+              lockModeActive ? '人物をタップして選択 / キャンセル' :
+              'ターゲットロック（人物タップで固定）'
+            }
+            aria-label="ターゲットロック"
+          >
+            {isLocked ? '🔓' : lockModeActive ? '🎯…' : '🎯'}
+          </button>
         )}
         <div className={styles.rateGroup}>
           {SLOW_RATES.map(r => (
@@ -787,6 +829,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                   onPointerUp={onOverlayPointerUp}
                   onPointerCancel={onOverlayPointerUp}
                   onClick={handleOverlayClick}
+                  style={{ cursor: lockModeActive && vizMode !== 'off' && !isLocked ? 'crosshair' : 'pointer' }}
                 />
               </>
             )}

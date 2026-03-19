@@ -912,6 +912,45 @@
   color: #ffe000;
 }
 
+/* ── Target lock button ── */
+.lockBtn {
+  height: 34px;
+  min-width: 36px;
+  padding: 0 0.45rem;
+  border-radius: 8px;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
+  color: var(--color-ui-text-dim);
+  font-size: 0.88rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.lockBtn:hover { border-color: var(--color-accent); background: var(--color-ui-medium); }
+
+/* 待機中（タップで選択）: 黄色でアニメーション */
+.lockBtnWaiting {
+  border-color: #ffe000;
+  color: #ffe000;
+  background: rgba(255, 224, 0, 0.10);
+  animation: lockPulse 0.9s ease-in-out infinite;
+}
+@keyframes lockPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 224, 0, 0.45); }
+  50%       { box-shadow: 0 0 0 5px rgba(255, 224, 0, 0); }
+}
+
+/* ロック確定: オレンジ */
+.lockBtnLocked {
+  border-color: #ff7820;
+  color: #ff7820;
+  background: rgba(255, 120, 0, 0.12);
+}
+
 /* ── Mirror button ── */
 .mirrorBtn {
   width: 34px;

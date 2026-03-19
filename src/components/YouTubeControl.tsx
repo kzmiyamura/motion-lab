@@ -145,12 +145,11 @@ export function YouTubeControl({
       document.body.style.top = `-${scrollY}px`;
       document.body.style.width = '100%';
     } else {
-      const scrollY = Math.abs(parseInt(document.body.style.top || '0', 10));
       document.body.style.overflow = '';
       document.body.style.position = '';
       document.body.style.top = '';
       document.body.style.width = '';
-      if (scrollY) window.scrollTo(0, scrollY);
+      window.scrollTo(0, 0);
     }
     return () => {
       document.body.style.overflow = '';

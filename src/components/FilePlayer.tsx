@@ -742,7 +742,10 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                 setDuration(mediaRef.current?.duration ?? 0);
                 if (mediaRef.current) mediaRef.current.playbackRate = slowRate;
               }}
-              onEnded={() => setIsPlaying(false)}
+              onEnded={() => {
+                const el = mediaRef.current;
+                if (el) { el.currentTime = 0; el.play().catch(() => {}); }
+              }}
               playsInline
               controls={false}
             />

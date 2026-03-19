@@ -548,15 +548,34 @@
   padding: 0.3rem 0.6rem;
   cursor: pointer;
   text-align: left;
+  display: flex;
+  align-items: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   transition: border-color 0.15s, color 0.15s;
 }
 
 .historyItem:hover {
   border-color: #7c6bff;
   color: #a090ff;
+}
+
+.historyUrl {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyBpm {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #7c6bff;
+  background: rgba(124, 107, 255, 0.12);
+  border: 1px solid rgba(124, 107, 255, 0.25);
+  padding: 1px 6px;
+  border-radius: 20px;
+  margin-left: 4px;
 }
 
 /* ── Mobile portrait ── */

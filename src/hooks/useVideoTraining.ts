@@ -2,8 +2,8 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { YouTubePlayer } from 'react-youtube';
 
 // ── Types ──────────────────────────────────────────────────────────────────
-export type SlowRate = 0.25 | 0.5 | 0.75 | 1.0;
-export const SLOW_RATES: SlowRate[] = [0.25, 0.5, 0.75, 1.0];
+export type SlowRate = 0.25 | 0.5 | 0.75 | 1.0 | 1.25 | 1.5 | 1.75 | 2.0;
+export const SLOW_RATES: SlowRate[] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
 export interface ZoomState {
   scale: number; // 1–3
@@ -70,10 +70,7 @@ export function useVideoTraining(
 
   const setSlowRate = useCallback((rate: SlowRate) => {
     setSlowRateState(rate);
-    if (enabled) {
-      try { playerRef.current?.setPlaybackRate(rate); } catch { /* ignore */ }
-    }
-  }, [enabled, playerRef]);
+  }, []);
 
   // Apply current slow rate to the player (called on mode switch)
   const activateSlowRate = useCallback((rate?: SlowRate) => {

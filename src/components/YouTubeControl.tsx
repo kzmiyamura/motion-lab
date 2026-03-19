@@ -10,13 +10,21 @@ import styles from './YouTubeControl.module.css';
 const HISTORY_KEY = 'motionlab:yt-history';
 const MAX_HISTORY = 5;
 
-function loadHistory(): string[] {
-  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]'); }
-  catch { return []; }
+type HistoryEntry = { url: string; bpm: number | null };
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]');
+    // migrate old format (string[]) to new format
+    return (raw as unknown[]).map(item =>
+      typeof item === 'string' ? { url: item, bpm: null } : item as HistoryEntry
+    );
+  } catch { return []; }
 }
 
-function saveHistory(url: string, prev: string[]): string[] {
-  const next = [url, ...prev.filter(u => u !== url)].slice(0, MAX_HISTORY);
+function saveHistory(url: string, bpm: number | null, prev: HistoryEntry[]): HistoryEntry[] {
+  const entry: HistoryEntry = { url, bpm };
+  const next = [entry, ...prev.filter(e => e.url !== url)].slice(0, MAX_HISTORY);
   localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
   return next;
 }
@@ -56,7 +64,7 @@ export function YouTubeControl({
   const [baseBpm, setBaseBpm] = useState<number | null>(null);
   const [ytVolume, setYtVolume] = useState(80);
   const [ytMuted, setYtMuted] = useState(false);
-  const [history, setHistory] = useState<string[]>(() => loadHistory());
+  const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
   const [playerSize, setPlayerSize] = useState<PlayerSize>('normal');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(false);
@@ -127,19 +135,21 @@ export function YouTubeControl({
 
   const video = useVideoTraining(playerRef, viewMode === 'video', overlayTapRef);
 
+  // ── Unified playback rate effect ──────────────────────────────────────
+  // audio mode: bpm/baseBpm ratio  (slowRate ignored)
+  // video mode: (bpm/baseBpm) * slowRate, or just slowRate if no baseBpm
   useEffect(() => {
-    if (viewMode === 'video') return;
-    if (!playerReadyRef.current || !baseBpm || !playerRef.current) return;
-    const rate = Math.min(2, Math.max(0.25, bpm / baseBpm));
-    try { playerRef.current.setPlaybackRate(rate); } catch { /* ignore */ }
-  }, [bpm, baseBpm, viewMode]);
-
-  useEffect(() => {
-    if (viewMode === 'video' && playerReadyRef.current) {
-      video.activateSlowRate();
+    if (!playerReadyRef.current || !playerRef.current) return;
+    let rate: number;
+    if (baseBpm) {
+      const bpmRatio = bpm / baseBpm;
+      rate = viewMode === 'video' ? bpmRatio * video.slowRate : bpmRatio;
+    } else {
+      rate = viewMode === 'video' ? video.slowRate : 1;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode]);
+    rate = Math.min(2, Math.max(0.25, rate));
+    try { playerRef.current.setPlaybackRate(rate); } catch { /* ignore */ }
+  }, [bpm, baseBpm, viewMode, video.slowRate]);
 
   useEffect(() => {
     if (!playerReadyRef.current || !playerRef.current) return;
@@ -149,16 +159,21 @@ export function YouTubeControl({
     } catch { /* ignore */ }
   }, [ytVolume, ytMuted]);
 
-  const handleLoad = useCallback((url?: string) => {
+  const handleLoad = useCallback((url?: string, restoreBpm?: number | null) => {
     const target = url ?? urlInput;
     const id = extractVideoId(target);
     if (id) {
       if (!url) setUrlInput(target);
       setVideoId(id);
       onVideoIdChange?.(id);
-      setHistory(prev => saveHistory(target.trim(), prev));
+      if (restoreBpm != null) {
+        setBaseBpm(restoreBpm);
+        onBpmChange(restoreBpm);
+      }
+      const bpmToSave = restoreBpm !== undefined ? restoreBpm : baseBpm;
+      setHistory(prev => saveHistory(target.trim(), bpmToSave ?? null, prev));
     }
-  }, [urlInput, onVideoIdChange]);
+  }, [urlInput, onVideoIdChange, baseBpm, onBpmChange]);
 
   const handlePlayerReady = useCallback((e: { target: YouTubePlayer }) => {
     playerRef.current = e.target;
@@ -259,12 +274,17 @@ export function YouTubeControl({
         />
       )}
 
-      {viewMode === 'audio' && baseBpm !== null && playbackRate !== 1 && (
-        <div className={styles.syncNote}>
-          <span className={styles.syncNoteText}>再生速度</span>
-          <span className={styles.rateTag}>×{playbackRate.toFixed(2)}</span>
-        </div>
-      )}
+      {baseBpm !== null && (() => {
+        const effectiveRate = viewMode === 'video'
+          ? Math.min(2, Math.max(0.25, playbackRate * video.slowRate))
+          : playbackRate;
+        return effectiveRate !== 1 ? (
+          <div className={styles.syncNote}>
+            <span className={styles.syncNoteText}>再生速度</span>
+            <span className={styles.rateTag}>×{effectiveRate.toFixed(2)}</span>
+          </div>
+        ) : null;
+      })()}
     </>
   );
 
@@ -387,14 +407,19 @@ export function YouTubeControl({
 
         {history.length > 0 && (
           <div className={styles.historyRow}>
-            {history.map(url => (
+            {history.map(entry => (
               <button
-                key={url}
+                key={entry.url}
                 className={styles.historyItem}
-                onClick={() => { setUrlInput(url); handleLoad(url); }}
-                title={url}
+                onClick={() => { setUrlInput(entry.url); handleLoad(entry.url, entry.bpm); }}
+                title={entry.url}
               >
-                {url.length > 36 ? url.slice(0, 36) + '…' : url}
+                <span className={styles.historyUrl}>
+                  {entry.url.length > 32 ? entry.url.slice(0, 32) + '…' : entry.url}
+                </span>
+                {entry.bpm != null && (
+                  <span className={styles.historyBpm}>{entry.bpm} BPM</span>
+                )}
               </button>
             ))}
           </div>

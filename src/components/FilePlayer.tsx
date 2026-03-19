@@ -114,6 +114,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
 
   const { lockAt, unlock, isLocked } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
+    bpm, isMirrored,
   );
 
   // Derived
@@ -592,7 +593,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         )}
         {source.isVideo && (
           <div className={styles.vizModeGroup} role="group" aria-label="骨格表示モード">
-            {(['off', 'full', 'salsa'] as const).map(m => (
+            {(['off', 'full', 'salsa', 'trail'] as const).map(m => (
               <button
                 key={m}
                 className={`${styles.vizModeBtn} ${vizMode === m ? styles.vizModeBtnActive : ''}`}
@@ -601,9 +602,14 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                   // 骨格OFFにしたらロックも解除
                   if (m === 'off') { unlock(); setLockModeActive(false); }
                 }}
-                title={m === 'off' ? '骨格表示 OFF' : m === 'full' ? '全身表示' : 'サルサ軸解析'}
+                title={
+                  m === 'off'   ? '骨格表示 OFF' :
+                  m === 'full'  ? '全身表示' :
+                  m === 'salsa' ? 'サルサ軸解析（傾き角度付き）' :
+                                  'ステップ軌跡（足首トレイル）'
+                }
               >
-                {m === 'off' ? 'OFF' : m === 'full' ? '全身' : '軸'}
+                {m === 'off' ? 'OFF' : m === 'full' ? '全身' : m === 'salsa' ? '軸' : '軌跡'}
               </button>
             ))}
           </div>

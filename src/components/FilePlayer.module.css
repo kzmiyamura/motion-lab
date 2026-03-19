@@ -911,6 +911,11 @@
   background: #1e1a00;
   color: #ffe000;
 }
+/* trail はシアン系 */
+.vizModeBtn:nth-child(4).vizModeBtnActive {
+  background: #001e2a;
+  color: #50c8ff;
+}
 
 /* ── Target lock button ── */
 .lockBtn {

@@ -125,15 +125,31 @@ export async function findOrCreateFolder(
 }
 
 /**
+ * Drive ファイルを「リンクを知っている人が閲覧可能」に設定する
+ */
+export async function createPublicPermission(
+  token: string,
+  fileId: string,
+): Promise<void> {
+  const res = await fetch(`${DRIVE_API}/files/${fileId}/permissions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'reader', type: 'anyone' }),
+  });
+  if (!res.ok) throw new DriveApiError(`Permission create failed: HTTP ${res.status}`, res.status);
+}
+
+/**
  * 再開可能アップロード（大容量ファイル対応）
  * XMLHttpRequest を使用してアップロード進捗を取得する
+ * @returns 作成されたファイルの Drive ID
  */
 export async function uploadFileResumable(
   token: string,
   folderId: string,
   file: File,
   onProgress?: (percent: number) => void,
-): Promise<void> {
+): Promise<string> {
   // Step 1: アップロードセッションを開始してアップロード URI を取得
   const initRes = await fetch(
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable',
@@ -154,7 +170,7 @@ export async function uploadFileResumable(
   if (!uploadUrl) throw new DriveApiError('Upload session URL が取得できませんでした');
 
   // Step 2: XHR でファイル本体を送信（upload.progress で進捗を取得）
-  return new Promise((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', uploadUrl);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
@@ -169,7 +185,13 @@ export async function uploadFileResumable(
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         onProgress?.(100);
-        resolve();
+        // レスポンスボディからファイル ID を取得
+        try {
+          const result = JSON.parse(xhr.responseText) as { id?: string };
+          resolve(result.id ?? '');
+        } catch {
+          resolve('');
+        }
       } else {
         reject(new DriveApiError(`Upload failed: HTTP ${xhr.status}`, xhr.status));
       }

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { requestDriveToken, revokeDriveToken } from '../engine/googleAuth';
-import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, type DriveFile } from '../engine/googleDrive';
+import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, createPublicPermission, type DriveFile } from '../engine/googleDrive';
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import styles from './FilePlayer.module.css';
@@ -67,6 +67,11 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState('');
+  const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
+
+  // Share state
+  const [sharingId, setSharingId] = useState<string | null>(null);
+  const [shareToast, setShareToast] = useState('');
 
   const mediaRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -392,7 +397,43 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     setBaseBpm(null);
     sourceFileRef.current = null;
     setUploadStatus('idle');
+    setUploadedFileId(null);
   };
+
+  // ── Toast ─────────────────────────────────────────────────────────────
+  const showToast = useCallback((msg: string) => {
+    setShareToast(msg);
+    setTimeout(() => setShareToast(''), 3500);
+  }, []);
+
+  // ── Drive 共有 ────────────────────────────────────────────────────────
+  const APP_URL = 'https://motion-lab-apa.pages.dev';
+
+  const handleShare = useCallback(async (fileId: string) => {
+    if (!token) return;
+    setSharingId(fileId);
+    try {
+      await createPublicPermission(token, fileId);
+      const shareUrl = `${APP_URL}/?fileId=${fileId}`;
+      if (navigator.share) {
+        await navigator.share({
+          title: 'Motion Lab でサルサの練習動画を共有しました',
+          text: 'このリンクから動画をスロー再生やループ再生で確認できます。',
+          url: shareUrl,
+        });
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        showToast('URLをクリップボードにコピーしました');
+      }
+    } catch (e) {
+      // AbortError はユーザーキャンセルなので無視
+      if (e instanceof Error && e.name !== 'AbortError') {
+        showToast('共有に失敗しました');
+      }
+    } finally {
+      setSharingId(null);
+    }
+  }, [token, showToast]);
 
   // ── Google Drive バックアップ ───────────────────────────────────────────
   const BACKUP_FOLDER = 'MotionLab_Videos';
@@ -438,7 +479,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     // アップロード
     setUploadStatus('uploading');
     try {
-      await uploadFileResumable(uploadToken, folderId, file, pct => setUploadProgress(pct));
+      const fileId = await uploadFileResumable(uploadToken, folderId, file, pct => setUploadProgress(pct));
+      setUploadedFileId(fileId || null);
       setUploadStatus('done');
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : 'アップロードに失敗しました。');
@@ -565,9 +607,21 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               )}
             </>
           ) : uploadStatus === 'done' ? (
-            <p className={styles.uploadSuccess}>
-              ✅ Google ドライブに保存しました。端末の空き容量を増やすために、写真アプリから元の動画を削除しても大丈夫です。
-            </p>
+            <div className={styles.uploadDoneWrap}>
+              <p className={styles.uploadSuccess}>
+                ✅ Google ドライブに保存しました。端末の空き容量を増やすために、写真アプリから元の動画を削除しても大丈夫です。
+              </p>
+              {uploadedFileId && (
+                <button
+                  className={styles.shareBtn}
+                  onClick={() => handleShare(uploadedFileId)}
+                  disabled={sharingId === uploadedFileId}
+                  aria-label="共有"
+                >
+                  {sharingId === uploadedFileId ? '…' : '⬆ 共有する'}
+                </button>
+              )}
+            </div>
           ) : (
             <div className={styles.uploadProgressWrap}>
               <div className={styles.uploadProgressBar}>
@@ -591,6 +645,11 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div className={styles.wrapper}>
+
+      {/* クリップボードコピー時のトースト（PC フォールバック） */}
+      {shareToast && (
+        <div className={styles.toast}>{shareToast}</div>
+      )}
 
       {/* ── Player section (video + controls) ── */}
       {source && (
@@ -798,11 +857,20 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                   ) : (
                     <ul className={styles.fileList}>
                       {driveFiles.map(f => (
-                        <li key={f.id}>
+                        <li key={f.id} className={styles.driveFileRow}>
                           <button className={styles.fileItem} onClick={() => handleDriveFileSelect(f)}>
                             <span className={styles.fileIcon}>{f.mimeType.startsWith('video/') ? '🎬' : '🎵'}</span>
                             <span className={styles.fileItemName}>{f.name}</span>
                             <span className={styles.fileSize}>{formatSize(f.size)}</span>
+                          </button>
+                          <button
+                            className={styles.driveShareBtn}
+                            onClick={() => handleShare(f.id)}
+                            disabled={sharingId === f.id}
+                            aria-label="共有"
+                            title="共有"
+                          >
+                            {sharingId === f.id ? '…' : '⬆'}
                           </button>
                         </li>
                       ))}

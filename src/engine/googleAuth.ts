@@ -59,12 +59,29 @@ function loadGsiScript(): Promise<void> {
   });
 }
 
+/**
+ * Drive 読み取り専用トークンを取得（ファイル一覧・ダウンロード用）
+ */
 export async function requestDriveToken(clientId: string): Promise<string> {
+  return _requestToken(clientId, 'https://www.googleapis.com/auth/drive.readonly');
+}
+
+/**
+ * Drive 読み書きトークンを取得（アップロード・フォルダ作成・共有設定用）
+ */
+export async function requestDriveWriteToken(clientId: string): Promise<string> {
+  return _requestToken(clientId, [
+    'https://www.googleapis.com/auth/drive.file',   // 本アプリが作成したファイルの読み書き
+    'https://www.googleapis.com/auth/drive.readonly', // 既存ファイルの読み取り（一覧・ダウンロード）
+  ].join(' '));
+}
+
+async function _requestToken(clientId: string, scope: string): Promise<string> {
   await loadGsiScript();
   return new Promise((resolve, reject) => {
     const client = window.google!.accounts.oauth2.initTokenClient({
       client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/drive.readonly',
+      scope,
       callback: (res) => {
         if (res.error) { reject(new Error(res.error)); return; }
         resolve(res.access_token);

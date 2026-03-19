@@ -458,8 +458,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
       }
       setUploadStatus('authing');
       try {
-        const { requestDriveToken } = await import('../engine/googleAuth');
-        uploadToken = await requestDriveToken(CLIENT_ID);
+        const { requestDriveWriteToken } = await import('../engine/googleAuth');
+        uploadToken = await requestDriveWriteToken(CLIENT_ID);
         setToken(uploadToken);
       } catch {
         setUploadError('Google 認証に失敗しました。ポップアップがブロックされていないか確認してください。');

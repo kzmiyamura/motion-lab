@@ -380,7 +380,23 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     // ロック待機中 & 骨格表示 ON → その座標の人物をロックオン
     if (lockModeActive && source?.isVideo && vizMode !== 'off') {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      lockAt(e.clientX - rect.left, e.clientY - rect.top);
+      const tapX = e.clientX - rect.left;
+      const tapY = e.clientY - rect.top;
+      const cw = rect.width;
+      const ch = rect.height;
+
+      // CSS transform の逆変換：ビジュアル座標 → キャンバス描画座標
+      // 適用された CSS: [scaleX(-1)?] scale(zoom.scale) translate(zoom.x/zoom.scale, zoom.y/zoom.scale)
+      // 逆変換：
+      //   ミラーあり: canvasX = cw/2 + (-tapX + cw/2 - zoom.x) / zoom.scale
+      //   ミラーなし: canvasX = cw/2 + ( tapX - cw/2 - zoom.x) / zoom.scale
+      //   共通:      canvasY = ch/2 + ( tapY - ch/2 - zoom.y) / zoom.scale
+      const canvasX = isMirrored
+        ? cw / 2 + (-tapX + cw / 2 - zoom.x) / zoom.scale
+        : cw / 2 + ( tapX - cw / 2 - zoom.x) / zoom.scale;
+      const canvasY = ch / 2 + (tapY - ch / 2 - zoom.y) / zoom.scale;
+
+      lockAt(canvasX, canvasY);
       return;
     }
     if (isExpanded) {

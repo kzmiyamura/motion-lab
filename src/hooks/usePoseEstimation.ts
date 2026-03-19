@@ -56,6 +56,23 @@ function computeCentroid(landmarks: NormalizedLandmark[]): Centroid | null {
   };
 }
 
+// ── Mid-Hip（腰中点）を計算（ターゲット追跡に使用） ─────────────────────
+
+function computeMidHip(landmarks: NormalizedLandmark[]): Centroid | null {
+  const hipL = landmarks[23];
+  const hipR = landmarks[24];
+  if (!hipL && !hipR) return null;
+  const lv = hipL ? (hipL.visibility ?? 1) : 0;
+  const rv = hipR ? (hipR.visibility ?? 1) : 0;
+  if (lv >= VIS_THRESHOLD && rv >= VIS_THRESHOLD) {
+    return { x: (hipL.x + hipR.x) / 2, y: (hipL.y + hipR.y) / 2 };
+  }
+  if (lv >= VIS_THRESHOLD) return { x: hipL.x, y: hipL.y };
+  if (rv >= VIS_THRESHOLD) return { x: hipR.x, y: hipR.y };
+  // フォールバック：腰が見えなければ重心
+  return computeCentroid(landmarks);
+}
+
 // ── 画面中央に最も近い人を返す ─────────────────────────────────────────
 
 function findMainPersonIndex(landmarksArray: NormalizedLandmark[][]): number {
@@ -70,18 +87,22 @@ function findMainPersonIndex(landmarksArray: NormalizedLandmark[][]): number {
   return mainIdx;
 }
 
-// ── ターゲットに最も近い人を返す ──────────────────────────────────────────
+// ── ターゲットに最も近い人をMid-Hipで返す ────────────────────────────────
 
-function findNearestToTarget(landmarksArray: NormalizedLandmark[][], target: Centroid): number {
+function findNearestToTarget(
+  landmarksArray: NormalizedLandmark[][],
+  target: Centroid,
+): { idx: number; dist: number; hip: Centroid | null } {
   let minDist = Infinity;
   let nearest = 0;
+  let nearestHip: Centroid | null = null;
   for (let i = 0; i < landmarksArray.length; i++) {
-    const c = computeCentroid(landmarksArray[i]);
-    if (!c) continue;
-    const dist = Math.hypot(c.x - target.x, c.y - target.y);
-    if (dist < minDist) { minDist = dist; nearest = i; }
+    const hip = computeMidHip(landmarksArray[i]);
+    if (!hip) continue;
+    const dist = Math.hypot(hip.x - target.x, hip.y - target.y);
+    if (dist < minDist) { minDist = dist; nearest = i; nearestHip = hip; }
   }
-  return nearest;
+  return { idx: nearest, dist: minDist, hip: nearestHip };
 }
 
 // ── Full モード：全身33点描画 ──────────────────────────────────────────────
@@ -274,8 +295,12 @@ export function usePoseEstimation(
   const lockedRef = useRef<Centroid | null>(null);
   const [isLocked, setIsLocked] = useState(false);
 
-  // ── ロックオン：コンテナ相対座標 → 正規化座標に変換して保存
-  const lockAt = useCallback((containerX: number, containerY: number) => {
+  // ── デバッグ用：タップしたキャンバス座標（CSS transform 逆変換済み）
+  const debugTapCanvasRef = useRef<{ x: number; y: number } | null>(null);
+
+  // ── ロックオン：CSS transform 逆変換済みのキャンバス座標を受け取る
+  //    （呼び出し元 FilePlayer でズーム/ミラーの逆変換を行ってから渡すこと）
+  const lockAt = useCallback((canvasX: number, canvasY: number) => {
     const video  = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
@@ -286,8 +311,11 @@ export function usePoseEstimation(
     const ch = container?.clientHeight ?? canvas.offsetHeight;
     const lb = computeLetterbox(cw, ch, video.videoWidth, video.videoHeight);
 
-    const nx = Math.max(0, Math.min(1, (containerX - lb.offsetX) / lb.renderW));
-    const ny = Math.max(0, Math.min(1, (containerY - lb.offsetY) / lb.renderH));
+    const nx = Math.max(0, Math.min(1, (canvasX - lb.offsetX) / lb.renderW));
+    const ny = Math.max(0, Math.min(1, (canvasY - lb.offsetY) / lb.renderH));
+
+    // デバッグ用にキャンバス座標を保存
+    debugTapCanvasRef.current = { x: canvasX, y: canvasY };
 
     lockedRef.current = { x: nx, y: ny };
     setIsLocked(true);
@@ -296,6 +324,7 @@ export function usePoseEstimation(
   // ── ロック解除
   const unlock = useCallback(() => {
     lockedRef.current = null;
+    debugTapCanvasRef.current = null;
     setIsLocked(false);
   }, []);
 
@@ -376,12 +405,11 @@ export function usePoseEstimation(
                   const lb = computeLetterbox(canvas.width, canvas.height, video.videoWidth, video.videoHeight);
 
                   if (lockedRef.current !== null) {
-                    // ── ロックオンモード：最近傍の人物のみ描画
-                    const idx = findNearestToTarget(all, lockedRef.current);
+                    // ── ロックオンモード：Mid-Hip 最近傍の人物のみ描画
+                    const { idx, dist, hip } = findNearestToTarget(all, lockedRef.current);
 
-                    // 重心を更新して追跡を継続
-                    const newCentroid = computeCentroid(all[idx]);
-                    if (newCentroid) lockedRef.current = newCentroid;
+                    // Mid-Hip で追跡位置を毎フレーム更新（Nearest Neighbor 追跡）
+                    if (hip) lockedRef.current = hip;
 
                     if (currentMode === 'full') {
                       drawFullPerson(ctx, all[idx], connections, lb, true);
@@ -389,6 +417,50 @@ export function usePoseEstimation(
                       drawSalsaPerson(ctx, all[idx], lb, true);
                     }
                     drawTargetIndicator(ctx, all[idx], lb);
+
+                    // ── デバッグ表示 ──────────────────────────────────────
+                    // 赤い点：タップした位置
+                    const tapPos = debugTapCanvasRef.current;
+                    if (tapPos) {
+                      ctx.save();
+                      ctx.beginPath();
+                      ctx.arc(tapPos.x, tapPos.y, 10, 0, Math.PI * 2);
+                      ctx.fillStyle = 'rgba(255, 0, 0, 0.85)';
+                      ctx.fill();
+                      ctx.strokeStyle = 'white';
+                      ctx.lineWidth = 2;
+                      ctx.stroke();
+                      ctx.restore();
+                    }
+
+                    // 青い丸：現在ロック中の人物の腰
+                    if (hip) {
+                      const hipPx = {
+                        x: lb.offsetX + hip.x * lb.renderW,
+                        y: lb.offsetY + hip.y * lb.renderH,
+                      };
+                      ctx.save();
+                      ctx.beginPath();
+                      ctx.arc(hipPx.x, hipPx.y, 22, 0, Math.PI * 2);
+                      ctx.strokeStyle = 'rgba(30, 120, 255, 0.95)';
+                      ctx.lineWidth = 4;
+                      ctx.stroke();
+                      ctx.fillStyle = 'rgba(30, 120, 255, 0.25)';
+                      ctx.fill();
+                      ctx.restore();
+                    }
+
+                    // 距離・人数テキスト
+                    ctx.save();
+                    ctx.font = 'bold 13px monospace';
+                    ctx.fillStyle = 'rgba(255, 255, 60, 0.95)';
+                    ctx.shadowColor = 'black';
+                    ctx.shadowBlur = 4;
+                    ctx.fillText(`dist: ${dist.toFixed(3)}  persons: ${all.length}  idx: ${idx}`, 8, 20);
+                    if (lockedRef.current) {
+                      ctx.fillText(`lock(nx=${lockedRef.current.x.toFixed(2)}, ny=${lockedRef.current.y.toFixed(2)})`, 8, 38);
+                    }
+                    ctx.restore();
 
                   } else {
                     // ── 通常モード：全員描画（メインを前面）

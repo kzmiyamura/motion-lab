@@ -233,6 +233,10 @@ export function YouTubeControl({
 
   const { setYtPlaying } = video;
   const handleStateChange = useCallback((e: { data: number }) => {
+    // state 0 = ended → seek to beginning to dismiss the related-videos end screen
+    if (e.data === 0) {
+      try { playerRef.current?.seekTo(0, true); } catch { /* ignore */ }
+    }
     setYtPlaying(e.data === 1 || e.data === 3);
   }, [setYtPlaying]);
 
@@ -477,7 +481,7 @@ export function YouTubeControl({
               <div className={styles.transformContainer} style={transformStyle}>
                 <YouTube
                   videoId={videoId}
-                  opts={{ width: '100%', height: '100%', playerVars: { autoplay: 0 } }}
+                  opts={{ width: '100%', height: '100%', playerVars: { autoplay: 0, rel: 0 } }}
                   onReady={handlePlayerReady}
                   onStateChange={handleStateChange}
                   className={styles.ytFrame}

@@ -10,6 +10,7 @@ import { SamplesStatus } from './components/SamplesStatus';
 import { InstallPrompt } from './components/InstallPrompt';
 import { UpdateToast } from './components/UpdateToast';
 import { YouTubeControl } from './components/YouTubeControl';
+import { FilePlayer } from './components/FilePlayer';
 import styles from './App.module.css';
 
 function App() {
@@ -38,7 +39,7 @@ function App() {
   } = useAudioEngine();
 
   const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
-  const [mainTab, setMainTab] = useState<'youtube' | 'rhythm'>('youtube');
+  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm'>('youtube');
   const [ytViewMode, setYtViewMode] = useState<'audio' | 'video'>('video');
 
   useEffect(() => {
@@ -62,6 +63,12 @@ function App() {
             ▶ YouTube
           </button>
           <button
+            className={`${styles.mainTabBtn} ${mainTab === 'files' ? styles.mainTabBtnActive : ''}`}
+            onClick={() => setMainTab('files')}
+          >
+            📂 Files
+          </button>
+          <button
             className={`${styles.mainTabBtn} ${mainTab === 'rhythm' ? styles.mainTabBtnActive : ''}`}
             onClick={() => setMainTab('rhythm')}
           >
@@ -83,6 +90,16 @@ function App() {
             initialBpm={urlBpm}
             viewMode={ytViewMode}
             onViewModeChange={setYtViewMode}
+          />
+        </section>
+      </div>
+
+      {/* ── Files タブ ── */}
+      <div className={mainTab === 'files' ? styles.tabPanel : styles.tabPanelHidden}>
+        <section className={styles.section}>
+          <FilePlayer
+            bpm={bpm}
+            onBpmChange={setBpm}
           />
         </section>
       </div>

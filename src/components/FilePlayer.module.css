@@ -305,22 +305,32 @@
   overflow: hidden;
 }
 
+/* Fullscreen API (native) */
+.sectionNormal:fullscreen,
+.sectionNormal:-webkit-full-screen,
+.sectionTheater:fullscreen,
+.sectionTheater:-webkit-full-screen {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ── Theater top bar ── */
 .theaterBar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.55rem 0.8rem;
-  background: rgba(0, 0, 0, 0.7);
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.65);
   gap: 0.5rem;
   flex-shrink: 0;
   z-index: 1;
 }
 
 .theaterBarTitle {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(255, 255, 255, 0.8);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -330,21 +340,25 @@
 
 .theaterBarBtns {
   display: flex;
-  gap: 0.4rem;
+  gap: 6px;
   flex-shrink: 0;
 }
 
 .theaterBarBtn {
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  color: rgba(255, 255, 255, 0.85);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.8);
   font-size: 1rem;
-  padding: 0.25rem 0.55rem;
   cursor: pointer;
-  transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s;
 }
-.theaterBarBtn:hover { background: rgba(255, 255, 255, 0.22); }
+.theaterBarBtn:hover { background: rgba(255, 255, 255, 0.18); }
 
 /* ── Theater video area ── */
 .theaterVideoArea {
@@ -355,24 +369,78 @@
   overflow: hidden;
 }
 
-/* ── Theater controls overlay ── */
+/* ── Theater controls (flex child, portrait default) ── */
 .theaterControls {
-  position: relative;
   flex-shrink: 0;
-  padding: 0.75rem 0.9rem;
-  background: rgba(0, 0, 0, 0.82);
+  padding: 10px 14px;
+  background: rgba(8, 8, 20, 0.90);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  transition: opacity 0.3s;
-  max-height: 55vh;
+  max-height: 35vh;
   overflow-y: auto;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
 }
 
 .theaterControlsHidden {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
+}
+
+/* ── Landscape: controls become bottom overlay so video fills all height ──
+   iPhone landscape viewport height ≈ 375–430px.
+   Keeping controls as flex child crushes the video to almost nothing.
+   ──────────────────────────────────────────────────────────────────────── */
+@media (orientation: landscape) and (max-height: 500px) {
+  /* Safe area on left/right for notch */
+  .sectionTheater .theaterBar,
+  .sectionNormal:fullscreen .theaterBar,
+  .sectionNormal:-webkit-full-screen .theaterBar {
+    padding-left:  max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+
+  /* Video fills entire section height */
+  .sectionTheater .theaterVideoArea,
+  .sectionNormal:fullscreen .theaterVideoArea,
+  .sectionNormal:-webkit-full-screen .theaterVideoArea {
+    flex: 1;
+    height: 100%;
+  }
+
+  /* Controls become absolute overlay at bottom of the fixed/fullscreen container */
+  .sectionTheater .theaterControls,
+  .sectionNormal:fullscreen .theaterControls,
+  .sectionNormal:-webkit-full-screen .theaterControls {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    max-height: 50%;
+    background: rgba(8, 8, 20, 0.92);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-left:  max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    overflow-y: auto;
+    transition: transform 0.3s ease, opacity 0.25s ease, visibility 0.25s ease;
+  }
+
+  /* Slide out instead of just fade */
+  .sectionTheater .theaterControlsHidden,
+  .sectionNormal:fullscreen .theaterControlsHidden,
+  .sectionNormal:-webkit-full-screen .theaterControlsHidden {
+    transform: translateY(100%);
+    opacity: 0;
+    visibility: hidden;
+  }
 }
 
 /* ── Video container (normal mode) ── */

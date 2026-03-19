@@ -552,7 +552,7 @@
   color: #a090ff;
 }
 
-/* ── Mobile ── */
+/* ── Mobile portrait ── */
 @media (max-width: 480px) {
   .beatDot {
     width: 26px;
@@ -562,5 +562,48 @@
 
   .measureBtn {
     font-size: 0.8rem;
+  }
+}
+
+/* ── Landscape mobile: theater / fullscreen ──────────────────────────────
+   In landscape on iPhone the viewport height is ~375px.
+   Controls below the video would squash it, so we overlay them instead.
+   ──────────────────────────────────────────────────────────────────────── */
+@media (orientation: landscape) and (max-height: 500px) {
+
+  /* Safe area: bar respects notch on left/right */
+  .sectionTheater .theaterBar,
+  .sectionNormal:fullscreen .theaterBar,
+  .sectionNormal:-webkit-full-screen .theaterBar {
+    padding-left:  max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+
+  /* Video fills entire section height */
+  .sectionTheater .theaterVideoArea,
+  .sectionNormal:fullscreen .theaterVideoArea,
+  .sectionNormal:-webkit-full-screen .theaterVideoArea {
+    flex: 1;
+    height: 100%;
+  }
+
+  /* Controls become a semi-transparent overlay at bottom instead of below */
+  .sectionTheater .theaterControls,
+  .sectionNormal:fullscreen .theaterControls,
+  .sectionNormal:-webkit-full-screen .theaterControls {
+    position: absolute;
+    left:   0;
+    right:  0;
+    bottom: 0;
+    z-index: 20;
+    max-height: 48%;
+    background: rgba(8, 8, 24, 0.92);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-left:  max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    overflow-y: auto;
   }
 }

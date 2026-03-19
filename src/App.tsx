@@ -223,6 +223,7 @@ function App() {
           bpm={bpm}
           onBpmChange={setBpm}
           initialVideoId={urlVid}
+          initialBpm={urlBpm}
           viewMode={ytViewMode}
           onViewModeChange={setYtViewMode}
         />

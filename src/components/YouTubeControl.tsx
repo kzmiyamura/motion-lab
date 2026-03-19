@@ -35,6 +35,7 @@ type Props = {
   bpm: number;
   onBpmChange: (bpm: number) => void;
   initialVideoId?: string | null;
+  initialBpm?: number | null;
   onVideoIdChange?: (id: string | null) => void;
   viewMode: 'audio' | 'video';
   onViewModeChange: (mode: 'audio' | 'video') => void;
@@ -56,12 +57,17 @@ function extractVideoId(input: string): string | null {
 
 export function YouTubeControl({
   bpm, onBpmChange,
-  initialVideoId, onVideoIdChange,
+  initialVideoId, initialBpm, onVideoIdChange,
   viewMode, onViewModeChange,
 }: Props) {
   const [urlInput, setUrlInput] = useState(initialVideoId ?? '');
   const [videoId, setVideoId] = useState<string | null>(initialVideoId ?? null);
-  const [baseBpm, setBaseBpm] = useState<number | null>(null);
+  // 再起動時: URL から動画ID+BPMが復元されている場合はそれを基準BPMとして初期化
+  const [baseBpm, setBaseBpm] = useState<number | null>(
+    initialVideoId && initialBpm != null ? initialBpm : null
+  );
+  // スライダーのローカル表示値（コミットは pointer/key up 時のみ）
+  const [sliderBpm, setSliderBpm] = useState(bpm);
   const [ytVolume, setYtVolume] = useState(80);
   const [ytMuted, setYtMuted] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
@@ -73,6 +79,7 @@ export function YouTubeControl({
   const playerReadyRef = useRef(false);
   const playerSectionRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setRateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayTapRef = useRef<(() => void) | undefined>(undefined) as MutableRefObject<(() => void) | undefined>;
 
   // ── Fullscreen detection ──────────────────────────────────────────────
@@ -138,6 +145,7 @@ export function YouTubeControl({
   // ── Unified playback rate effect ──────────────────────────────────────
   // audio mode: bpm/baseBpm ratio  (slowRate ignored)
   // video mode: (bpm/baseBpm) * slowRate, or just slowRate if no baseBpm
+  // 250ms デバウンス: スライダーを動かすたびに YouTube API を叩かないようにする
   useEffect(() => {
     if (!playerReadyRef.current || !playerRef.current) return;
     let rate: number;
@@ -148,7 +156,11 @@ export function YouTubeControl({
       rate = viewMode === 'video' ? video.slowRate : 1;
     }
     rate = Math.min(2, Math.max(0.25, rate));
-    try { playerRef.current.setPlaybackRate(rate); } catch { /* ignore */ }
+    if (setRateTimerRef.current) clearTimeout(setRateTimerRef.current);
+    const rateToSet = rate;
+    setRateTimerRef.current = setTimeout(() => {
+      try { playerRef.current?.setPlaybackRate(rateToSet); } catch { /* ignore */ }
+    }, 250);
   }, [bpm, baseBpm, viewMode, video.slowRate]);
 
   useEffect(() => {
@@ -158,6 +170,9 @@ export function YouTubeControl({
       else { playerRef.current.unMute(); playerRef.current.setVolume(ytVolume); }
     } catch { /* ignore */ }
   }, [ytVolume, ytMuted]);
+
+  // sliderBpm を外部 bpm（BPM計測や履歴ロード）に追従させる
+  useEffect(() => { setSliderBpm(bpm); }, [bpm]);
 
   const handleLoad = useCallback((url?: string, restoreBpm?: number | null) => {
     const target = url ?? urlInput;
@@ -487,6 +502,7 @@ export function YouTubeControl({
           )}
 
           {/* ── BPM スライダー ── */}
+          {/* onChange はローカル表示のみ。onPointerUp/onKeyUp で確定 → setPlaybackRate は1回だけ */}
           <div className={styles.bpmSliderRow}>
             <label className={styles.bpmSliderLabel} htmlFor="yt-bpm-slider">BPM</label>
             <input
@@ -495,12 +511,14 @@ export function YouTubeControl({
               min={80}
               max={220}
               step={1}
-              value={bpm}
-              onChange={(e) => onBpmChange(Number(e.target.value))}
+              value={sliderBpm}
+              onChange={(e) => setSliderBpm(Number(e.target.value))}
+              onPointerUp={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
+              onKeyUp={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
               className={styles.bpmSlider}
               aria-label="BPM"
             />
-            <span className={styles.bpmSliderValue}>{bpm}</span>
+            <span className={styles.bpmSliderValue}>{sliderBpm}</span>
           </div>
         </div>
       )}

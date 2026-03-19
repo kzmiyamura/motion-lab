@@ -5,6 +5,7 @@ import { useVideoTraining } from '../hooks/useVideoTraining';
 import type { SlowRate } from '../hooks/useVideoTraining';
 import { ModeSwitcher } from './ModeSwitcher';
 import { VideoControls } from './VideoControls';
+import { VideoGrid } from './VideoGrid';
 import styles from './YouTubeControl.module.css';
 
 const HISTORY_KEY = 'motionlab:yt-history';
@@ -320,6 +321,12 @@ export function YouTubeControl({
           )}
           {videoId && (
             <div className={styles.sizeButtons}>
+              {/* 動画選択グリッドに戻る */}
+              <button
+                className={styles.sizeBtn}
+                onClick={() => { setVideoId(null); setUrlInput(''); onVideoIdChange?.(null); }}
+                title="別の動画を選択"
+              >⌂</button>
               <button
                 className={`${styles.sizeBtn} ${playerSize === 'theater' ? styles.sizeBtnActive : ''}`}
                 onClick={() => setPlayerSize(s => s === 'theater' ? 'normal' : 'theater')}
@@ -334,36 +341,30 @@ export function YouTubeControl({
           )}
         </div>
 
-        <div className={styles.urlRow}>
-          <input
-            className={styles.urlInput}
-            type="text"
-            placeholder="URL または Video ID"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleLoad()}
-          />
-          <button className={styles.loadBtn} onClick={() => handleLoad()}>Load</button>
-        </div>
-
-        {history.length > 0 && (
-          <div className={styles.historyRow}>
-            {history.map(entry => (
-              <button
-                key={entry.url}
-                className={styles.historyItem}
-                onClick={() => { setUrlInput(entry.url); handleLoad(entry.url, entry.bpm); }}
-                title={entry.url}
-              >
-                <span className={styles.historyUrl}>
-                  {entry.url.length > 32 ? entry.url.slice(0, 32) + '…' : entry.url}
-                </span>
-                {entry.bpm != null && (
-                  <span className={styles.historyBpm}>{entry.bpm} BPM</span>
-                )}
-              </button>
-            ))}
+        {/* URL入力（動画再生中は折りたたんで非表示） */}
+        {!videoId && (
+          <div className={styles.urlRow}>
+            <input
+              className={styles.urlInput}
+              type="text"
+              placeholder="URL または Video ID を入力"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleLoad()}
+            />
+            <button className={styles.loadBtn} onClick={() => handleLoad()}>Load</button>
           </div>
+        )}
+
+        {/* 動画未選択時: レコメンドグリッド */}
+        {!videoId && (
+          <VideoGrid
+            history={history}
+            onSelect={(id, bpm) => {
+              setUrlInput(id);
+              handleLoad(id, bpm);
+            }}
+          />
         )}
 
         {videoId && (

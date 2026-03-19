@@ -185,8 +185,9 @@ export function YouTubeControl({
       setVideoId(id);
       onVideoIdChange?.(id);
       if (restoreBpm != null) {
+        // baseBpm はローカルの再生速度基準としてのみ使用。
+        // BPM測定なしに動画を選択しただけではグローバルBPM（Rhythm タブ）を変更しない。
         setBaseBpm(restoreBpm);
-        onBpmChange(restoreBpm);
       }
       const bpmToSave = restoreBpm !== undefined ? restoreBpm : baseBpm;
       setHistory(prev => saveHistory(target.trim(), bpmToSave ?? null, prev));

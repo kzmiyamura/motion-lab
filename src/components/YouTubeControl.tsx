@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, type MutableRefObject } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, type MutableRefObject } from 'react';
 import YouTube, { type YouTubePlayer } from 'react-youtube';
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import { useVideoTraining } from '../hooks/useVideoTraining';
@@ -107,6 +107,16 @@ export function YouTubeControl({
       document.removeEventListener('webkitfullscreenchange', handler);
     };
   }, []);
+
+  // ── Reset player refs when videoId is cleared (back button) ─────────
+  useEffect(() => {
+    if (!videoId) {
+      playerRef.current = null;
+      playerReadyRef.current = false;
+      setSeekPos(0);
+      setDuration(0);
+    }
+  }, [videoId]);
 
   // ── Seek position polling (500ms) ────────────────────────────────────
   useEffect(() => {
@@ -245,6 +255,11 @@ export function YouTubeControl({
   }, [video]);
 
   const playbackRate = baseBpm ? Math.min(2, Math.max(0.25, bpm / baseBpm)) : 1;
+
+  const ytOpts = useMemo(() => ({
+    width: '100%', height: '100%',
+    playerVars: { autoplay: 0 as const, rel: 0 as const },
+  }), []);
 
   const { scale, x, y } = video.zoom;
   const transformStyle = (viewMode === 'video' && (scale !== 1 || x !== 0 || y !== 0)) || isMirrored
@@ -481,7 +496,7 @@ export function YouTubeControl({
               <div className={styles.transformContainer} style={transformStyle}>
                 <YouTube
                   videoId={videoId}
-                  opts={{ width: '100%', height: '100%', playerVars: { autoplay: 0, rel: 0 } }}
+                  opts={ytOpts}
                   onReady={handlePlayerReady}
                   onStateChange={handleStateChange}
                   className={styles.ytFrame}

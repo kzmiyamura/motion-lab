@@ -135,29 +135,19 @@ export function YouTubeControl({
     return () => clearInterval(id);
   }, []);
 
-  // ── Prevent body scroll in theater mode (iOS-safe) ───────────────────
-  // iOS Safari ignores overflow:hidden on body, so we use the
-  // position:fixed + top trick to lock scroll position.
+  // ── Prevent body scroll in theater mode ──────────────────────────────
   useEffect(() => {
     if (playerSize === 'theater') {
       savedScrollYRef.current = window.scrollY;
       document.body.style.overflow = 'hidden';
-      document.body.style.position = 'fixed';
-      document.body.style.top = `-${savedScrollYRef.current}px`;
-      document.body.style.width = '100%';
     } else {
       document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.width = '';
-      window.scrollTo(0, savedScrollYRef.current);
+      // rAF で body スタイル解除後のレイアウト確定を待ってから復元
+      requestAnimationFrame(() => {
+        window.scrollTo(0, savedScrollYRef.current);
+      });
     }
-    return () => {
-      document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.width = '';
-    };
+    return () => { document.body.style.overflow = ''; };
   }, [playerSize]);
 
   const enterFullscreen = useCallback(async () => {

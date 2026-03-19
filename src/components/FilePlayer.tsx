@@ -4,7 +4,7 @@ import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable,
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import { useWakeLock } from '../hooks/useWakeLock';
-import { usePoseEstimation } from '../hooks/usePoseEstimation';
+import { usePoseEstimation, type VizMode } from '../hooks/usePoseEstimation';
 import styles from './FilePlayer.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -105,13 +105,13 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Pose estimation
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [poseEnabled, setPoseEnabled] = useState(false);
+  const [vizMode, setVizMode] = useState<VizMode>('off');
 
   // Zoom gesture refs
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
 
-  usePoseEstimation(mediaRef, canvasRef, poseEnabled && !!(source?.isVideo));
+  usePoseEstimation(mediaRef, canvasRef, source?.isVideo ? vizMode : 'off');
 
   // Derived
   const isTheater = playerSize === 'theater';
@@ -561,12 +561,18 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           >↔</button>
         )}
         {source.isVideo && (
-          <button
-            className={`${styles.poseToggle} ${poseEnabled ? styles.poseToggleActive : ''}`}
-            onClick={() => setPoseEnabled(v => !v)}
-            title={poseEnabled ? '骨格推定 OFF' : '骨格推定 ON'}
-            aria-label="骨格推定 ON/OFF"
-          >骨格</button>
+          <div className={styles.vizModeGroup} role="group" aria-label="骨格表示モード">
+            {(['off', 'full', 'salsa'] as const).map(m => (
+              <button
+                key={m}
+                className={`${styles.vizModeBtn} ${vizMode === m ? styles.vizModeBtnActive : ''}`}
+                onClick={() => setVizMode(m)}
+                title={m === 'off' ? '骨格表示 OFF' : m === 'full' ? '全身表示' : 'サルサ軸解析'}
+              >
+                {m === 'off' ? 'OFF' : m === 'full' ? '全身' : '軸'}
+              </button>
+            ))}
+          </div>
         )}
         <div className={styles.rateGroup}>
           {SLOW_RATES.map(r => (
@@ -771,7 +777,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                   className={styles.poseCanvas}
                   style={{
                     transform: `${isMirrored ? 'scaleX(-1) ' : ''}scale(${zoom.scale}) translate(${zoom.x / zoom.scale}px, ${zoom.y / zoom.scale}px)`,
-                    display: poseEnabled ? 'block' : 'none',
+                    display: vizMode !== 'off' ? 'block' : 'none',
                   }}
                 />
                 <div

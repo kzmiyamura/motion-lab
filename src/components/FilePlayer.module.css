@@ -870,31 +870,46 @@
   z-index: 1;
 }
 
-/* ── Pose toggle button ── */
-.poseToggle {
-  width: 40px;
-  height: 34px;
+/* ── Viz mode segment control ── */
+.vizModeGroup {
+  display: flex;
+  flex-shrink: 0;
   border-radius: 8px;
-  background: var(--color-ui-dark2);
+  overflow: hidden;
   border: 1.5px solid var(--color-border2);
+}
+
+.vizModeBtn {
+  height: 34px;
+  padding: 0 0.55rem;
+  background: var(--color-ui-dark2);
+  border: none;
+  border-left: 1px solid var(--color-border2);
   color: var(--color-ui-text-dim);
-  font-size: 0.62rem;
+  font-size: 0.64rem;
   font-weight: 700;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+  -webkit-tap-highlight-color: transparent;
 }
-.poseToggle:hover {
-  border-color: var(--color-accent);
-  background: var(--color-ui-medium);
+.vizModeBtn:first-child { border-left: none; }
+.vizModeBtn:hover { background: var(--color-ui-medium); color: var(--color-fg, #e0e0ff); }
+
+/* OFF はニュートラル */
+.vizModeBtn:first-child.vizModeBtnActive {
+  background: #1a1a2a;
+  color: #8080a0;
 }
-.poseToggleActive {
-  border-color: #40a060;
-  color: #60c080;
-  background: #0e1e14;
+/* full は赤系 */
+.vizModeBtn:nth-child(2).vizModeBtnActive {
+  background: #2a1010;
+  color: #ff6060;
+}
+/* salsa は黄色系 */
+.vizModeBtn:nth-child(3).vizModeBtnActive {
+  background: #1e1a00;
+  color: #ffe000;
 }
 
 /* ── Mirror button ── */

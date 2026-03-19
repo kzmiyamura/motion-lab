@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { PRESET_VIDEOS, type PresetGenre } from '../engine/videoPresets';
+import { usePersonalizedRecs } from '../hooks/usePersonalizedRecs';
 import styles from './VideoGrid.module.css';
 
 type HistoryEntry = { url: string; bpm: number | null };
@@ -72,6 +73,7 @@ function ThumbCard({
 
 export function VideoGrid({ history, onSelect }: Props) {
   const [filter, setFilter] = useState<GenreFilter>('all');
+  const { items: recoItems, isPersonalized, isFetching, queries } = usePersonalizedRecs();
 
   // history から有効な videoId のみ抽出
   const historyCards = history
@@ -102,36 +104,65 @@ export function VideoGrid({ history, onSelect }: Props) {
         </section>
       )}
 
-      {/* ── 練習におすすめ ── */}
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <h3 className={styles.sectionLabel}>練習におすすめ</h3>
-          <div className={styles.filterRow}>
-            {(['all', 'salsa', 'bachata'] as GenreFilter[]).map(g => (
-              <button
-                key={g}
-                className={`${styles.filterBtn} ${filter === g ? styles.filterBtnActive : ''}`}
-                onClick={() => setFilter(g)}
-              >
-                {g === 'all' ? 'All' : g === 'salsa' ? '💃 Salsa' : '🌹 Bachata'}
-              </button>
+      {/* ── パーソナライズ or 練習におすすめ ── */}
+      {isPersonalized && recoItems.length > 0 ? (
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <h3 className={styles.sectionLabel}>
+              あなたへのおすすめ
+              {isFetching && <span className={styles.fetchingDot} title="更新中…" />}
+            </h3>
+            {queries.length > 0 && (
+              <p className={styles.recoHint}>
+                {queries.join(' / ')} の検索結果をもとに
+              </p>
+            )}
+          </div>
+          <div className={styles.grid}>
+            {recoItems.map(item => (
+              <ThumbCard
+                key={item.id}
+                videoId={item.id}
+                title={item.title}
+                artist={item.artist}
+                bpm={item.bpm}
+                genre={item.genre}
+                onClick={() => onSelect(item.id, item.bpm ?? null)}
+              />
             ))}
           </div>
-        </div>
-        <div className={styles.grid}>
-          {filteredPresets.map(p => (
-            <ThumbCard
-              key={p.id}
-              videoId={p.id}
-              title={p.title}
-              artist={p.artist}
-              bpm={p.bpm}
-              genre={p.genre}
-              onClick={() => onSelect(p.id, p.bpm)}
-            />
-          ))}
-        </div>
-      </section>
+        </section>
+      ) : (
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <h3 className={styles.sectionLabel}>練習におすすめ</h3>
+            <div className={styles.filterRow}>
+              {(['all', 'salsa', 'bachata'] as GenreFilter[]).map(g => (
+                <button
+                  key={g}
+                  className={`${styles.filterBtn} ${filter === g ? styles.filterBtnActive : ''}`}
+                  onClick={() => setFilter(g)}
+                >
+                  {g === 'all' ? 'All' : g === 'salsa' ? '💃 Salsa' : '🌹 Bachata'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className={styles.grid}>
+            {filteredPresets.map(p => (
+              <ThumbCard
+                key={p.id}
+                videoId={p.id}
+                title={p.title}
+                artist={p.artist}
+                bpm={p.bpm}
+                genre={p.genre}
+                onClick={() => onSelect(p.id, p.bpm)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

@@ -399,7 +399,7 @@ export function YouTubeControl({
           >
             {/* Theater / fullscreen top bar */}
             {isExpanded && (
-              <div className={styles.theaterBar}>
+              <div className={[styles.theaterBar, !controlsVisible ? styles.theaterBarHidden : ''].filter(Boolean).join(' ')}>
                 <span className={styles.theaterBarTitle}>YouTube</span>
                 <div className={styles.theaterBarBtns}>
                   <button

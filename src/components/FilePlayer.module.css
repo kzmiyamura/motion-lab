@@ -305,26 +305,37 @@
   overflow: hidden;
 }
 
-/* Fullscreen API (native) */
+/* Fullscreen API (native) — position: relative makes it a containing block */
 .sectionNormal:fullscreen,
 .sectionNormal:-webkit-full-screen,
 .sectionTheater:fullscreen,
 .sectionTheater:-webkit-full-screen {
+  position: relative;
   background: #000;
   display: flex;
   flex-direction: column;
 }
 
-/* ── Theater top bar ── */
+/* ── Theater top bar (absolute overlay — doesn't shrink the video) ── */
 .theaterBar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
   background: rgba(0, 0, 0, 0.65);
   gap: 0.5rem;
-  flex-shrink: 0;
-  z-index: 1;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+.theaterBarHidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .theaterBarTitle {
@@ -360,43 +371,43 @@
 }
 .theaterBarBtn:hover { background: rgba(255, 255, 255, 0.18); }
 
-/* ── Theater video area ── */
+/* ── Theater video area (fills the entire fixed/fullscreen container) ── */
 .theaterVideoArea {
-  position: relative;
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   background: #000;
   overflow: hidden;
 }
 
-/* ── Theater controls (flex child, portrait default) ── */
+/* ── Theater controls (absolute overlay at bottom — portrait & landscape) ── */
 .theaterControls {
-  flex-shrink: 0;
-  padding: 10px 14px;
-  background: rgba(8, 8, 20, 0.90);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  padding: 10px 14px max(10px, env(safe-area-inset-bottom)) 14px;
+  background: rgba(8, 8, 20, 0.92);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  max-height: 35vh;
+  max-height: 60vh;
   overflow-y: auto;
-  transition: opacity 0.25s ease, visibility 0.25s ease;
+  transition: transform 0.3s ease, opacity 0.25s ease, visibility 0.25s ease;
 }
 
 .theaterControlsHidden {
+  transform: translateY(100%);
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
 }
 
-/* ── Landscape: controls become bottom overlay so video fills all height ──
-   iPhone landscape viewport height ≈ 375–430px.
-   Keeping controls as flex child crushes the video to almost nothing.
-   ──────────────────────────────────────────────────────────────────────── */
+/* ── Landscape: safe-area-inset for notch on iPhone ── */
 @media (orientation: landscape) and (max-height: 500px) {
-  /* Safe area on left/right for notch */
   .sectionTheater .theaterBar,
   .sectionNormal:fullscreen .theaterBar,
   .sectionNormal:-webkit-full-screen .theaterBar {
@@ -404,42 +415,12 @@
     padding-right: max(12px, env(safe-area-inset-right));
   }
 
-  /* Video fills entire section height */
-  .sectionTheater .theaterVideoArea,
-  .sectionNormal:fullscreen .theaterVideoArea,
-  .sectionNormal:-webkit-full-screen .theaterVideoArea {
-    flex: 1;
-    height: 100%;
-  }
-
-  /* Controls become absolute overlay at bottom of the fixed/fullscreen container */
   .sectionTheater .theaterControls,
   .sectionNormal:fullscreen .theaterControls,
   .sectionNormal:-webkit-full-screen .theaterControls {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 20;
-    max-height: 50%;
-    background: rgba(8, 8, 20, 0.92);
-    -webkit-backdrop-filter: blur(10px);
-    backdrop-filter: blur(10px);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
     padding-left:  max(14px, env(safe-area-inset-left));
     padding-right: max(14px, env(safe-area-inset-right));
     padding-bottom: max(10px, env(safe-area-inset-bottom));
-    overflow-y: auto;
-    transition: transform 0.3s ease, opacity 0.25s ease, visibility 0.25s ease;
-  }
-
-  /* Slide out instead of just fade */
-  .sectionTheater .theaterControlsHidden,
-  .sectionNormal:fullscreen .theaterControlsHidden,
-  .sectionNormal:-webkit-full-screen .theaterControlsHidden {
-    transform: translateY(100%);
-    opacity: 0;
-    visibility: hidden;
   }
 }
 
@@ -796,6 +777,42 @@
   font-size: 0.72rem;
   color: var(--color-ui-text);
   font-variant-numeric: tabular-nums;
+}
+
+.uploadStatsRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.uploadPct {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-accent);
+  min-width: 2.8rem;
+}
+
+.uploadDetail {
+  font-size: 0.72rem;
+  color: var(--color-ui-text);
+}
+
+.uploadSpeed {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-ui-text-bright);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 20%, transparent);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.uploadEta {
+  font-size: 0.7rem;
+  color: var(--color-fg-dim);
+  margin-left: auto;
 }
 
 .uploadDoneWrap {

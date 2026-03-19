@@ -395,19 +395,31 @@
 .sectionNormal:-webkit-full-screen,
 .sectionTheater:fullscreen,
 .sectionTheater:-webkit-full-screen {
+  position: relative;
   background: #000;
   display: flex;
   flex-direction: column;
 }
 
-/* ── Theater top bar ── */
+/* ── Theater top bar (absolute overlay — doesn't shrink the video) ── */
 .theaterBar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
   background: rgba(0, 0, 0, 0.6);
-  flex-shrink: 0;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+.theaterBarHidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .theaterBarTitle {
@@ -444,11 +456,10 @@
   color: #fff;
 }
 
-/* ── Theater video area (flex-fill) ── */
+/* ── Theater video area (fills the entire fixed/fullscreen container) ── */
 .theaterVideoArea {
-  flex: 1;
-  min-height: 0;
-  position: relative;
+  position: absolute;
+  inset: 0;
   background: #000;
   overflow: hidden;
 }
@@ -459,21 +470,28 @@
   inset: 0;
 }
 
-/* ── Theater controls area (scrollable) ── */
+/* ── Theater controls (absolute overlay at bottom — portrait & landscape) ── */
 .theaterControls {
-  flex-shrink: 0;
-  padding: 10px 14px;
-  background: var(--color-bg);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  padding: 10px 14px max(10px, env(safe-area-inset-bottom)) 14px;
+  background: rgba(8, 8, 24, 0.92);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
   overflow-y: auto;
-  max-height: 35vh;
-  border-top: 1px solid #1a1a2e;
-  transition: opacity 0.25s ease, visibility 0.25s ease;
+  max-height: 60vh;
+  transition: transform 0.3s ease, opacity 0.25s ease, visibility 0.25s ease;
 }
 
 .theaterControlsHidden {
+  transform: translateY(100%);
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -621,13 +639,8 @@
   }
 }
 
-/* ── Landscape mobile: theater / fullscreen ──────────────────────────────
-   In landscape on iPhone the viewport height is ~375px.
-   Controls below the video would squash it, so we overlay them instead.
-   ──────────────────────────────────────────────────────────────────────── */
+/* ── Landscape: safe-area-inset for notch on iPhone ── */
 @media (orientation: landscape) and (max-height: 500px) {
-
-  /* Safe area: bar respects notch on left/right */
   .sectionTheater .theaterBar,
   .sectionNormal:fullscreen .theaterBar,
   .sectionNormal:-webkit-full-screen .theaterBar {
@@ -635,38 +648,11 @@
     padding-right: max(12px, env(safe-area-inset-right));
   }
 
-  /* Video fills entire section height */
-  .sectionTheater .theaterVideoArea,
-  .sectionNormal:fullscreen .theaterVideoArea,
-  .sectionNormal:-webkit-full-screen .theaterVideoArea {
-    flex: 1;
-    height: 100%;
-  }
-
-  /* Controls become a semi-transparent overlay at bottom instead of below */
   .sectionTheater .theaterControls,
   .sectionNormal:fullscreen .theaterControls,
   .sectionNormal:-webkit-full-screen .theaterControls {
-    position: absolute;
-    left:   0;
-    right:  0;
-    bottom: 0;
-    z-index: 20;
-    max-height: 48%;
-    background: rgba(8, 8, 24, 0.92);
-    -webkit-backdrop-filter: blur(8px);
-    backdrop-filter: blur(8px);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
     padding-left:  max(14px, env(safe-area-inset-left));
     padding-right: max(14px, env(safe-area-inset-right));
     padding-bottom: max(10px, env(safe-area-inset-bottom));
-    overflow-y: auto;
-    transition: transform 0.3s ease, opacity 0.25s ease, visibility 0.25s ease;
-  }
-
-  .sectionTheater .theaterControlsHidden,
-  .sectionNormal:fullscreen .theaterControlsHidden,
-  .sectionNormal:-webkit-full-screen .theaterControlsHidden {
-    transform: translateY(100%);
   }
 }

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { requestDriveToken, revokeDriveToken } from '../engine/googleAuth';
-import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, createPublicPermission, type DriveFile } from '../engine/googleDrive';
+import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, createPublicPermission, type DriveFile, type UploadStats } from '../engine/googleDrive';
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import { useWakeLock } from '../hooks/useWakeLock';
@@ -23,6 +23,26 @@ function formatTime(s: number): string {
 function formatSize(bytes: string | undefined): string {
   if (!bytes) return '';
   return `${(Number(bytes) / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function fmtBytes(b: number): string {
+  if (b >= 1024 ** 3) return `${(b / 1024 ** 3).toFixed(1)} GB`;
+  if (b >= 1024 ** 2) return `${(b / 1024 ** 2).toFixed(1)} MB`;
+  if (b >= 1024)      return `${(b / 1024).toFixed(0)} KB`;
+  return `${b} B`;
+}
+
+function fmtSpeed(bps: number): string {
+  if (bps >= 1024 ** 2) return `${(bps / 1024 ** 2).toFixed(1)} MB/s`;
+  if (bps >= 1024)      return `${(bps / 1024).toFixed(0)} KB/s`;
+  return `${bps.toFixed(0)} B/s`;
+}
+
+function fmtEta(sec: number): string {
+  if (!isFinite(sec) || sec <= 0) return '';
+  if (sec < 60)   return `残り約${Math.ceil(sec)}秒`;
+  if (sec < 3600) return `残り約${Math.ceil(sec / 60)}分`;
+  return `残り約${(sec / 3600).toFixed(1)}時間`;
 }
 
 export function FilePlayer({ bpm, onBpmChange }: Props) {
@@ -66,7 +86,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   // Upload state
   type UploadStatus = 'idle' | 'authing' | 'folder' | 'uploading' | 'done' | 'error';
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle');
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStats, setUploadStats] = useState<UploadStats | null>(null);
   const [uploadError, setUploadError] = useState('');
   const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
 
@@ -446,7 +466,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     if (!file) return;
 
     setUploadError('');
-    setUploadProgress(0);
+    setUploadStats(null);
 
     // 未認証なら認証を挟む
     let uploadToken = token;
@@ -481,8 +501,9 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
 
     // アップロード
     setUploadStatus('uploading');
+    setUploadStats(null);
     try {
-      const fileId = await uploadFileResumable(uploadToken, folderId, file, pct => setUploadProgress(pct));
+      const fileId = await uploadFileResumable(uploadToken, folderId, file, stats => setUploadStats(stats));
       setUploadedFileId(fileId || null);
       setUploadStatus('done');
     } catch (e) {
@@ -630,14 +651,32 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               <div className={styles.uploadProgressBar}>
                 <div
                   className={styles.uploadProgressFill}
-                  style={{ width: `${uploadProgress}%` }}
+                  style={{ width: `${uploadStats?.percent ?? 0}%` }}
                 />
               </div>
-              <span className={styles.uploadProgressLabel}>
-                {uploadStatus === 'authing' && '認証中…'}
-                {uploadStatus === 'folder' && 'フォルダ確認中…'}
-                {uploadStatus === 'uploading' && `アップロード中… ${uploadProgress}%`}
-              </span>
+              {uploadStatus === 'authing' && (
+                <span className={styles.uploadProgressLabel}>認証中…</span>
+              )}
+              {uploadStatus === 'folder' && (
+                <span className={styles.uploadProgressLabel}>フォルダ確認中…</span>
+              )}
+              {uploadStatus === 'uploading' && uploadStats && (
+                <div className={styles.uploadStatsRow}>
+                  <span className={styles.uploadPct}>{uploadStats.percent}%</span>
+                  <span className={styles.uploadDetail}>
+                    {fmtBytes(uploadStats.loaded)} / {fmtBytes(uploadStats.total)}
+                  </span>
+                  {uploadStats.speedBps > 0 && (
+                    <span className={styles.uploadSpeed}>{fmtSpeed(uploadStats.speedBps)}</span>
+                  )}
+                  {uploadStats.etaSec > 0 && (
+                    <span className={styles.uploadEta}>{fmtEta(uploadStats.etaSec)}</span>
+                  )}
+                </div>
+              )}
+              {uploadStatus === 'uploading' && !uploadStats && (
+                <span className={styles.uploadProgressLabel}>アップロード開始中…</span>
+              )}
             </div>
           )}
         </div>
@@ -662,7 +701,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         >
           {/* Theater / fullscreen top bar */}
           {isExpanded && (
-            <div className={styles.theaterBar}>
+            <div className={[styles.theaterBar, !controlsVisible ? styles.theaterBarHidden : ''].filter(Boolean).join(' ')}>
               <span className={styles.theaterBarTitle}>{source.name}</span>
               <div className={styles.theaterBarBtns}>
                 <button

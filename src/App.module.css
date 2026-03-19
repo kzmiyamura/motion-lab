@@ -134,6 +134,48 @@
   50%       { box-shadow: 0 0 8px rgba(124,107,255,0.5); }
 }
 
+/* ── Main Tab Switcher ── */
+.mainTabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+  justify-content: center;
+}
+
+.mainTabBtn {
+  padding: 0.55rem 1.75rem;
+  border: 1.5px solid var(--color-border, #1e1e3a);
+  border-radius: 24px;
+  background: transparent;
+  color: var(--color-fg-dim, #6060a0);
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+
+.mainTabBtn:hover {
+  border-color: var(--color-accent, #7c6bff);
+  color: var(--color-fg, #e0e0ff);
+}
+
+.mainTabBtnActive {
+  border-color: var(--color-accent, #7c6bff);
+  background: color-mix(in srgb, var(--color-accent, #7c6bff) 18%, transparent);
+  color: var(--color-accent, #7c6bff);
+  box-shadow: 0 0 10px rgba(124, 107, 255, 0.3);
+}
+
+/* ── Tab panels ── */
+.tabPanel {
+  display: contents; /* 子要素を直接フローに流す */
+}
+
+.tabPanelHidden {
+  display: none;
+}
+
 /* ── Genre Selector ── */
 .genreSelector {
   display: flex;

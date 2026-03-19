@@ -85,7 +85,6 @@ export function YouTubeControl({
   const [controlsVisible, setControlsVisible] = useState(false);
   const [searchHasResults, setSearchHasResults] = useState(false);
   const [isMirrored, setIsMirrored] = useState(false);
-  const [debugInfo, setDebugInfo] = useState<string | null>(null);
 
   const [seekPos, setSeekPos] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -138,33 +137,6 @@ export function YouTubeControl({
   // ── Prevent body scroll in theater mode ──────────────────────────────
   useEffect(() => {
     document.body.style.overflow = playerSize === 'theater' ? 'hidden' : '';
-    if (playerSize === 'normal') {
-      requestAnimationFrame(() => {
-        const wrapper = document.querySelector('[class*="wrapper"]');
-        const block = document.querySelector('[class*="block"]');
-        const section = document.querySelector('[class*="section"]');
-        const main = document.querySelector('main');
-        const blockParent = block?.parentElement;
-        const wrapperParent = wrapper?.parentElement;
-        const info = [
-          `innerWidth: ${window.innerWidth}`,
-          `body.offsetWidth: ${document.body.offsetWidth}`,
-          `body.paddingLeft: "${document.body.style.paddingLeft}"`,
-          `body.marginLeft: "${document.body.style.marginLeft}"`,
-          `html.paddingLeft: "${document.documentElement.style.paddingLeft}"`,
-          `wrapper.offsetWidth: ${(wrapper as HTMLElement)?.offsetWidth ?? 'n/a'}`,
-          `block.offsetWidth: ${(block as HTMLElement)?.offsetWidth ?? 'n/a'}`,
-          `section.offsetWidth: ${(section as HTMLElement)?.offsetWidth ?? 'n/a'}`,
-          `main.offsetWidth: ${(main as HTMLElement)?.offsetWidth ?? 'n/a'}`,
-          `blockParent.offsetWidth: ${blockParent?.offsetWidth ?? 'n/a'}`,
-          `blockParent.class: ${blockParent?.className ?? 'n/a'}`,
-          `wrapperParent.offsetWidth: ${wrapperParent?.offsetWidth ?? 'n/a'}`,
-          `wrapperParent.class: ${wrapperParent?.className ?? 'n/a'}`,
-        ].join('\n');
-        setDebugInfo(info);
-        setTimeout(() => setDebugInfo(null), 3000);
-      });
-    }
     return () => { document.body.style.overflow = ''; };
   }, [playerSize]);
 
@@ -417,16 +389,6 @@ export function YouTubeControl({
 
   return (
     <div className={styles.wrapper}>
-      {debugInfo && (
-        <div style={{
-          position: 'fixed', top: 8, left: 8, zIndex: 9999,
-          background: 'rgba(0,0,0,0.85)', color: '#0f0',
-          fontFamily: 'monospace', fontSize: 13, padding: '10px 14px',
-          borderRadius: 8, whiteSpace: 'pre', pointerEvents: 'none',
-        }}>
-          {debugInfo}
-        </div>
-      )}
 
       {/* ── Mode switcher ── */}
       <div className={styles.modeRow}>

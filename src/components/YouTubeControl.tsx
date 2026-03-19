@@ -140,12 +140,20 @@ export function YouTubeControl({
     document.body.style.overflow = playerSize === 'theater' ? 'hidden' : '';
     if (playerSize === 'normal') {
       requestAnimationFrame(() => {
+        const wrapper = document.querySelector('[class*="wrapper"]');
+        const block = document.querySelector('[class*="block"]');
+        const section = document.querySelector('[class*="section"]');
+        const main = document.querySelector('main');
         const info = [
           `innerWidth: ${window.innerWidth}`,
           `body.offsetWidth: ${document.body.offsetWidth}`,
           `body.paddingLeft: "${document.body.style.paddingLeft}"`,
           `body.marginLeft: "${document.body.style.marginLeft}"`,
           `html.paddingLeft: "${document.documentElement.style.paddingLeft}"`,
+          `wrapper.offsetWidth: ${(wrapper as HTMLElement)?.offsetWidth ?? 'n/a'}`,
+          `block.offsetWidth: ${(block as HTMLElement)?.offsetWidth ?? 'n/a'}`,
+          `section.offsetWidth: ${(section as HTMLElement)?.offsetWidth ?? 'n/a'}`,
+          `main.offsetWidth: ${(main as HTMLElement)?.offsetWidth ?? 'n/a'}`,
         ].join('\n');
         setDebugInfo(info);
         setTimeout(() => setDebugInfo(null), 3000);

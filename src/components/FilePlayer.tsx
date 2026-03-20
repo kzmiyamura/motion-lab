@@ -5,6 +5,8 @@ import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/loca
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import { useWakeLock } from '../hooks/useWakeLock';
 import { usePoseEstimation, type VizMode, type SalsaStyle } from '../hooks/usePoseEstimation';
+import { useBpmMeasure } from '../hooks/useBpmMeasure';
+import { ModeSwitcher } from './ModeSwitcher';
 import { SequenceView } from './SequenceView';
 import styles from './FilePlayer.module.css';
 
@@ -106,6 +108,9 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playerSectionRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // View mode (audio / video)
+  const [fileViewMode, setFileViewMode] = useState<'audio' | 'video'>('video');
+
   // Pose estimation
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [vizMode, setVizMode] = useState<VizMode>('off');
@@ -126,6 +131,31 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle,
   );
+
+  // ── BPM 計測（音声モード）
+  const handleMeasuredBpm = useCallback((measured: number) => {
+    setBaseBpm(measured);
+    onBpmChange(measured);
+  }, [onBpmChange]);
+
+  const {
+    mode: bpmMode, switchMode: switchBpmMode,
+    isPressing, elapsedMs, estimatedBeat,
+    firstTapSet,
+    handlePressStart, handlePressEnd, handleTap,
+  } = useBpmMeasure(handleMeasuredBpm, bpm);
+
+  // ── 音声/動画モード切替
+  const handleViewModeChange = useCallback((m: 'audio' | 'video') => {
+    setFileViewMode(m);
+    if (m === 'audio') {
+      // 音声モードでは骨格をOFFにしてリセット
+      setVizMode('off');
+      unlock();
+      setLockModeActive(false);
+      applySlowRate(1.0);
+    }
+  }, [unlock]);
 
   // Derived
   const isTheater = playerSize === 'theater';
@@ -571,6 +601,11 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   // ── Player controls content (shared between normal and theater layout) ──
   const playerControlsContent = source ? (
     <>
+      {/* 音声 / 動画 モード切替 */}
+      <div className={styles.modeSwitcherRow}>
+        <ModeSwitcher mode={fileViewMode} onChange={handleViewModeChange} />
+      </div>
+
       {/* Seek bar */}
       <div className={styles.seekRow}>
         <span className={styles.timeLabel}>{formatTime(currentTime)}</span>
@@ -601,7 +636,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           onPointerLeave={stopStep} onPointerCancel={stopStep}
           title="コマ送り（長押し）"
         >⏭</button>
-        {source.isVideo && (
+        {source.isVideo && fileViewMode === 'video' && (
           <button
             className={`${styles.mirrorBtn} ${isMirrored ? styles.mirrorBtnActive : ''}`}
             onClick={() => setIsMirrored(v => !v)}
@@ -610,7 +645,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           >↔</button>
         )}
         {/* On1/On2 スタイルトグル（骨格ON時のみ） */}
-        {source.isVideo && vizMode !== 'off' && (
+        {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (
           <div className={styles.styleToggleGroup}>
             {(['on1', 'on2'] as const).map(s => (
               <button
@@ -625,7 +660,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           </div>
         )}
         {/* Swap Roles ボタン（ロール判定済み時） */}
-        {source.isVideo && vizMode !== 'off' && roleDetected && (
+        {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && roleDetected && (
           <button
             className={styles.swapBtn}
             onClick={swapRoles}
@@ -635,7 +670,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           </button>
         )}
         {/* Export Debug Log ボタン */}
-        {source.isVideo && annotations.length > 0 && (
+        {source.isVideo && fileViewMode === 'video' && annotations.length > 0 && (
           <button
             className={styles.exportLogBtn}
             onClick={() => exportDebugLog(source.name)}
@@ -644,7 +679,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             ⬇ Log
           </button>
         )}
-        {source.isVideo && (
+        {source.isVideo && fileViewMode === 'video' && (
           <div className={styles.vizModeGroup} role="group" aria-label="骨格表示モード">
             {(['off', 'full', 'salsa', 'trail'] as const).map(m => (
               <button
@@ -667,7 +702,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             ))}
           </div>
         )}
-        {source.isVideo && vizMode !== 'off' && (
+        {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (
           <button
             className={
               `${styles.lockBtn} ` +
@@ -691,42 +726,46 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             {isLocked ? '🔓' : lockModeActive ? '🎯…' : '🎯'}
           </button>
         )}
-        <div className={styles.rateGroup}>
-          {SLOW_RATES.map(r => (
-            <button
-              key={r}
-              className={`${styles.rateBtn} ${slowRate === r ? styles.rateBtnActive : ''}`}
-              onClick={() => applySlowRate(r)}
-            >
-              {r === 1.0 ? '1×' : `${r}×`}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Row 2: A-B Loop */}
-      <div className={styles.ctrlRow}>
-        <span className={styles.ctrlLabel}>Loop</span>
-        <button className={styles.loopBtn} onClick={() => markLoop('start')}>
-          {loopStart !== null ? `A: ${formatTime(loopStart)}` : 'A 点'}
-        </button>
-        <button className={styles.loopBtn} onClick={() => markLoop('end')}>
-          {loopEnd !== null ? `B: ${formatTime(loopEnd)}` : 'B 点'}
-        </button>
-        {(loopStart !== null || loopEnd !== null) && (
-          <button className={styles.loopClear} onClick={clearLoop}>✕</button>
+        {fileViewMode === 'video' && (
+          <div className={styles.rateGroup}>
+            {SLOW_RATES.map(r => (
+              <button
+                key={r}
+                className={`${styles.rateBtn} ${slowRate === r ? styles.rateBtnActive : ''}`}
+                onClick={() => applySlowRate(r)}
+              >
+                {r === 1.0 ? '1×' : `${r}×`}
+              </button>
+            ))}
+          </div>
         )}
-        <button
-          className={`${styles.loopToggle} ${isLooping ? styles.loopToggleOn : ''}`}
-          onClick={() => setIsLooping(v => !v)}
-          disabled={loopStart === null || loopEnd === null}
-        >
-          {isLooping ? '⟳ ON' : '⟳ OFF'}
-        </button>
       </div>
 
-      {/* Row 3: Zoom presets (video only) */}
-      {source.isVideo && (
+      {/* Row 2: A-B Loop（動画モードのみ） */}
+      {fileViewMode === 'video' && (
+        <div className={styles.ctrlRow}>
+          <span className={styles.ctrlLabel}>Loop</span>
+          <button className={styles.loopBtn} onClick={() => markLoop('start')}>
+            {loopStart !== null ? `A: ${formatTime(loopStart)}` : 'A 点'}
+          </button>
+          <button className={styles.loopBtn} onClick={() => markLoop('end')}>
+            {loopEnd !== null ? `B: ${formatTime(loopEnd)}` : 'B 点'}
+          </button>
+          {(loopStart !== null || loopEnd !== null) && (
+            <button className={styles.loopClear} onClick={clearLoop}>✕</button>
+          )}
+          <button
+            className={`${styles.loopToggle} ${isLooping ? styles.loopToggleOn : ''}`}
+            onClick={() => setIsLooping(v => !v)}
+            disabled={loopStart === null || loopEnd === null}
+          >
+            {isLooping ? '⟳ ON' : '⟳ OFF'}
+          </button>
+        </div>
+      )}
+
+      {/* Row 3: Zoom presets（動画モード × 動画ファイルのみ） */}
+      {fileViewMode === 'video' && source.isVideo && (
         <div className={styles.ctrlRow}>
           <span className={styles.ctrlLabel}>Zoom</span>
           {ZOOM_PRESETS.map(p => (
@@ -737,11 +776,85 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         </div>
       )}
 
+      {/* ── BPM 計測ブロック（音声モードのみ） ── */}
+      {fileViewMode === 'audio' && (
+        <div className={styles.bpmMeasureBlock}>
+          <div className={styles.bpmMeasureHeader}>
+            <span className={styles.bpmMeasureLabel}>BPM 計測</span>
+            <div className={styles.bpmModeToggle}>
+              <button
+                className={`${styles.bpmModeBtn} ${bpmMode === 'longpress' ? styles.bpmModeBtnActive : ''}`}
+                onClick={() => switchBpmMode('longpress')}
+              >長押し</button>
+              <button
+                className={`${styles.bpmModeBtn} ${bpmMode === 'twotap' ? styles.bpmModeBtnActive : ''}`}
+                onClick={() => switchBpmMode('twotap')}
+              >2タップ</button>
+            </div>
+          </div>
+
+          <div className={styles.beatDots}>
+            {Array.from({ length: 8 }, (_, i) => (
+              <div
+                key={i}
+                className={[
+                  styles.beatDot,
+                  isPressing && i < estimatedBeat ? styles.beatDotLit : '',
+                  isPressing && i === estimatedBeat - 1 ? styles.beatDotCurrent : '',
+                ].filter(Boolean).join(' ')}
+              >
+                {i + 1}
+              </div>
+            ))}
+          </div>
+
+          {bpmMode === 'longpress' ? (
+            <button
+              className={`${styles.measureBtn} ${isPressing ? styles.measureBtnActive : ''}`}
+              onPointerDown={handlePressStart}
+              onPointerUp={handlePressEnd}
+              onPointerLeave={handlePressEnd}
+            >
+              {isPressing
+                ? `${(elapsedMs / 1000).toFixed(1)} s 計測中…`
+                : '① 押す  →  ⑧ 離す（8拍分）'}
+            </button>
+          ) : (
+            <button
+              className={`${styles.measureBtn} ${(isPressing || firstTapSet) ? styles.measureBtnActive : ''}`}
+              onClick={handleTap}
+            >
+              {!firstTapSet ? '「1」でタップ' : `${(elapsedMs / 1000).toFixed(1)} s — 「次の1」でタップ`}
+            </button>
+          )}
+
+          {baseBpm !== null && (
+            <div className={styles.bpmResult}>
+              <button
+                className={styles.bpmAdjBtn}
+                onClick={() => { const n = Math.max(1, baseBpm - 1); setBaseBpm(n); onBpmChange(n); }}
+              >−</button>
+              <span className={styles.bpmResultValue}>{baseBpm}</span>
+              <button
+                className={styles.bpmAdjBtn}
+                onClick={() => { const n = baseBpm + 1; setBaseBpm(n); onBpmChange(n); }}
+              >＋</button>
+              <span className={styles.bpmResultUnit}>BPM 基準</span>
+              {bpm !== baseBpm && (
+                <span className={styles.bpmRateTag}>×{(bpm / baseBpm).toFixed(2)}</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* BPM slider */}
       <div className={styles.bpmRow}>
         <span className={styles.bpmLabel}>
           BPM
-          <span className={styles.rateHint}> ×{(slowRate * (baseBpm ? sliderBpm / baseBpm : 1)).toFixed(2)}</span>
+          {fileViewMode === 'video' && (
+            <span className={styles.rateHint}> ×{(slowRate * (baseBpm ? sliderBpm / baseBpm : 1)).toFixed(2)}</span>
+          )}
         </span>
         <input
           type="range" min={60} max={220} step={1} value={sliderBpm}
@@ -964,7 +1077,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
       )}
 
       {/* ── 修正アノテーション一覧（クリックでシーク） */}
-      {annotations.length > 0 && (
+      {fileViewMode === 'video' && annotations.length > 0 && (
         <div className={styles.annotationBar}>
           <span className={styles.annotationBarLabel}>修正済み:</span>
           {annotations.map((a, i) => (
@@ -988,8 +1101,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         </div>
       )}
 
-      {/* ── Sequence View（動画読み込み後は常時表示） */}
-      {source?.isVideo && (
+      {/* ── Sequence View（動画読み込み後は常時表示、動画モードのみ） */}
+      {source?.isVideo && fileViewMode === 'video' && (
         <SequenceView
           events={sequence}
           duration={duration}

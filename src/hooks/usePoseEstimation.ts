@@ -953,11 +953,17 @@ function matchRoleSlots(
 
 // ── 2パスカスケード用ヘルパー ─────────────────────────────────────────────
 
-/** ランドマーク群のバウンディングボックスを返す（正規化座標） */
+/**
+ * 頭部＋胴体のランドマークのみでバウンディングボックスを返す（正規化座標）。
+ * 手足を含めないことで、密着時に隣の人物を誤ってマスクするのを防ぐ。
+ * 使用インデックス: 0-12（鼻・目・耳・肩）+ 23-24（腰）
+ */
 function getBoundingBox(
   lm: NormalizedLandmark[], padding = 0.08,
 ): { x: number; y: number; w: number; h: number } {
-  const vis = lm.filter(l => (l.visibility ?? 1) >= 0.2);
+  // 頭部(0-8)・肩(11-12)・腰(23-24) のみ使用。肘〜手首・膝〜足首は除外
+  const TORSO_IDX = [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 23, 24];
+  const vis = TORSO_IDX.map(i => lm[i]).filter(l => l && (l.visibility ?? 1) >= 0.2) as NormalizedLandmark[];
   if (!vis.length) return { x: 0, y: 0, w: 0, h: 0 };
   const xs = vis.map(l => l.x), ys = vis.map(l => l.y);
   const x  = Math.max(0, Math.min(...xs) - padding);

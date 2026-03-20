@@ -156,6 +156,7 @@ const MIN_UL_RATIO      = 0.22;  // 上半身/下半身比の最小値
 const MAX_UL_RATIO      = 4.5;   // 上半身/下半身比の最大値
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
 const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
+const STICKY_MIN_FRAMES = 45;    // 粘り強い追跡を有効化するまでの安定フレーム数（~1.5秒）
 
 // ── 物理ステートマシン定数 ────────────────────────────────────────────────
 const OMEGA_HIST_LEN = 90;  // 角速度推定用 X履歴フレーム数（~3秒 @ 30fps）
@@ -883,7 +884,9 @@ function profileLeaderScore(p: PersonProfile, heightWeight: number): number {
 }
 
 function assignRolesByProfile(slots: [RoleSlot, RoleSlot], useHeight: boolean): void {
-  const w = useHeight ? 3 : 1;
+  // 遠近法の影響を受ける見かけ身長の重みを抑える（3→1.5）
+  // ファントム座標・Z-order推論の精度向上により体格依存度を下げる
+  const w = useHeight ? 1.5 : 1;
   const s0 = profileLeaderScore(slots[0].profile, w);
   const s1 = profileLeaderScore(slots[1].profile, w);
   if (s0 >= s1) { slots[0].role = 'leader'; slots[1].role = 'follower'; }
@@ -948,6 +951,8 @@ function matchRoleSlots(
   }
 
   // ─ 通常: 腰ベース Nearest Neighbor
+  // ターン中（omega > 0.05）はファントム予測座標をサーチセンターに使い
+  // 回転の連続性（サイン波位相）で Re-ID 精度を最大化する
   for (let s = 0; s < 2; s++) {
     if (!slots[s].hip) {
       for (let i = 0; i < all.length; i++) {
@@ -955,11 +960,15 @@ function matchRoleSlots(
       }
       continue;
     }
+    // ターン中: 1フレーム先のファントム座標をサーチ中心にする（位相精度優先）
+    const searchCenter: Centroid = slots[s].omega > 0.05
+      ? (buildPhantomPos(slots[s], 1) ?? slots[s].hip!)
+      : slots[s].hip!;
     let minDist = ROLE_MATCH_DIST, best = -1;
     for (let i = 0; i < all.length; i++) {
       if (used.has(i)) continue;
       const h = hips[i]; if (!h) continue;
-      const d = Math.hypot(h.x - slots[s].hip!.x, h.y - slots[s].hip!.y);
+      const d = Math.hypot(h.x - searchCenter.x, h.y - searchCenter.y);
       if (d < minDist) { minDist = d; best = i; }
     }
     if (best >= 0) { result[s] = best; used.add(best); }
@@ -1196,6 +1205,7 @@ export function usePoseEstimation(
   });
   const roleSlots          = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
   const roleDetectedRef    = useRef(false);
+  const roleStableFramesRef = useRef(0);  // ロール確定後の安定フレーム数（Sticky追跡用）
   const prevBeatNumRef     = useRef<number | undefined>(undefined);
   const [syncError, setSyncError]     = useState(false);
   const syncErrorRef       = useRef(false);
@@ -1228,6 +1238,7 @@ export function usePoseEstimation(
   const clearRoles = useCallback(() => {
     roleSlots.current        = [makeRoleSlot(), makeRoleSlot()];
     roleDetectedRef.current  = false;
+    roleStableFramesRef.current = 0;
     profileCompleteRef.current = false;
     isOccludedRef.current    = false;
     analysisCacheRef.current = [];
@@ -1247,6 +1258,7 @@ export function usePoseEstimation(
     const r1 = slots[1].role;
     slots[0].role = r1;
     slots[1].role = r0;
+    roleStableFramesRef.current = 0;  // スワップ後は Sticky カウンタをリセット
 
     const entry: AnnotationEntry = {
       errorFrameIndex: frameIndexRef.current,
@@ -1553,6 +1565,13 @@ export function usePoseEstimation(
                   // 速度計算用: 更新前の Z を保存
                   const prevZ = [slots[0].hipZ, slots[1].hipZ];
 
+                  // justSeparated フェーズ確認用: スロット更新前の期待位置を保存
+                  // omega > 0.05 時はファントム予測座標を使い回転の連続性を確保
+                  const expectedHips: (Centroid | null)[] = [
+                    slots[0].hip ? (slots[0].omega > 0.05 ? buildPhantomPos(slots[0], 1) : { ...slots[0].hip }) : null,
+                    slots[1].hip ? (slots[1].omega > 0.05 ? buildPhantomPos(slots[1], 1) : { ...slots[1].hip }) : null,
+                  ];
+
                   for (let s = 0; s < 2; s++) {
                     const si = s === 0 ? si0 : si1;
                     if (si < 0) {
@@ -1694,27 +1713,68 @@ export function usePoseEstimation(
                   }
                   prevBeatNumRef.current = currentBeatNum;
 
-                  // ── オクルージョン離脱直後: 頭身比率でロール正当性を検証
+                  // ── オクルージョン離脱直後: ロール正当性を検証（3段階ガード）
                   if (justSeparated && si0 >= 0 && si1 >= 0 && profileCompleteRef.current) {
-                    const p0 = slots[0].profile, p1 = slots[1].profile;
-                    if (p0.ratioSamples > 0 && p1.ratioSamples > 0) {
-                      const profRatio0 = p0.totalHeadBodyRatio / p0.ratioSamples;
-                      const profRatio1 = p1.totalHeadBodyRatio / p1.ratioSamples;
-                      const curRatio0  = getHeadBodyRatio(all[si0]);
-                      const curRatio1  = getHeadBodyRatio(all[si1]);
-                      if (curRatio0 > 0 && curRatio1 > 0) {
-                        // 現在割り当て vs スワップ後 のどちらがプロファイルに近いか
-                        const matchScore = Math.abs(curRatio0 - profRatio0) + Math.abs(curRatio1 - profRatio1);
-                        const swapScore  = Math.abs(curRatio0 - profRatio1) + Math.abs(curRatio1 - profRatio0);
-                        if (swapScore < matchScore * 0.80) {
-                          // スワップの方がプロファイルに 20% 以上近い → ロールを自動修正
-                          const r0 = slots[0].role, r1 = slots[1].role;
-                          slots[0].role = r1; slots[1].role = r0;
-                          if (si0 >= 0) personRoles.set(si0, slots[0].role);
-                          if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                    // ガード1: Sticky追跡 — 一定フレーム安定していたらスワップを極力抑制
+                    // syncError（移動ベクトル矛盾）が発生している場合のみ通過を許可
+                    const isStickyActive = roleStableFramesRef.current >= STICKY_MIN_FRAMES
+                      && !syncErrorRef.current;
+
+                    // ガード2: ターンモード判定（どちらかが omega > 0.05 = 連続ターン中）
+                    const isAnyTurning = slots[0].omega > 0.05 || slots[1].omega > 0.05;
+
+                    if (!isStickyActive) {
+                      if (isAnyTurning) {
+                        // ── ターンモード: 身長比較を停止、ファントム予測距離で ID を確認 ──
+                        // 回転の連続性（予測座標 vs 実際の出現座標）でどちらの割り当てが正しいか判断
+                        const exp0 = expectedHips[0], exp1 = expectedHips[1];
+                        if (exp0 && exp1) {
+                          const h0 = computeMidHip(all[si0]), h1 = computeMidHip(all[si1]);
+                          if (h0 && h1) {
+                            const matchErr = Math.hypot(h0.x - exp0.x, h0.y - exp0.y)
+                                           + Math.hypot(h1.x - exp1.x, h1.y - exp1.y);
+                            const swapErr  = Math.hypot(h1.x - exp0.x, h1.y - exp0.y)
+                                           + Math.hypot(h0.x - exp1.x, h0.y - exp1.y);
+                            // スワップの方が 30% 以上近い場合のみ修正（ターン中は保守的に）
+                            if (swapErr < matchErr * 0.70) {
+                              const r0 = slots[0].role, r1 = slots[1].role;
+                              slots[0].role = r1; slots[1].role = r0;
+                              if (si0 >= 0) personRoles.set(si0, slots[0].role);
+                              if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                              roleStableFramesRef.current = 0;
+                            }
+                          }
+                        }
+                      } else {
+                        // ── 通常モード: 頭身比率でロール確認（閾値を厳格化: 0.80 → 0.60）
+                        const p0 = slots[0].profile, p1 = slots[1].profile;
+                        if (p0.ratioSamples > 0 && p1.ratioSamples > 0) {
+                          const profRatio0 = p0.totalHeadBodyRatio / p0.ratioSamples;
+                          const profRatio1 = p1.totalHeadBodyRatio / p1.ratioSamples;
+                          const curRatio0  = getHeadBodyRatio(all[si0]);
+                          const curRatio1  = getHeadBodyRatio(all[si1]);
+                          if (curRatio0 > 0 && curRatio1 > 0) {
+                            const matchScore = Math.abs(curRatio0 - profRatio0) + Math.abs(curRatio1 - profRatio1);
+                            const swapScore  = Math.abs(curRatio0 - profRatio1) + Math.abs(curRatio1 - profRatio0);
+                            // スワップの方が 40% 以上近い場合のみ修正（従来の 20% より厳格）
+                            if (swapScore < matchScore * 0.60) {
+                              const r0 = slots[0].role, r1 = slots[1].role;
+                              slots[0].role = r1; slots[1].role = r0;
+                              if (si0 >= 0) personRoles.set(si0, slots[0].role);
+                              if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                              roleStableFramesRef.current = 0;
+                            }
+                          }
                         }
                       }
                     }
+                  }
+
+                  // ── Sticky追跡カウンタ更新
+                  if (roleDetectedRef.current) {
+                    roleStableFramesRef.current++;
+                  } else {
+                    roleStableFramesRef.current = 0;
                   }
 
                   // ── 位相モニタリング（同方向移動 = 解析エラー）

@@ -69,7 +69,11 @@ const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
 
 const NUM_POSES     = 5;
-const VIS_THRESHOLD = 0.5;
+const VIS_THRESHOLD = 0.5;   // landmark の visibility チェック閾値（描画用）
+// ペアワークで密着・オクルージョンが多いため検出閾値は低めに設定
+const DETECT_CONFIDENCE = 0.3;  // minPoseDetectionConfidence
+const PRESENCE_CONFIDENCE = 0.3; // minPosePresenceConfidence
+const TRACKING_CONFIDENCE = 0.3; // minTrackingConfidence
 
 // 適応型サンプリング
 const DETECT_FAST   = 33;    // ~30fps（動きが速いとき）
@@ -936,9 +940,9 @@ export function usePoseEstimation(
         baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
         runningMode: 'VIDEO',
         numPoses: NUM_POSES,
-        minPoseDetectionConfidence: VIS_THRESHOLD,
-        minPosePresenceConfidence: VIS_THRESHOLD,
-        minTrackingConfidence: VIS_THRESHOLD,
+        minPoseDetectionConfidence: DETECT_CONFIDENCE,
+        minPosePresenceConfidence: PRESENCE_CONFIDENCE,
+        minTrackingConfidence: TRACKING_CONFIDENCE,
       });
 
       if (cancelled) { landmarker.close(); return; }

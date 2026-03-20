@@ -61,6 +61,14 @@ export interface PoseDebugSlot {
   omega: number;
   zFront: boolean;
   isDetected: boolean;   // 今フレームで検出できたか
+  // ── Cold Start 骨格スコアデバッグ ─────────────────────────────────────
+  swh: number;           // 現フレームの ShoulderWidth/BodyHeight（遠近法不変構造比率）
+  swhAvg: number;        // プロファイル平均 SW/H（実際のスコアに使われる値）
+  shr: number;           // 肩幅 / 腰幅比
+  frontalN: number;      // 正面向きフレーム累積数
+  profileScore: number;  // profileLeaderScore の現在値（大きい方が Leader）
+  profileSamples: number; // プロファイルサンプル数
+  isFrontal: boolean;    // 現フレームが正面向きか
 }
 
 export interface PoseDebugInfo {
@@ -68,6 +76,8 @@ export interface PoseDebugInfo {
   isOccluded: boolean;
   zOrderFront: number;   // 手前スロットインデックス (-1 = 未判定)
   roleStableFrames: number;
+  profileComplete: boolean;  // 初期骨格判定が完了したか
+  manualLocked: boolean;     // 手動 Swap による永続ハードロック中か
 }
 
 export interface UsePoseEstimationResult {
@@ -2332,14 +2342,65 @@ export function usePoseEstimation(
                     // ── デバッグパネル更新（10フレームごと）
                     if (frameIndexRef.current % 10 === 0) {
                       const zOF = slots[0].zFront ? 0 : slots[1].zFront ? 1 : -1;
+                      const w = heightLeaderHintRef.current ? 1.5 : 1;
+                      // 各スロットの Cold Start スコアデバッグ値を計算
+                      const makeDebugSlot = (s: 0 | 1): PoseDebugSlot => {
+                        const si  = s === 0 ? si0 : si1;
+                        const slot = slots[s];
+                        const p   = slot.profile;
+                        // 現フレームの SW/H（instantaneous）
+                        let swh = 0, frontalNow = false;
+                        if (si >= 0) {
+                          const lm2 = all[si];
+                          const sL2 = lm2[11], sR2 = lm2[12], n2 = lm2[0], a2L = lm2[27], a2R = lm2[28];
+                          if (sL2 && sR2 && n2 && a2L && a2R
+                              && (sL2.visibility ?? 1) >= VIS_THRESHOLD
+                              && (sR2.visibility ?? 1) >= VIS_THRESHOLD
+                              && (n2.visibility ?? 1) >= VIS_THRESHOLD) {
+                            const sw2 = Math.abs(sR2.x - sL2.x);
+                            const bh2 = Math.abs(n2.y - (a2L.y + a2R.y) / 2);
+                            swh = bh2 > 0 ? sw2 / bh2 : 0;
+                          }
+                          frontalNow = isFrontalPose(lm2);
+                        }
+                        // プロファイル平均 SW/H
+                        let swhAvg = 0;
+                        if (p.frontalSampleCount >= MIN_FRONTAL_SAMPLES) {
+                          const fSW = p.frontalShoulderWidth / p.frontalSampleCount;
+                          const fBH = p.frontalBodyHeight    / p.frontalSampleCount;
+                          swhAvg = fBH > 0 ? fSW / fBH : 0;
+                        } else if (p.sampleCount > 0) {
+                          const aSW = p.totalShoulderWidth / p.sampleCount;
+                          const aH  = (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount;
+                          swhAvg = aH > 0 ? aSW / aH : 0;
+                        }
+                        // SHR
+                        const aSW = p.sampleCount > 0 ? p.totalShoulderWidth / p.sampleCount : 0;
+                        const aHW = p.sampleCount > 0 ? p.totalHipWidth / p.sampleCount : 0;
+                        const shr = aHW > 0 ? aSW / aHW : 0;
+                        return {
+                          slotIdx: s,
+                          role: slot.role,
+                          dynamicsScore: slot.dynamicsScore,
+                          omega: slot.omega,
+                          zFront: slot.zFront,
+                          isDetected: si >= 0,
+                          swh,
+                          swhAvg,
+                          shr,
+                          frontalN: p.frontalSampleCount,
+                          profileScore: p.sampleCount > 0 ? profileLeaderScore(p, w) : 0,
+                          profileSamples: p.sampleCount,
+                          isFrontal: frontalNow,
+                        };
+                      };
                       setDebugInfo({
-                        slots: [
-                          { slotIdx: 0, role: slots[0].role, dynamicsScore: slots[0].dynamicsScore, omega: slots[0].omega, zFront: slots[0].zFront, isDetected: si0 >= 0 },
-                          { slotIdx: 1, role: slots[1].role, dynamicsScore: slots[1].dynamicsScore, omega: slots[1].omega, zFront: slots[1].zFront, isDetected: si1 >= 0 },
-                        ],
+                        slots: [makeDebugSlot(0), makeDebugSlot(1)],
                         isOccluded: isOccludedRef.current,
                         zOrderFront: zOF,
                         roleStableFrames: roleStableFramesRef.current,
+                        profileComplete: profileCompleteRef.current,
+                        manualLocked: manualRoleLockedRef.current,
                       });
                     }
                   }

@@ -895,8 +895,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         </div>
       )}
 
-      {/* ── Sequence View（骨格ONで解析中、またはイベントが既にある場合に表示） */}
-      {source?.isVideo && (vizMode !== 'off' || sequence.length > 0) && (
+      {/* ── Sequence View（動画読み込み後は常時表示） */}
+      {source?.isVideo && (
         <SequenceView
           events={sequence}
           duration={duration}

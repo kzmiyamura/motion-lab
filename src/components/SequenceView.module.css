@@ -93,6 +93,14 @@
   overflow-y: auto;
 }
 
+.offNotice {
+  padding: 5px 10px 4px;
+  font-size: 0.72rem;
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.08);
+  border-bottom: 1px solid rgba(249, 115, 22, 0.2);
+}
+
 .eventRow {
   display: flex;
   align-items: center;
@@ -100,6 +108,8 @@
   border-bottom: 1px solid #1a2030;
   font-size: 0.78rem;
   gap: 8px;
+  cursor: pointer;
+  user-select: none;
 }
 
 .eventRow:hover {

@@ -895,13 +895,19 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         </div>
       )}
 
-      {/* ── Sequence View ── */}
-      {source?.isVideo && vizMode !== 'off' && (
+      {/* ── Sequence View（骨格ONで解析中、またはイベントが既にある場合に表示） */}
+      {source?.isVideo && (vizMode !== 'off' || sequence.length > 0) && (
         <SequenceView
           events={sequence}
           duration={duration}
           currentTime={currentTime}
           onClear={clearSequence}
+          onSeek={time => {
+            const el = mediaRef.current;
+            if (!el) return;
+            el.currentTime = time;
+          }}
+          isAnalyzing={vizMode !== 'off'}
         />
       )}
 

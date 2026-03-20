@@ -7,6 +7,8 @@ interface Props {
   duration: number;        // video duration in seconds (0 if unknown)
   currentTime: number;
   onClear: () => void;
+  onSeek: (time: number) => void;
+  isAnalyzing: boolean;    // vizMode !== 'off'
 }
 
 const ACTION_COLORS: Record<string, string> = {
@@ -32,7 +34,7 @@ function qualityToStars(q: number): string {
   return '★'.repeat(filled) + '☆'.repeat(5 - filled);
 }
 
-export function SequenceView({ events, duration, currentTime, onClear }: Props) {
+export function SequenceView({ events, duration, currentTime, onClear, onSeek, isAnalyzing }: Props) {
   const [toast, setToast] = useState('');
 
   const handleCopyMarkdown = useCallback(async () => {
@@ -70,6 +72,13 @@ export function SequenceView({ events, duration, currentTime, onClear }: Props) 
         </div>
       </div>
 
+      {/* 骨格OFF時の注釈 */}
+      {!isAnalyzing && (
+        <div className={styles.offNotice}>
+          📡 シーケンス解析には骨格表示（全身 / 軸 / 軌跡）をONにしてください
+        </div>
+      )}
+
       {/* Mini timeline */}
       {showTimeline && (
         <>
@@ -83,8 +92,10 @@ export function SequenceView({ events, duration, currentTime, onClear }: Props) 
                     left: `${(evt.time / duration) * 100}%`,
                     width: Math.max(8, (duration > 0 ? 4 : 8)),
                     background: getActionColor(evt.action),
+                    cursor: 'pointer',
                   }}
                   title={`${formatTime(evt.time)} ${evt.action}`}
+                  onClick={() => onSeek(evt.time)}
                 />
               ))}
               {/* Current time cursor */}
@@ -107,7 +118,12 @@ export function SequenceView({ events, duration, currentTime, onClear }: Props) 
           <div className={styles.empty}>イベントなし（動画再生中に検出されます）</div>
         ) : (
           visibleEvents.map(evt => (
-            <div key={evt.id} className={styles.eventRow}>
+            <div
+              key={evt.id}
+              className={styles.eventRow}
+              onClick={() => onSeek(evt.time)}
+              title={`${formatTime(evt.time)} にジャンプ`}
+            >
               <span className={styles.timeTag}>{formatTime(evt.time)}</span>
               <span
                 className={styles.actionBadge}

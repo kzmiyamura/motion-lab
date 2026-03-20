@@ -937,6 +937,7 @@ function matchRoleSlots(
   all: NormalizedLandmark[][],
   slots: [RoleSlot, RoleSlot],
   useNosePrimary: boolean,   // オクルージョン離脱直後や顔分離確認時に true
+  justSeparated: boolean = false, // 今フレームがオクルージョン解除の瞬間
 ): [number, number] {
   if (all.length === 0) return [-1, -1];
   const hips  = all.map(lm => computeMidHip(lm));
@@ -983,6 +984,39 @@ function matchRoleSlots(
           if (d < minDist) { minDist = d; best = i; }
         }
         if (best >= 0) { result[s] = best; used.add(best); }
+      }
+    }
+    return result;
+  }
+
+  // ─ justSeparated: 継続追跡スロット優先マッチング
+  // オクルージョン解除の瞬間はサイン波ファントムが長期誤差を蓄積しており信頼できない。
+  // staleness=0（継続追跡）のスロットを先にマッチさせ、残りを遮蔽スロットに割り当てる。
+  // これにより「女性が男性の前を通り過ぎた後」のID入れ替わりを防止する。
+  if (justSeparated) {
+    const order = slots[0].staleness <= slots[1].staleness ? [0, 1] : [1, 0];
+    for (const s of order) {
+      if (!slots[s].hip) {
+        for (let i = 0; i < all.length; i++) {
+          if (!used.has(i) && hips[i]) { result[s] = i; used.add(i); break; }
+        }
+        continue;
+      }
+      if (slots[s].staleness === 0) {
+        // 継続追跡スロット: 正確な腰座標でマッチ（phantom 不使用）
+        let minDist = ROLE_MATCH_DIST, best = -1;
+        for (let i = 0; i < all.length; i++) {
+          if (used.has(i)) continue;
+          const h = hips[i]; if (!h) continue;
+          const d = Math.hypot(h.x - slots[s].hip!.x, h.y - slots[s].hip!.y);
+          if (d < minDist) { minDist = d; best = i; }
+        }
+        if (best >= 0) { result[s] = best; used.add(best); }
+      } else {
+        // 長期遮蔽スロット: phantom に頼らず残った検出を無条件で割り当て
+        for (let i = 0; i < all.length; i++) {
+          if (!used.has(i) && hips[i]) { result[s] = i; used.add(i); break; }
+        }
       }
     }
     return result;
@@ -1692,7 +1726,7 @@ export function usePoseEstimation(
                     : 0;
                   const facePriority = justSeparated || noseSep >= NOSE_SEP_MIN;
 
-                  const [si0, si1] = matchRoleSlots(all, slots, facePriority);
+                  const [si0, si1] = matchRoleSlots(all, slots, facePriority, justSeparated);
                   const personRoles = new Map<number, PersonRole>();
 
                   // ビート番号（役割判定に使用）

@@ -78,7 +78,6 @@ export interface PoseDebugInfo {
   slots: [PoseDebugSlot, PoseDebugSlot];
   isOccluded: boolean;
   zOrderFront: number;   // 手前スロットインデックス (-1 = 未判定)
-  roleStableFrames: number;
   profileComplete: boolean;  // 初期骨格判定が完了したか
   genderLocked: boolean;     // ps性別判定ハードロック中か
   manualLocked: boolean;     // 手動 Swap による永続ハードロック中か
@@ -214,19 +213,10 @@ const MIN_UL_RATIO      = 0.22;  // 上半身/下半身比の最小値
 const MAX_UL_RATIO      = 4.5;   // 上半身/下半身比の最大値
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
 const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
-const STICKY_MIN_FRAMES       = 45;   // 粘り強い追跡を有効化するまでの安定フレーム数（~1.5秒）
-const POST_OCCLUSION_COOLDOWN = 15;   // オクルージョン解除直後のフレーム数（冷却期間）
-
-// ── Self-Healing 定数 ──────────────────────────────────────────────────────
-const SELF_HEAL_INVERSION_FRAMES  = 30;  // スコア逆転がこのフレーム数続いたら自動復旧を検討
-const SELF_HEAL_OCCLUSION_WINDOW  = 90;  // 重なり終了後このフレーム数以内なら自動復旧対象
-const MANUAL_SWAP_LOCK_FRAMES     = 90;  // 手動Swap後に自動補正をブロックするフレーム数
-
 // ── Cold Start 定数 ───────────────────────────────────────────────────────
 // 判定基準参考値: 男性(Leader)のSHR > 1.10, 女性(Follower)のSHR < 1.05
 const ANKLE_STILL_THRESH      = 0.008; // 準備動作: 足首静止判定閾値（正規化座標/frame）
 const HIP_MOVE_THRESH         = 0.008; // 準備動作: 腰先行判定閾値（正規化座標/frame）
-const CONF_TURN_ALLOW_OMEGA   = 0.25;  // 拮抗時に最初のターンで再評価する omega 閾値
 const FRONTAL_SHOULDER_Z_THRESH = 0.08; // 肩の Z 差がこれ未満 = 正面向き（遠近法不変）
 const MIN_FRONTAL_SAMPLES     = 3;     // 正面データ優先に必要な最小サンプル数
 
@@ -1437,21 +1427,13 @@ export function usePoseEstimation(
   });
   const roleSlots          = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
   const roleDetectedRef    = useRef(false);
-  const roleStableFramesRef = useRef(0);  // ロール確定後の安定フレーム数（Sticky追跡用）
   const prevBeatNumRef     = useRef<number | undefined>(undefined);
   const [syncError, setSyncError]     = useState(false);
   const syncErrorRef       = useRef(false);
   const [roleDetected, setRoleDetected]       = useState(false);
   const [roleConfidenceLow, setRoleConfidenceLow] = useState(false); // Safety Guard: 初期判定の確信度が低い
   const [debugInfo, setDebugInfo]             = useState<PoseDebugInfo | null>(null);
-  const postOcclusionCooldownRef        = useRef(0);  // オクルージョン解除後の冷却カウンタ
-  // Self-Healing refs
-  const scoreInversionFramesRef        = useRef(0);  // dynamics スコア逆転継続フレーム数
-  const lastOcclusionEndFrameRef       = useRef(-1); // 最後のオクルージョン解除フレームインデックス
-  const manualSwapLockFramesRef        = useRef(0);  // 手動Swap後の自動補正ブロックカウンタ
-  // Cold Start refs（初回ターン再評価制御）
-  const firstTurnUsedRef               = useRef(false); // 拮抗時の最初のターン再評価済みフラグ
-  // 性別判定ハードロック（ps確定後）— justSeparated/Self-Healing/FirstTurnをブロック
+  // 性別判定ハードロック（ps確定後）— 全自動ロール変更をブロック
   const genderLockedRef                = useRef(false); // true = ps性別判定完了済み
   // 手動 Swap 後の永続ハードロック（Swap is Truth）— psリアクティブチェックもブロック
   const manualRoleLockedRef            = useRef(false); // true = ユーザーの判断を最優先
@@ -1483,16 +1465,10 @@ export function usePoseEstimation(
   const clearRoles = useCallback(() => {
     roleSlots.current           = [makeRoleSlot(), makeRoleSlot()];
     roleDetectedRef.current     = false;
-    roleStableFramesRef.current = 0;
     profileCompleteRef.current  = false;
-    isOccludedRef.current            = false;
-    postOcclusionCooldownRef.current = 0;
-    scoreInversionFramesRef.current  = 0;
-    lastOcclusionEndFrameRef.current = -1;
-    manualSwapLockFramesRef.current  = 0;
-    firstTurnUsedRef.current         = false;
-    genderLockedRef.current          = false;
-    manualRoleLockedRef.current      = false;
+    isOccludedRef.current       = false;
+    genderLockedRef.current     = false;
+    manualRoleLockedRef.current = false;
     analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
     syncErrorRef.current     = false;
@@ -1512,18 +1488,8 @@ export function usePoseEstimation(
     const r1 = slots[1].role;
     slots[0].role = r1;
     slots[1].role = r0;
-    // stbl リセット（Sticky を解除）
-    roleStableFramesRef.current = 0;
-    // dynamicsScore・omegaHist をクリア — 直前までの誤ったスコア蓄積を破棄
-    slots[0].dynamicsScore = 0;
-    slots[1].dynamicsScore = 0;
-    slots[0].omegaHist = [];
-    slots[1].omegaHist = [];
-    // Self-Healing カウンタをリセット
-    scoreInversionFramesRef.current = 0;
     // 手動Swap後は永続ハードロック — 人間の判断を絶対的な正解として固定
-    manualRoleLockedRef.current     = true;
-    manualSwapLockFramesRef.current = MANUAL_SWAP_LOCK_FRAMES;
+    manualRoleLockedRef.current = true;
 
     const entry: AnnotationEntry = {
       errorFrameIndex: frameIndexRef.current,
@@ -1808,11 +1774,6 @@ export function usePoseEstimation(
                     isOccludedRef.current = false;
                   }
                   const justSeparated = wasOccluded && !isOccludedRef.current;
-                  if (justSeparated) {
-                    postOcclusionCooldownRef.current = POST_OCCLUSION_COOLDOWN;
-                  } else if (postOcclusionCooldownRef.current > 0) {
-                    postOcclusionCooldownRef.current--;
-                  }
 
                   // 顔が独立して検出されているか（密着中でない場合のみ有効）
                   const detectedNoses = all.map(lm => {
@@ -1832,12 +1793,6 @@ export function usePoseEstimation(
                     ? Math.floor((video.currentTime * bpmRef.current / 60) % 8) + 1
                     : undefined;
 
-                  // justSeparated フェーズ確認用: スロット更新前の期待位置を保存
-                  // omega > 0.05 時はファントム予測座標を使い回転の連続性を確保
-                  const expectedHips: (Centroid | null)[] = [
-                    slots[0].hip ? (slots[0].omega > 0.05 ? buildPhantomPos(slots[0], 1) : { ...slots[0].hip }) : null,
-                    slots[1].hip ? (slots[1].omega > 0.05 ? buildPhantomPos(slots[1], 1) : { ...slots[1].hip }) : null,
-                  ];
 
                   for (let s = 0; s < 2; s++) {
                     const si = s === 0 ? si0 : si1;
@@ -2002,14 +1957,10 @@ export function usePoseEstimation(
                   // ── ダンス動力学スコア更新（Inception / Centripetal / Space Management）
                   updateDynamicsScores(slots, all, si0, si1, prevSlotDist, frameIndexRef.current);
 
-                  // ── No-Overlap Rule: 非重なり時はロール自動変更を完全禁止 ──────────────
-                  // dynamicsScore がどれだけ逆転していても、2人が物理的に重なっていない
-                  // (isOccluded=false) 間は「元気なフォロワー」に過ぎない。ラベルを変えない。
-                  // ロール変更の許可条件: ① 初期体格判定（一回のみ）
-                  //                      ② Self-Healing（重なり後 90f 以内のみ）
-                  //                      ③ 手動 Swap ボタン
-                  // dynamicsScore は引き続き計算（初期判定・Self-Healing・デバッグ用）するが
-                  // ここでのロール変更トリガーとしては使用しない。
+                  // ── ロール変更パスは3つのみ ─────────────────────────────────────────
+                  // ① ps確定（Cold Start: n≥8フレームで即時発火）
+                  // ② psリアクティブチェック（毎フレーム: genderLocked中の矛盾を自動修正）
+                  // ③ 手動Swap（manualRoleLocked: ユーザーの判断が最優先）
 
                   // ── Cold Start: 3D SHR（肩幅/腰幅）による性別判定 → 初期ロール確定
                   // 第0原則: 向き・遠近・BPM暫定判定を問わず、PROFILE_FRAMES 分の骨格が揃った
@@ -2034,91 +1985,6 @@ export function usePoseEstimation(
                   // 第0原則: ロールを変更できる唯一のパスは assignRolesByProfile（ps値比較）。
                   prevBeatNumRef.current = currentBeatNum;
 
-                  // ── オクルージョン離脱直後: ロール正当性を検証（3段階ガード）
-                  // genderLocked / manualRoleLocked のとき: ps判定 / ユーザー判断を守るため全スキップ
-                  if (justSeparated && si0 >= 0 && si1 >= 0 && profileCompleteRef.current
-                      && !genderLockedRef.current && !manualRoleLockedRef.current) {
-                    // ガード1: Sticky追跡 — 一定フレーム安定していたらスワップを極力抑制
-                    // syncError（移動ベクトル矛盾）が発生している場合のみ通過を許可
-                    const isStickyActive = roleStableFramesRef.current >= STICKY_MIN_FRAMES
-                      && !syncErrorRef.current;
-
-                    // ガード2: ターンモード判定（どちらかが omega > 0.05 = 連続ターン中）
-                    const isAnyTurning = slots[0].omega > 0.05 || slots[1].omega > 0.05;
-
-                    if (!isStickyActive) {
-                      if (isAnyTurning) {
-                        // ── ターンモード: 身長比較を停止、ファントム予測距離で ID を確認 ──
-                        // 回転の連続性（予測座標 vs 実際の出現座標）でどちらの割り当てが正しいか判断
-                        const exp0 = expectedHips[0], exp1 = expectedHips[1];
-                        if (exp0 && exp1) {
-                          const h0 = computeMidHip(all[si0]), h1 = computeMidHip(all[si1]);
-                          if (h0 && h1) {
-                            const matchErr = Math.hypot(h0.x - exp0.x, h0.y - exp0.y)
-                                           + Math.hypot(h1.x - exp1.x, h1.y - exp1.y);
-                            const swapErr  = Math.hypot(h1.x - exp0.x, h1.y - exp0.y)
-                                           + Math.hypot(h0.x - exp1.x, h0.y - exp1.y);
-                            // スワップの方が 30% 以上近い場合のみ修正（ターン中は保守的に）
-                            if (swapErr < matchErr * 0.70) {
-                              const r0 = slots[0].role, r1 = slots[1].role;
-                              slots[0].role = r1; slots[1].role = r0;
-                              if (si0 >= 0) personRoles.set(si0, slots[0].role);
-                              if (si1 >= 0) personRoles.set(si1, slots[1].role);
-                              roleStableFramesRef.current = 0;
-                            }
-                          }
-                        }
-                      } else {
-                        // ── 通常モード: 頭身比率でロール確認（閾値を厳格化: 0.80 → 0.60）
-                        const p0 = slots[0].profile, p1 = slots[1].profile;
-                        if (p0.ratioSamples > 0 && p1.ratioSamples > 0) {
-                          const profRatio0 = p0.totalHeadBodyRatio / p0.ratioSamples;
-                          const profRatio1 = p1.totalHeadBodyRatio / p1.ratioSamples;
-                          const curRatio0  = getHeadBodyRatio(all[si0]);
-                          const curRatio1  = getHeadBodyRatio(all[si1]);
-                          if (curRatio0 > 0 && curRatio1 > 0) {
-                            const matchScore = Math.abs(curRatio0 - profRatio0) + Math.abs(curRatio1 - profRatio1);
-                            const swapScore  = Math.abs(curRatio0 - profRatio1) + Math.abs(curRatio1 - profRatio0);
-                            // スワップの方が 40% 以上近い場合のみ修正（従来の 20% より厳格）
-                            if (swapScore < matchScore * 0.60) {
-                              const r0 = slots[0].role, r1 = slots[1].role;
-                              slots[0].role = r1; slots[1].role = r0;
-                              if (si0 >= 0) personRoles.set(si0, slots[0].role);
-                              if (si1 >= 0) personRoles.set(si1, slots[1].role);
-                              roleStableFramesRef.current = 0;
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-
-                  // ── Sticky追跡カウンタ更新
-                  if (roleDetectedRef.current) {
-                    roleStableFramesRef.current++;
-                  } else {
-                    roleStableFramesRef.current = 0;
-                  }
-
-                  // ── 拮抗時の最初のターンで再評価（Confidence-Based First-Turn Swap）
-                  // genderLocked / manualRoleLocked = true のとき: ps / ユーザー判断を守るためスキップ
-                  if (roleDetectedRef.current && profileCompleteRef.current
-                      && !firstTurnUsedRef.current && roleConfidenceLow
-                      && !genderLockedRef.current && !manualRoleLockedRef.current
-                      && (slots[0].omega > CONF_TURN_ALLOW_OMEGA || slots[1].omega > CONF_TURN_ALLOW_OMEGA)) {
-                    firstTurnUsedRef.current = true;
-                    const prevRole0 = slots[0].role;
-                    const prevRole1 = slots[1].role;
-                    const { confidenceLow: cl } = assignRolesByProfile(slots, heightLeaderHintRef.current);
-                    setRoleConfidenceLow(cl);
-                    // ロールが変わったら stbl をリセット（再確定まで45f）
-                    if (slots[0].role !== prevRole0 || slots[1].role !== prevRole1) {
-                      roleStableFramesRef.current = 45;
-                      if (si0 >= 0) personRoles.set(si0, slots[0].role);
-                      if (si1 >= 0) personRoles.set(si1, slots[1].role);
-                    }
-                  }
-
                   // ── 位相モニタリング（同方向移動 = 解析エラー）
                   // ターン中・直後（2秒間）は抑制 — ターン時は両者が同方向に動くのが正常
                   // 両者が同時にトラッキングされているフレームのみ実行（stale履歴による誤検知防止）
@@ -2140,66 +2006,6 @@ export function usePoseEstimation(
                     // ターン中 or 片方がトラッキング不能な場合はエラーを自動クリア（stale状態での誤表示防止）
                     syncErrorRef.current = false;
                     setSyncError(false);
-                  }
-
-                  // ── Self-Healing: ロール反転自動復旧 ──────────────────────────────
-                  // No-Overlap Rule の下での動作:
-                  //   クリーンな分離中（IoU=0 かつ観察ウィンドウ外）はカウンタをゼロリセット。
-                  //   矛盾の蓄積・自動復旧は「重なり中 / 冷却期間 / 重なり後ウィンドウ内」に限定。
-
-                  if (justSeparated) {
-                    lastOcclusionEndFrameRef.current = frameIndexRef.current;
-                  }
-
-                  if (manualSwapLockFramesRef.current > 0) {
-                    manualSwapLockFramesRef.current--;
-                  } else if (roleDetectedRef.current && si0 >= 0 && si1 >= 0 && !isOccludedRef.current
-                             && !genderLockedRef.current && !manualRoleLockedRef.current) {
-                    const framesSinceOcclusion = frameIndexRef.current - lastOcclusionEndFrameRef.current;
-                    const recentOcclusion = lastOcclusionEndFrameRef.current >= 0
-                      && framesSinceOcclusion < SELF_HEAL_OCCLUSION_WINDOW;
-                    // 物理的分離 = isOccluded=false かつ冷却期間終了
-                    const isPhysicallySeparated = postOcclusionCooldownRef.current === 0;
-
-                    if (!isPhysicallySeparated || recentOcclusion) {
-                      // 重なり中・冷却期間・重なり後ウィンドウ内: 矛盾シグナルを蓄積
-                      const lSlot = slots[0].role === 'leader' ? slots[0] : slots[1];
-                      const fSlot = slots[0].role === 'follower' ? slots[0] : slots[1];
-                      // ① 信頼度逆転: リーダーの dynamicsScore がフォロワーより低い
-                      const isScoreInverted = lSlot.dynamicsScore < fSlot.dynamicsScore;
-                      // ② 速度矛盾: 「リーダー」がフォロワーに向かって突き進んでいる
-                      const velContradiction = (() => {
-                        if (!lSlot.hip || !fSlot.hip) return false;
-                        const toFollower = fSlot.hip.x - lSlot.hip.x;
-                        return Math.abs(toFollower) > 0.05
-                          && Math.sign(toFollower) === Math.sign(lSlot.velX)
-                          && Math.abs(lSlot.velX) > 0.005;
-                      })();
-                      if (isScoreInverted || velContradiction) {
-                        scoreInversionFramesRef.current++;
-                      } else {
-                        scoreInversionFramesRef.current = Math.max(0, scoreInversionFramesRef.current - 2);
-                      }
-                    } else {
-                      // 完全クリア状態（長期分離中）: カウンタをゼロリセット
-                      // 元気なフォロワーをリーダーと誤認させない
-                      scoreInversionFramesRef.current = 0;
-                    }
-
-                    // 重なり直後 + 矛盾が閾値フレーム継続 → ロール自動復旧
-                    if (scoreInversionFramesRef.current >= SELF_HEAL_INVERSION_FRAMES && recentOcclusion) {
-                      const higherIdx = slots[0].dynamicsScore >= slots[1].dynamicsScore ? 0 : 1;
-                      if (slots[higherIdx].role !== 'leader') {
-                        const r0 = slots[0].role, r1 = slots[1].role;
-                        slots[0].role = r1; slots[1].role = r0;
-                        if (si0 >= 0) personRoles.set(si0, slots[0].role);
-                        if (si1 >= 0) personRoles.set(si1, slots[1].role);
-                        roleStableFramesRef.current = 0;
-                        postOcclusionCooldownRef.current = POST_OCCLUSION_COOLDOWN;
-                      }
-                      scoreInversionFramesRef.current = 0;
-                      lastOcclusionEndFrameRef.current = -1;
-                    }
                   }
 
                   // ── ps リアクティブ整合チェック（第0原則の最終守護）────────────────
@@ -2353,7 +2159,6 @@ export function usePoseEstimation(
                         slots: [makeDebugSlot(0), makeDebugSlot(1)],
                         isOccluded: isOccludedRef.current,
                         zOrderFront: zOF,
-                        roleStableFrames: roleStableFramesRef.current,
                         profileComplete: profileCompleteRef.current,
                         genderLocked: genderLockedRef.current,
                         manualLocked: manualRoleLockedRef.current,

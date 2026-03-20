@@ -1108,7 +1108,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                         style={{ color: debugInfo.isOccluded ? '#fa4' : '#aaa' }}>
                         {debugInfo.isOccluded ? 'OCCLUDED' : 'clear'}
                       </span>
-                      <span className={styles.debugVal}>stbl:{debugInfo.roleStableFrames}</span>
                       {!debugInfo.profileComplete && (
                         <span className={styles.debugVal} style={{ color: '#fa4' }}>PROFILING…</span>
                       )}

@@ -72,6 +72,11 @@ export default defineConfig({
     }),
   ],
 
+  // Web Worker を ES モジュールとしてビルド（コード分割ビルドでは IIFE 非対応）
+  worker: {
+    format: 'es',
+  },
+
   test: {
     environment: 'jsdom',
     globals: true,

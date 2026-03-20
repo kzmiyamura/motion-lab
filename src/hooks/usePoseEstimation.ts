@@ -144,6 +144,33 @@ const MAX_UL_RATIO      = 4.5;   // 上半身/下半身比の最大値
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
 const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
 
+// ── ハイブリッドアーキテクチャ定数 ──────────────────────────────────────────
+// iOS Safari は Worker 内 WebGL が利用不可 → メインスレッド専用
+const IS_IOS = typeof navigator !== 'undefined'
+  && (/iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+const SLOW_RATE_THRESHOLD = 0.5;  // この再生速度以下で2パスカスケード有効（iOS）
+const CACHE_MAX_FRAMES    = 600;  // analysisCache 最大フレーム数（~20秒 @ 30fps）
+const CACHE_TIME_TOL      = 0.5;  // キャッシュ検索の時間許容幅（秒）
+
+// MediaPipe Pose の33点接続（PC Worker モードで PoseLandmarker import を省略するため定数化）
+const POSE_CONNECTIONS: Connection[] = [
+  { start: 0, end: 1 }, { start: 1, end: 2 }, { start: 2, end: 3 }, { start: 3, end: 7 },
+  { start: 0, end: 4 }, { start: 4, end: 5 }, { start: 5, end: 6 }, { start: 6, end: 8 },
+  { start: 9, end: 10 },
+  { start: 11, end: 12 }, { start: 11, end: 13 }, { start: 13, end: 15 },
+  { start: 15, end: 17 }, { start: 15, end: 19 }, { start: 15, end: 21 }, { start: 17, end: 19 },
+  { start: 12, end: 14 }, { start: 14, end: 16 }, { start: 16, end: 18 },
+  { start: 16, end: 20 }, { start: 16, end: 22 }, { start: 18, end: 20 },
+  { start: 11, end: 23 }, { start: 12, end: 24 }, { start: 23, end: 24 },
+  { start: 23, end: 25 }, { start: 24, end: 26 }, { start: 25, end: 27 },
+  { start: 26, end: 28 }, { start: 27, end: 29 }, { start: 28, end: 30 },
+  { start: 29, end: 31 }, { start: 30, end: 32 }, { start: 27, end: 31 }, { start: 28, end: 32 },
+];
+
+/** analysisCache: スロー再生中の検出結果を保存し通常速度で再生する */
+type CachedResult = { time: number; landmarks: NormalizedLandmark[][] };
+
 interface PatternDetectionState {
   turnFrames: number;
   sideFrames: number;
@@ -924,6 +951,80 @@ function matchRoleSlots(
   return result;
 }
 
+// ── 2パスカスケード用ヘルパー ─────────────────────────────────────────────
+
+/** ランドマーク群のバウンディングボックスを返す（正規化座標） */
+function getBoundingBox(
+  lm: NormalizedLandmark[], padding = 0.08,
+): { x: number; y: number; w: number; h: number } {
+  const vis = lm.filter(l => (l.visibility ?? 1) >= 0.2);
+  if (!vis.length) return { x: 0, y: 0, w: 0, h: 0 };
+  const xs = vis.map(l => l.x), ys = vis.map(l => l.y);
+  const x  = Math.max(0, Math.min(...xs) - padding);
+  const y  = Math.max(0, Math.min(...ys) - padding);
+  const x2 = Math.min(1, Math.max(...xs) + padding);
+  const y2 = Math.min(1, Math.max(...ys) + padding);
+  return { x, y, w: x2 - x, h: y2 - y };
+}
+
+/**
+ * 2パスカスケード検出（iOS メインスレッド専用）
+ * Pass1: 通常検出 → Pass2: 検出済みをグレーマスクで隠して再検出 → マージ
+ */
+function runTwoPassDetect(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  landmarker: any,
+  video: HTMLVideoElement,
+  now: number,
+  offCanvas: HTMLCanvasElement,
+): NormalizedLandmark[][] {
+  const r1 = landmarker.detectForVideo(video, now);
+  const p1 = r1.landmarks as NormalizedLandmark[][];
+  if (p1.length >= 2) return p1;
+
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (vw <= 0 || vh <= 0 || !p1.length) return p1;
+
+  if (offCanvas.width !== vw || offCanvas.height !== vh) {
+    offCanvas.width = vw; offCanvas.height = vh;
+  }
+  const ctx2 = offCanvas.getContext('2d');
+  if (!ctx2) return p1;
+
+  ctx2.drawImage(video, 0, 0);
+  ctx2.fillStyle = '#808080';
+  for (const lm of p1) {
+    const b = getBoundingBox(lm);
+    ctx2.fillRect(b.x * vw, b.y * vh, b.w * vw, b.h * vh);
+  }
+
+  const r2 = landmarker.detectForVideo(offCanvas, now + 1);
+  const p2 = r2.landmarks as NormalizedLandmark[][];
+
+  const merged = [...p1];
+  for (const lm2 of p2) {
+    const h2 = computeMidHip(lm2);
+    if (!h2) continue;
+    const dup = p1.some(lm1 => {
+      const h1 = computeMidHip(lm1);
+      return h1 && Math.hypot(h1.x - h2.x, h1.y - h2.y) < 0.2;
+    });
+    if (!dup) merged.push(lm2);
+  }
+  return merged;
+}
+
+/** analysisCache から video.currentTime に最も近い結果を返す */
+function findCachedResult(cache: CachedResult[], time: number): NormalizedLandmark[][] | null {
+  let best: CachedResult | null = null;
+  let bestDiff = CACHE_TIME_TOL;
+  for (const c of cache) {
+    const diff = Math.abs(c.time - time);
+    if (diff < bestDiff) { bestDiff = diff; best = c; }
+  }
+  return best ? best.landmarks : null;
+}
+
 // ── フック本体 ────────────────────────────────────────────────────────────
 
 export function usePoseEstimation(
@@ -992,6 +1093,15 @@ export function usePoseEstimation(
   const syncErrorRef       = useRef(false);
   const [roleDetected, setRoleDetected] = useState(false);
 
+  // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
+  const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // iOS 2パス用
+  const analysisCacheRef    = useRef<CachedResult[]>([]);                 // iOS キャッシュ
+  const workerRef           = useRef<Worker | null>(null);                // PC Worker
+  const workerReadyRef      = useRef(false);
+  const workerFailedRef     = useRef(false);
+  const latestLandmarksRef  = useRef<NormalizedLandmark[][]>([]);         // Worker最新結果
+  const lastCaptureRef      = useRef(0);                                  // Worker送信間隔
+
   // 体格プロファイル & オクルージョン管理
   const profileCompleteRef  = useRef(false);
   const isOccludedRef       = useRef(false);
@@ -1017,6 +1127,7 @@ export function usePoseEstimation(
     roleDetectedRef.current  = false;
     profileCompleteRef.current = false;
     isOccludedRef.current    = false;
+    analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
     syncErrorRef.current     = false;
     setSyncError(false);
@@ -1122,28 +1233,49 @@ export function usePoseEstimation(
     let cancelled = false;
     activeRef.current = true;
 
+    // iOS: オフスクリーンキャンバス初期化（2パス用）
+    if (IS_IOS && !offscreenCanvasRef.current) {
+      offscreenCanvasRef.current = document.createElement('canvas');
+    }
+
     async function init() {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision' as any) as any;
-      if (cancelled) return;
-
-      const vision = await FilesetResolver.forVisionTasks(WASM_BASE);
-      if (cancelled) return;
-
-      const landmarker = await PoseLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
-        runningMode: 'VIDEO',
-        numPoses: NUM_POSES,
-        minPoseDetectionConfidence: DETECT_CONFIDENCE,
-        minPosePresenceConfidence: PRESENCE_CONFIDENCE,
-        minTrackingConfidence: TRACKING_CONFIDENCE,
-      });
-
-      if (cancelled) { landmarker.close(); return; }
-      landmarkerRef.current = landmarker;
-
-      const connections: Connection[] = PoseLandmarker.POSE_CONNECTIONS as Connection[];
+      const connections: Connection[] = POSE_CONNECTIONS;
       let lastDetect = 0;
+
+      if (IS_IOS) {
+        // ── iOS: メインスレッドで MediaPipe を初期化 ──────────────────────
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision' as any) as any;
+        if (cancelled) return;
+
+        const vision = await FilesetResolver.forVisionTasks(WASM_BASE);
+        if (cancelled) return;
+
+        const landmarker = await PoseLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+          runningMode: 'VIDEO',
+          numPoses: NUM_POSES,
+          minPoseDetectionConfidence: DETECT_CONFIDENCE,
+          minPosePresenceConfidence: PRESENCE_CONFIDENCE,
+          minTrackingConfidence: TRACKING_CONFIDENCE,
+        });
+
+        if (cancelled) { landmarker.close(); return; }
+        landmarkerRef.current = landmarker;
+      } else {
+        // ── PC: Web Worker で MediaPipe を非同期実行 ─────────────────────
+        const worker = new Worker(
+          new URL('../workers/salsaAnalyzer.worker.ts', import.meta.url),
+          { type: 'module' },
+        );
+        workerRef.current = worker;
+        worker.addEventListener('message', (ev: MessageEvent) => {
+          if (cancelled) return;
+          if (ev.data.type === 'ready') workerReadyRef.current = true;
+          if (ev.data.type === 'result') latestLandmarksRef.current = ev.data.landmarks ?? [];
+        });
+        worker.addEventListener('error', () => { workerFailedRef.current = true; });
+      }
 
       function loop() {
         if (!activeRef.current || cancelled) return;
@@ -1170,14 +1302,48 @@ export function usePoseEstimation(
           }
 
           const now = performance.now();
-          if (now - lastDetect >= detectIntervalRef.current) {
-            lastDetect = now;
+          const shouldDetect = now - lastDetect >= detectIntervalRef.current;
+
+          // PC: 毎フレーム描画（Worker 結果を常時反映）
+          // iOS: 検出インターバル時のみ描画（バッテリー節約）
+          if (!IS_IOS || shouldDetect) {
+            if (shouldDetect) lastDetect = now;
             const ctx = canvas.getContext('2d');
             if (ctx) {
               try {
-                const result = landmarker.detectForVideo(video, now);
-                // 合成人体（同色衣装などで2人が1体に誤接続されたpose）を除去してから処理
-                const all = (result.landmarks as NormalizedLandmark[][]).filter(isPoseCoherent);
+                // ── 検出（デバイスに応じて分岐） ────────────────────────
+                let all: NormalizedLandmark[][];
+
+                if (IS_IOS) {
+                  const lm = landmarkerRef.current;
+                  if (!lm) throw new Error('landmarker not ready');
+                  const rate = video.playbackRate;
+                  if (rate <= SLOW_RATE_THRESHOLD) {
+                    // 2パスカスケード + キャッシュ保存
+                    const raw = runTwoPassDetect(lm, video, now, offscreenCanvasRef.current!);
+                    all = raw.filter(isPoseCoherent);
+                    analysisCacheRef.current.push({ time: video.currentTime, landmarks: all });
+                    if (analysisCacheRef.current.length > CACHE_MAX_FRAMES) analysisCacheRef.current.shift();
+                  } else {
+                    // 通常速度: キャッシュ優先、キャッシュミス時は単一パス検出
+                    const cached = findCachedResult(analysisCacheRef.current, video.currentTime);
+                    if (cached !== null) {
+                      all = cached;
+                    } else {
+                      const r = lm.detectForVideo(video, now);
+                      all = (r.landmarks as NormalizedLandmark[][]).filter(isPoseCoherent);
+                    }
+                  }
+                } else {
+                  // PC: Worker にフレームを送信（interval 制御）、最新結果を使用
+                  if (shouldDetect && workerReadyRef.current && !workerFailedRef.current) {
+                    lastCaptureRef.current = now;
+                    createImageBitmap(video).then(bitmap => {
+                      workerRef.current?.postMessage({ type: 'detect', bitmap, timestamp: now }, [bitmap]);
+                    }).catch(() => {});
+                  }
+                  all = latestLandmarksRef.current.filter(isPoseCoherent);
+                }
 
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -1595,8 +1761,17 @@ export function usePoseEstimation(
       cancelled = true;
       activeRef.current = false;
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      // iOS: MediaPipe メインスレッドリソース解放
       landmarkerRef.current?.close?.();
       landmarkerRef.current = null;
+      // PC: Worker 終了
+      if (!IS_IOS) {
+        workerRef.current?.terminate();
+        workerRef.current = null;
+        workerReadyRef.current = false;
+        workerFailedRef.current = false;
+        latestLandmarksRef.current = [];
+      }
     };
   }, [enabled, videoRef, canvasRef]);
 

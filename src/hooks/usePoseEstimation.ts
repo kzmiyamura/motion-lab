@@ -20,6 +20,8 @@ export interface FrameSnapshot {
   frameIndex: number;
   videoTime: number;
   distanceBetweenPersons: number;  // -1 = 1人のみ
+  isOccluded: boolean;             // オクルージョン中フラグ
+  zOrderFront: number;             // 手前スロットインデックス (-1 = 未判定)
   persons: Array<{
     slotIdx: 0 | 1;
     role: PersonRole;
@@ -28,6 +30,9 @@ export interface FrameSnapshot {
     shoulderWidth: number;           // 正規化座標。-1 = 不明
     bodyHeight: number;              // 鼻〜足首中点（正規化）。-1 = 不明
     noseX: number; noseY: number;    // -1 = 不明
+    predictedX: number;              // 遮蔽中の予測X (-1 = 通常検出)
+    predictedY: number;              // 遮蔽中の予測Y (-1 = 通常検出)
+    omega: number;                   // 推定角速度 rad/frame (0 = ターンなし)
   }>;
 }
 
@@ -121,6 +126,14 @@ type RoleSlot = {
   velX:     number;           // 直前フレームの腰速度（オクルージョン予測用）
   velY:     number;
   profile:  PersonProfile;    // 体格プロファイル
+  // ── 物理ステートマシン ───────────────────────────────────
+  zFront:       boolean;        // カメラに近い方（遮蔽判定）
+  omegaHist:    number[];       // raw X座標履歴（角速度推定用、最大OMEGA_HIST_LEN）
+  omega:        number;         // 推定角速度（rad/frame）
+  angPhase:     number;         // 現在の位相（ラジアン）
+  angCenter:    number;         // X振動の中心
+  angAmplitude: number;         // X振動の振幅
+  phantomPos:   Centroid | null; // 遮蔽中の予測座標
 };
 
 // ── ロール描画カラー ──────────────────────────────────────────────────────
@@ -143,6 +156,9 @@ const MIN_UL_RATIO      = 0.22;  // 上半身/下半身比の最小値
 const MAX_UL_RATIO      = 4.5;   // 上半身/下半身比の最大値
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
 const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
+
+// ── 物理ステートマシン定数 ────────────────────────────────────────────────
+const OMEGA_HIST_LEN = 90;  // 角速度推定用 X履歴フレーム数（~3秒 @ 30fps）
 
 // ── ハイブリッドアーキテクチャ定数 ──────────────────────────────────────────
 // iOS Safari は Worker 内 WebGL が利用不可 → メインスレッド専用
@@ -1031,6 +1047,90 @@ function findCachedResult(cache: CachedResult[], time: number): NormalizedLandma
   return best ? best.landmarks : null;
 }
 
+// ── 物理ステートマシン ヘルパー ───────────────────────────────────────────
+
+/** 肩幅を返す（-1 = 不明） */
+function getShoulderWidth(lm: NormalizedLandmark[]): number {
+  const sL = lm[11], sR = lm[12];
+  if (!sL || !sR || (sL.visibility ?? 1) < VIS_THRESHOLD || (sR.visibility ?? 1) < VIS_THRESHOLD) return -1;
+  return Math.abs(sR.x - sL.x);
+}
+
+/** 足首 Y 座標の平均を返す（-1 = 不明）*/
+function getFootY(lm: NormalizedLandmark[]): number {
+  const aL = lm[27], aR = lm[28];
+  const lv = aL ? (aL.visibility ?? 1) >= VIS_THRESHOLD : false;
+  const rv = aR ? (aR.visibility ?? 1) >= VIS_THRESHOLD : false;
+  if (lv && rv) return (aL!.y + aR!.y) / 2;
+  if (lv) return aL!.y;
+  if (rv) return aR!.y;
+  return -1;
+}
+
+/**
+ * 2人のうちカメラに近い方（手前）のインデックス（0 or 1）を返す。
+ * 優先順位: 肩幅（広い=近い）> 足首Y（大きい=画面下=近い）> Z座標（小さい=近い）
+ */
+function getZOrderFront(lm0: NormalizedLandmark[], lm1: NormalizedLandmark[]): 0 | 1 {
+  const sw0 = getShoulderWidth(lm0), sw1 = getShoulderWidth(lm1);
+  if (sw0 > 0 && sw1 > 0 && Math.abs(sw0 - sw1) > 0.03) return sw0 > sw1 ? 0 : 1;
+  const fy0 = getFootY(lm0), fy1 = getFootY(lm1);
+  if (fy0 > 0 && fy1 > 0 && Math.abs(fy0 - fy1) > 0.05) return fy0 > fy1 ? 0 : 1;
+  const hz0 = ((lm0[23]?.z ?? 0) + (lm0[24]?.z ?? 0)) / 2;
+  const hz1 = ((lm1[23]?.z ?? 0) + (lm1[24]?.z ?? 0)) / 2;
+  return hz0 < hz1 ? 0 : 1;
+}
+
+/**
+ * X座標履歴からターン角速度（rad/frame）を推定する。
+ * ピーク〜バレー間のフレーム数（halfPeriod）から ω = π / halfPeriod。
+ * 有効な極値が見つからない場合は 0 を返す。
+ */
+function estimateOmegaFromHistory(xHist: number[]): number {
+  const n = xHist.length;
+  if (n < 8) return 0;
+  // 窓幅3 で簡易スムージング
+  const smoothed: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - 2), hi = Math.min(n - 1, i + 2);
+    let sum = 0;
+    for (let j = lo; j <= hi; j++) sum += xHist[j];
+    smoothed.push(sum / (hi - lo + 1));
+  }
+  // ピーク・バレーのインデックスを収集
+  const extrema: number[] = [];
+  for (let i = 1; i < n - 1; i++) {
+    if ((smoothed[i] > smoothed[i - 1] && smoothed[i] > smoothed[i + 1]) ||
+        (smoothed[i] < smoothed[i - 1] && smoothed[i] < smoothed[i + 1])) {
+      extrema.push(i);
+    }
+  }
+  if (extrema.length < 2) return 0;
+  // 隣接極値間の平均インターバル = halfPeriod
+  let total = 0;
+  for (let i = 0; i < extrema.length - 1; i++) total += extrema[i + 1] - extrema[i];
+  const halfPeriod = total / (extrema.length - 1);
+  return halfPeriod > 1 ? Math.PI / halfPeriod : 0;
+}
+
+/**
+ * オクルージョン中の予測座標を返す（速度外挿 + サイン波ブレンド）。
+ * ω が大きいほどサイン波成分を重視する。
+ */
+function buildPhantomPos(slot: RoleSlot, framesOccluded: number): Centroid | null {
+  if (!slot.hip) return null;
+  const velPredX = slot.hip.x + slot.velX * framesOccluded;
+  const velPredY = slot.hip.y + slot.velY * framesOccluded;
+  if (slot.omega > 0.05 && slot.angAmplitude > 0.05) {
+    const predictedPhase = slot.angPhase + slot.omega * framesOccluded;
+    const sinePredX = slot.angCenter + slot.angAmplitude * Math.sin(predictedPhase);
+    // ω が大きいほどサイン波を優先（最大 0.85）
+    const sineWeight = Math.min(0.85, slot.omega * 4);
+    return { x: sinePredX * sineWeight + velPredX * (1 - sineWeight), y: velPredY };
+  }
+  return { x: velPredX, y: velPredY };
+}
+
 // ── フック本体 ────────────────────────────────────────────────────────────
 
 export function usePoseEstimation(
@@ -1091,6 +1191,8 @@ export function usePoseEstimation(
   const makeRoleSlot = (): RoleSlot => ({
     hip: null, hipZ: 0, role: null, xHistory: [], staleness: 0,
     nose: null, velX: 0, velY: 0, profile: makeProfile(),
+    zFront: false, omegaHist: [], omega: 0,
+    angPhase: 0, angCenter: 0.5, angAmplitude: 0, phantomPos: null,
   });
   const roleSlots          = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
   const roleDetectedRef    = useRef(false);
@@ -1448,20 +1550,21 @@ export function usePoseEstimation(
                     ? Math.floor((video.currentTime * bpmRef.current / 60) % 8) + 1
                     : undefined;
 
-                  // 速度計算用: 更新前の位置を保存
-                  const prevSlotHips: (Centroid | null)[] = [slots[0].hip, slots[1].hip];
+                  // 速度計算用: 更新前の Z を保存
                   const prevZ = [slots[0].hipZ, slots[1].hipZ];
 
                   for (let s = 0; s < 2; s++) {
                     const si = s === 0 ? si0 : si1;
                     if (si < 0) {
-                      // トラッキング途切れ: 速度で位置を予測（オクルージョン中の Re-ID 精度向上）
+                      // トラッキング途切れ: 速度外挿 + サイン波ブレンドで位置を予測
                       if (isOccludedRef.current && slots[s].hip) {
-                        slots[s].hip = { x: slots[s].hip!.x + slots[s].velX, y: slots[s].hip!.y + slots[s].velY };
+                        const phantom = buildPhantomPos(slots[s], slots[s].staleness + 1);
+                        slots[s].phantomPos = phantom;
+                        if (phantom) slots[s].hip = phantom;
                       }
                       slots[s].xHistory = [];
                       slots[s].staleness++;
-                      if (slots[s].staleness >= SLOT_STALE_FRAMES) slots[s].hip = null;
+                      if (slots[s].staleness >= SLOT_STALE_FRAMES) { slots[s].hip = null; slots[s].phantomPos = null; }
                       continue;
                     }
                     slots[s].staleness = 0;
@@ -1492,6 +1595,24 @@ export function usePoseEstimation(
                     slots[s].hip  = hip;
                     slots[s].hipZ = newZ;
 
+                    // ── 物理ステートマシン: 角速度・位相更新 ──────────────
+                    slots[s].omegaHist.push(hip.x);
+                    if (slots[s].omegaHist.length > OMEGA_HIST_LEN) slots[s].omegaHist.shift();
+                    const oHist = slots[s].omegaHist;
+                    if (oHist.length >= 8) {
+                      slots[s].omega = estimateOmegaFromHistory(oHist);
+                      const xMin = Math.min(...oHist), xMax = Math.max(...oHist);
+                      slots[s].angCenter    = (xMin + xMax) / 2;
+                      slots[s].angAmplitude = (xMax - xMin) / 2;
+                      if (slots[s].angAmplitude > 0.02) {
+                        const sinVal   = Math.max(-1, Math.min(1, (hip.x - slots[s].angCenter) / slots[s].angAmplitude));
+                        const rawPhase = Math.asin(sinVal);
+                        // velX の符号でどの象限かを判定（cos の符号）
+                        slots[s].angPhase = slots[s].velX >= 0 ? rawPhase : Math.PI - rawPhase;
+                      }
+                    }
+                    slots[s].phantomPos = null; // 検出済みなのでリセット
+
                     // ── 体格プロファイル蓄積（プロファイリング期間中・2人同時検出時）
                     if (!profileCompleteRef.current && si0 >= 0 && si1 >= 0) {
                       const lm = all[si];
@@ -1516,6 +1637,13 @@ export function usePoseEstimation(
                     }
 
                     if (slots[s].role) personRoles.set(si, slots[s].role);
+                  }
+
+                  // ── Z-order 更新（両者同時検出フレームで手前/奥を判定）
+                  if (si0 >= 0 && si1 >= 0) {
+                    const frontIdx = getZOrderFront(all[si0], all[si1]);
+                    slots[0].zFront = (frontIdx === 0);
+                    slots[1].zFront = (frontIdx === 1);
                   }
 
                   // ── プロファイル完成 → 体格ベースでロール初期割り当て
@@ -1614,34 +1742,56 @@ export function usePoseEstimation(
 
                   // ── フレームスナップショットをバッファに追加
                   {
+                    const zOrderFront = slots[0].zFront ? 0 : slots[1].zFront ? 1 : -1;
                     const snapshot: FrameSnapshot = {
                       frameIndex: frameIndexRef.current,
                       videoTime: video.currentTime,
                       distanceBetweenPersons: slots[0].hip && slots[1].hip
                         ? Math.hypot(slots[0].hip.x - slots[1].hip.x, slots[0].hip.y - slots[1].hip.y)
                         : -1,
+                      isOccluded: isOccludedRef.current,
+                      zOrderFront,
                       persons: [],
                     };
                     for (let s = 0; s < 2; s++) {
                       const si = s === 0 ? si0 : si1;
-                      if (si < 0 || !slots[s].hip) continue;
-                      const lm    = all[si];
-                      const prev  = prevSlotHips[s];
-                      const nose  = lm[0], sL = lm[11], sR = lm[12], aL = lm[27], aR = lm[28];
-                      const sw = sL && sR && (sL.visibility ?? 1) >= VIS_THRESHOLD && (sR.visibility ?? 1) >= VIS_THRESHOLD
-                        ? Math.abs(sR.x - sL.x) : -1;
-                      const bh = nose && (nose.visibility ?? 1) >= VIS_THRESHOLD && (aL || aR)
-                        ? Math.abs(nose.y - (((aL?.y ?? aR?.y ?? 0) + (aR?.y ?? aL?.y ?? 0)) / 2)) : -1;
-                      snapshot.persons.push({
-                        slotIdx: s as 0 | 1,
-                        role: slots[s].role,
-                        hipX: slots[s].hip!.x, hipY: slots[s].hip!.y, hipZ: slots[s].hipZ,
-                        velX: prev ? slots[s].hip!.x - prev.x : 0,
-                        velY: prev ? slots[s].hip!.y - prev.y : 0,
-                        shoulderWidth: sw, bodyHeight: bh,
-                        noseX: nose && (nose.visibility ?? 1) >= VIS_THRESHOLD ? nose.x : -1,
-                        noseY: nose && (nose.visibility ?? 1) >= VIS_THRESHOLD ? nose.y : -1,
-                      });
+                      const slot = slots[s];
+                      const isDetected     = si >= 0;
+                      const isOccludedSlot = si < 0 && !!slot.hip && isOccludedRef.current;
+                      if (!isDetected && !isOccludedSlot) continue;
+
+                      if (isDetected) {
+                        const lm   = all[si];
+                        const nose = lm[0], sL = lm[11], sR = lm[12], aL = lm[27], aR = lm[28];
+                        const sw = sL && sR && (sL.visibility ?? 1) >= VIS_THRESHOLD && (sR.visibility ?? 1) >= VIS_THRESHOLD
+                          ? Math.abs(sR.x - sL.x) : -1;
+                        const bh = nose && (nose.visibility ?? 1) >= VIS_THRESHOLD && (aL || aR)
+                          ? Math.abs(nose.y - (((aL?.y ?? aR?.y ?? 0) + (aR?.y ?? aL?.y ?? 0)) / 2)) : -1;
+                        snapshot.persons.push({
+                          slotIdx: s as 0 | 1,
+                          role: slot.role,
+                          hipX: slot.hip!.x, hipY: slot.hip!.y, hipZ: slot.hipZ,
+                          velX: slot.velX, velY: slot.velY,
+                          shoulderWidth: sw, bodyHeight: bh,
+                          noseX: nose && (nose.visibility ?? 1) >= VIS_THRESHOLD ? nose.x : -1,
+                          noseY: nose && (nose.visibility ?? 1) >= VIS_THRESHOLD ? nose.y : -1,
+                          predictedX: -1, predictedY: -1,
+                          omega: slot.omega,
+                        });
+                      } else {
+                        // 遮蔽中（未検出）: 予測座標のみ記録
+                        snapshot.persons.push({
+                          slotIdx: s as 0 | 1,
+                          role: slot.role,
+                          hipX: slot.hip!.x, hipY: slot.hip!.y, hipZ: slot.hipZ,
+                          velX: slot.velX, velY: slot.velY,
+                          shoulderWidth: -1, bodyHeight: -1,
+                          noseX: -1, noseY: -1,
+                          predictedX: slot.phantomPos?.x ?? -1,
+                          predictedY: slot.phantomPos?.y ?? -1,
+                          omega: slot.omega,
+                        });
+                      }
                     }
                     frameBufferRef.current.push(snapshot);
                     if (frameBufferRef.current.length > FRAME_BUFFER_SIZE) frameBufferRef.current.shift();

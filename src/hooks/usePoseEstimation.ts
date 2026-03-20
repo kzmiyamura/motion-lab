@@ -71,9 +71,9 @@ const MODEL_URL =
 const NUM_POSES     = 5;
 const VIS_THRESHOLD = 0.5;   // landmark の visibility チェック閾値（描画用）
 // ペアワークで密着・オクルージョンが多いため検出閾値は低めに設定
-const DETECT_CONFIDENCE = 0.3;  // minPoseDetectionConfidence
-const PRESENCE_CONFIDENCE = 0.3; // minPosePresenceConfidence
-const TRACKING_CONFIDENCE = 0.3; // minTrackingConfidence
+const DETECT_CONFIDENCE = 0.2;  // minPoseDetectionConfidence（2人目の部分オクルージョンに対応）
+const PRESENCE_CONFIDENCE = 0.2; // minPosePresenceConfidence
+const TRACKING_CONFIDENCE = 0.2; // minTrackingConfidence
 
 // 適応型サンプリング
 const DETECT_FAST   = 33;    // ~30fps（動きが速いとき）
@@ -104,7 +104,7 @@ const COLOR_MAIN:     DrawColors = { line: 'rgba(255,60,60,0.95)',   joint: 'rgb
 const COLOR_OTHER:    DrawColors = { line: 'rgba(255,255,255,0.45)', joint: 'rgba(200,200,200,0.50)', lw: 1.5, jr: 3 };
 
 // ── ロール検出定数 ────────────────────────────────────────────────────────
-const ROLE_MATCH_DIST   = 0.35;  // スロットマッチング距離閾値
+const ROLE_MATCH_DIST   = 0.55;  // スロットマッチング距離閾値（サルサは動きが大きいため余裕を持たせる）
 const PHASE_WINDOW      = 6;     // 位相モニタリングウィンドウ（サンプル数）
 const SLOT_STALE_FRAMES = 20;   // この連続フレーム数トラッキングが途切れたらスロット位置をリセット
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
@@ -1122,21 +1122,42 @@ export function usePoseEstimation(
                   }
 
                   // ── ブレイクステップでロール判定（初回のみ）
-                  if (!roleDetectedRef.current && si0 >= 0 && si1 >= 0 && currentBeatNum !== undefined) {
+                  // 2人同時検出時はZ軸差分で判定。1人のみの場合は暫定でリーダーとして割り当て
+                  if (!roleDetectedRef.current && (si0 >= 0 || si1 >= 0) && currentBeatNum !== undefined) {
                     const breakBeat = styleRef.current === 'on1' ? 1 : 2;
                     if (currentBeatNum === breakBeat && prevBeatNumRef.current !== breakBeat) {
-                      const dz0 = slots[0].hipZ - prevZ[0];
-                      const dz1 = slots[1].hipZ - prevZ[1];
-                      // deltaZ < 0 = 前方（カメラに近づく）= LEADER
-                      if (dz0 < dz1) {
-                        slots[0].role = 'leader'; slots[1].role = 'follower';
+                      if (si0 >= 0 && si1 >= 0) {
+                        // 2人同時検出: Z軸差分でリーダー判定（前方に出た方がリーダー）
+                        const dz0 = slots[0].hipZ - prevZ[0];
+                        const dz1 = slots[1].hipZ - prevZ[1];
+                        if (dz0 < dz1) {
+                          slots[0].role = 'leader'; slots[1].role = 'follower';
+                        } else {
+                          slots[0].role = 'follower'; slots[1].role = 'leader';
+                        }
                       } else {
-                        slots[0].role = 'follower'; slots[1].role = 'leader';
+                        // 1人のみ検出: 暫定でリーダーとして割り当て（スワップで修正可能）
+                        const s = si0 >= 0 ? 0 : 1;
+                        slots[s].role = 'leader';
+                        // 相手スロットは null のまま — 検出され次第自動割り当て
                       }
                       roleDetectedRef.current = true;
                       setRoleDetected(true);
                       if (si0 >= 0) personRoles.set(si0, slots[0].role);
                       if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                    }
+                  }
+
+                  // ── 2人目が初めて検出されたとき、逆ロールを自動割り当て
+                  if (roleDetectedRef.current) {
+                    for (let s = 0; s < 2; s++) {
+                      const si = s === 0 ? si0 : si1;
+                      if (si >= 0 && slots[s].role === null) {
+                        const otherRole = slots[1 - s].role;
+                        slots[s].role = otherRole === 'leader' ? 'follower'
+                          : otherRole === 'follower' ? 'leader' : null;
+                        if (slots[s].role) personRoles.set(si, slots[s].role);
+                      }
                     }
                   }
                   prevBeatNumRef.current = currentBeatNum;

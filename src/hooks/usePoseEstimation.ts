@@ -1970,11 +1970,15 @@ export function usePoseEstimation(
                         slots[s].profile.ratioSamples++;
                       }
                       if (sL && sR && (sL.visibility ?? 1) >= VIS_THRESHOLD && (sR.visibility ?? 1) >= VIS_THRESHOLD) {
-                        slots[s].profile.totalShoulderWidth += Math.abs(sR.x - sL.x);
+                        // 3D XZ平面距離 — 横向き時も肩幅をゼロにしない
+                        const sw3d = Math.hypot(sR.x - sL.x, (sR.z ?? 0) - (sL.z ?? 0));
+                        slots[s].profile.totalShoulderWidth += sw3d;
                         slots[s].profile.shoulderSamples++;
                       }
                       if (hL && hR && (hL.visibility ?? 1) >= VIS_THRESHOLD && (hR.visibility ?? 1) >= VIS_THRESHOLD) {
-                        slots[s].profile.totalHipWidth += Math.abs(hR.x - hL.x);
+                        // 3D XZ平面距離
+                        const hw3d = Math.hypot(hR.x - hL.x, (hR.z ?? 0) - (hL.z ?? 0));
+                        slots[s].profile.totalHipWidth += hw3d;
                         slots[s].profile.hipSamples++;
                       }
                       // 耳幅（landmark 7=左耳, 8=右耳）: 顔幅の代理指標
@@ -1997,7 +2001,8 @@ export function usePoseEstimation(
 
                       // ── 正面向きフレームのみ蓄積（遠近法不変の SW/H 比率用）
                       if (isFrontalPose(lm)) {
-                        const fSW = sL && sR ? Math.abs(sR.x - sL.x) : 0;
+                        // 正面向き時は Z 差が小さいため 2D でも可だが 3D に統一
+                        const fSW = sL && sR ? Math.hypot(sR.x - sL.x, (sR.z ?? 0) - (sL.z ?? 0)) : 0;
                         const fNose = lm[0], fAnkL = lm[27], fAnkR = lm[28];
                         const fBH = fNose && fAnkL && fAnkR
                           && (fNose.visibility ?? 1) >= VIS_THRESHOLD
@@ -2307,7 +2312,7 @@ export function usePoseEstimation(
                         const lm   = all[si];
                         const nose = lm[0], sL = lm[11], sR = lm[12], aL = lm[27], aR = lm[28];
                         const sw = sL && sR && (sL.visibility ?? 1) >= VIS_THRESHOLD && (sR.visibility ?? 1) >= VIS_THRESHOLD
-                          ? Math.abs(sR.x - sL.x) : -1;
+                          ? Math.hypot(sR.x - sL.x, (sR.z ?? 0) - (sL.z ?? 0)) : -1;
                         const bh = nose && (nose.visibility ?? 1) >= VIS_THRESHOLD && (aL || aR)
                           ? Math.abs(nose.y - (((aL?.y ?? aR?.y ?? 0) + (aR?.y ?? aL?.y ?? 0)) / 2)) : -1;
                         snapshot.persons.push({
@@ -2371,7 +2376,7 @@ export function usePoseEstimation(
                               && (sL2.visibility ?? 1) >= VIS_THRESHOLD
                               && (sR2.visibility ?? 1) >= VIS_THRESHOLD
                               && (n2.visibility ?? 1) >= VIS_THRESHOLD) {
-                            const sw2 = Math.abs(sR2.x - sL2.x);
+                            const sw2 = Math.hypot(sR2.x - sL2.x, (sR2.z ?? 0) - (sL2.z ?? 0));
                             const bh2 = Math.abs(n2.y - (a2L.y + a2R.y) / 2);
                             swh = bh2 > 0 ? sw2 / bh2 : 0;
                           }

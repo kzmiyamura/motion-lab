@@ -33,6 +33,7 @@ export interface FrameSnapshot {
     predictedX: number;              // 遮蔽中の予測X (-1 = 通常検出)
     predictedY: number;              // 遮蔽中の予測Y (-1 = 通常検出)
     omega: number;                   // 推定角速度 rad/frame (0 = ターンなし)
+    dynamicsScore: number;           // リード動力学スコア（Inception/Centripetal/Space）
   }>;
 }
 
@@ -134,6 +135,12 @@ type RoleSlot = {
   angCenter:    number;         // X振動の中心
   angAmplitude: number;         // X振動の振幅
   phantomPos:   Centroid | null; // 遮蔽中の予測座標
+  // ── ダンス動力学 ─────────────────────────────────────────
+  dynamicsScore:    number;     // リード動力学スコア（正=Leader的）減衰付き累積
+  wristPrev:        { mx: number; my: number } | null; // 前フレームの手首中点
+  wristVel:         number;     // 手首速度大きさ（正規化座標/frame）
+  wasMoving:        boolean;    // 前フレームの手首運動状態
+  motionOnsetFrame: number;     // 直近の動き出しフレームインデックス（-1 = 未検出）
 };
 
 // ── ロール描画カラー ──────────────────────────────────────────────────────
@@ -157,6 +164,16 @@ const MAX_UL_RATIO      = 4.5;   // 上半身/下半身比の最大値
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
 const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
 const STICKY_MIN_FRAMES = 45;    // 粘り強い追跡を有効化するまでの安定フレーム数（~1.5秒）
+
+// ── ダンス動力学（Dynamics）定数 ─────────────────────────────────────────
+const INCEPTION_VEL_THRESHOLD    = 0.012; // 先行動作の動き出し速度閾値（正規化座標/frame）
+const INCEPTION_FRAME_WINDOW     = 4;     // 先行動作として認める最大フレーム差（~130ms @ 30fps）
+const INCEPTION_SCORE            = 0.5;   // Inception 検知スコア加算量
+const CENTRIPETAL_SCORE          = 0.12;  // 向心力スコア（ターン中毎フレーム加算）
+const SPACE_SCORE                = 0.7;   // スペース管理スコア（オクルージョン直前）
+const DYNAMICS_DECAY             = 0.993; // スコア減衰係数（毎フレーム; ~100f で半減）
+const DYNAMICS_WEIGHT            = 1.0;   // 動力学スコアのプロファイルスコアへの重み
+const DYNAMICS_REASSIGN_THRESHOLD = 4.0;  // 動力学スコアによるロール再評価の閾値
 
 // ── 物理ステートマシン定数 ────────────────────────────────────────────────
 const OMEGA_HIST_LEN = 90;  // 角速度推定用 X履歴フレーム数（~3秒 @ 30fps）
@@ -887,8 +904,9 @@ function assignRolesByProfile(slots: [RoleSlot, RoleSlot], useHeight: boolean): 
   // 遠近法の影響を受ける見かけ身長の重みを抑える（3→1.5）
   // ファントム座標・Z-order推論の精度向上により体格依存度を下げる
   const w = useHeight ? 1.5 : 1;
-  const s0 = profileLeaderScore(slots[0].profile, w);
-  const s1 = profileLeaderScore(slots[1].profile, w);
+  // 動力学スコアを体格スコアに加算（動き出し・向心力・スペース管理の蓄積値）
+  const s0 = profileLeaderScore(slots[0].profile, w) + slots[0].dynamicsScore * DYNAMICS_WEIGHT;
+  const s1 = profileLeaderScore(slots[1].profile, w) + slots[1].dynamicsScore * DYNAMICS_WEIGHT;
   if (s0 >= s1) { slots[0].role = 'leader'; slots[1].role = 'follower'; }
   else          { slots[0].role = 'follower'; slots[1].role = 'leader'; }
 }
@@ -1140,6 +1158,96 @@ function buildPhantomPos(slot: RoleSlot, framesOccluded: number): Centroid | nul
   return { x: velPredX, y: velPredY };
 }
 
+// ── ダンス動力学スコア更新 ────────────────────────────────────────────────
+/**
+ * 3つの物理的特徴を解析しリード動力学スコアを更新する。
+ *   1. Inception Detection — 先行動作: 手首の動き出しが早い方を Leader と判定
+ *   2. Centripetal Logic  — 向心力: ターン中に回転中心に近い（振幅小）方を Leader と判定
+ *   3. Space Management   — スロット理論: 接近直前に横移動でスペースを作った方を Leader と判定
+ *
+ * スコアは毎フレーム DYNAMICS_DECAY で減衰するため、直近の行動が強く影響する。
+ */
+function updateDynamicsScores(
+  slots: [RoleSlot, RoleSlot],
+  all: NormalizedLandmark[][],
+  si0: number,
+  si1: number,
+  prevSlotDist: number,
+  frameIdx: number,
+): void {
+  // スコア減衰（全フレーム）
+  slots[0].dynamicsScore *= DYNAMICS_DECAY;
+  slots[1].dynamicsScore *= DYNAMICS_DECAY;
+
+  // ── 手首速度 & 動き出し検知（各スロットを独立に更新）─────────────────
+  for (let s = 0; s < 2; s++) {
+    const si = s === 0 ? si0 : si1;
+    if (si < 0) { slots[s].wasMoving = false; continue; }
+    const lm = all[si];
+    const lw = lm[15], rw = lm[16];
+    if (!lw || !rw || (lw.visibility ?? 1) < VIS_THRESHOLD || (rw.visibility ?? 1) < VIS_THRESHOLD) continue;
+    const mx = (lw.x + rw.x) / 2, my = (lw.y + rw.y) / 2;
+    if (slots[s].wristPrev) {
+      const speed = Math.hypot(mx - slots[s].wristPrev!.mx, my - slots[s].wristPrev!.my);
+      slots[s].wristVel = speed;
+      const isMovingNow = speed > INCEPTION_VEL_THRESHOLD;
+      // 静止→運動 の遷移で「動き出し」とみなす
+      if (isMovingNow && !slots[s].wasMoving) slots[s].motionOnsetFrame = frameIdx;
+      slots[s].wasMoving = isMovingNow;
+    }
+    slots[s].wristPrev = { mx, my };
+  }
+
+  if (si0 < 0 || si1 < 0) return; // 以下は2人同時検出時のみ
+
+  // ── 1. Inception Detection ────────────────────────────────────────────────
+  // 手首の動き出しタイミングを比較: 50-130ms 先行した方に Lead スコアを加算
+  const f0 = slots[0].motionOnsetFrame;
+  const f1 = slots[1].motionOnsetFrame;
+  if (f0 >= 0 && f1 >= 0) {
+    const frameDiff = f1 - f0; // 正 = slot0 が先に動いた
+    const stale0 = frameIdx - f0 > INCEPTION_FRAME_WINDOW * 3;
+    const stale1 = frameIdx - f1 > INCEPTION_FRAME_WINDOW * 3;
+    if (!stale0 && !stale1 && frameDiff !== 0 && Math.abs(frameDiff) <= INCEPTION_FRAME_WINDOW) {
+      if (frameDiff > 0) slots[0].dynamicsScore += INCEPTION_SCORE;
+      else               slots[1].dynamicsScore += INCEPTION_SCORE;
+    }
+  }
+
+  // ── 2. Centripetal Logic ──────────────────────────────────────────────────
+  // ターン中: X振幅が小さい方（回転の中心軌道）= Leader
+  // X振幅が大きい方（大きな円弧を描く）= Follower
+  if (slots[0].omega > 0.05 && slots[1].omega > 0.05
+      && slots[0].angAmplitude > 0.02 && slots[1].angAmplitude > 0.02) {
+    const amp0 = slots[0].angAmplitude, amp1 = slots[1].angAmplitude;
+    if (amp0 < amp1 * 0.75)      slots[0].dynamicsScore += CENTRIPETAL_SCORE;
+    else if (amp1 < amp0 * 0.75) slots[1].dynamicsScore += CENTRIPETAL_SCORE;
+  }
+
+  // ── 3. Space Management ───────────────────────────────────────────────────
+  // 接近中に相手の進行方向から軸をずらした（横移動率が高い）方 = Leader（道を作る）
+  if (slots[0].hip && slots[1].hip) {
+    const curDist = Math.hypot(slots[0].hip.x - slots[1].hip.x, slots[0].hip.y - slots[1].hip.y);
+    if (curDist < OCCLUSION_DIST * 2.5 && prevSlotDist > curDist + 0.005) {
+      const dx = slots[1].hip.x - slots[0].hip.x;
+      const dy = slots[1].hip.y - slots[0].hip.y;
+      const dlen = Math.hypot(dx, dy);
+      if (dlen > 0.01) {
+        const nx = dx / dlen, ny = dy / dlen; // slot0→slot1 方向の単位ベクトル
+        const spd0 = Math.hypot(slots[0].velX, slots[0].velY);
+        const spd1 = Math.hypot(slots[1].velX, slots[1].velY);
+        if (spd0 > MOVEMENT_TH && spd1 > MOVEMENT_TH) {
+          // 接近線に対して垂直な速度成分の比率（1 = 純粋な横移動）
+          const perp0 = Math.abs(slots[0].velX * (-ny) + slots[0].velY * nx) / spd0;
+          const perp1 = Math.abs(slots[1].velX * (-ny) + slots[1].velY * nx) / spd1;
+          if (perp0 > 0.65 && perp0 > perp1 * 1.3)      slots[0].dynamicsScore += SPACE_SCORE;
+          else if (perp1 > 0.65 && perp1 > perp0 * 1.3) slots[1].dynamicsScore += SPACE_SCORE;
+        }
+      }
+    }
+  }
+}
+
 // ── フック本体 ────────────────────────────────────────────────────────────
 
 export function usePoseEstimation(
@@ -1202,6 +1310,7 @@ export function usePoseEstimation(
     nose: null, velX: 0, velY: 0, profile: makeProfile(),
     zFront: false, omegaHist: [], omega: 0,
     angPhase: 0, angCenter: 0.5, angAmplitude: 0, phantomPos: null,
+    dynamicsScore: 0, wristPrev: null, wristVel: 0, wasMoving: false, motionOnsetFrame: -1,
   });
   const roleSlots          = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
   const roleDetectedRef    = useRef(false);
@@ -1236,10 +1345,10 @@ export function usePoseEstimation(
 
   // ── ロール判定リセット
   const clearRoles = useCallback(() => {
-    roleSlots.current        = [makeRoleSlot(), makeRoleSlot()];
-    roleDetectedRef.current  = false;
+    roleSlots.current           = [makeRoleSlot(), makeRoleSlot()];
+    roleDetectedRef.current     = false;
     roleStableFramesRef.current = 0;
-    profileCompleteRef.current = false;
+    profileCompleteRef.current  = false;
     isOccludedRef.current    = false;
     analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
@@ -1665,6 +1774,32 @@ export function usePoseEstimation(
                     slots[1].zFront = (frontIdx === 1);
                   }
 
+                  // ── ダンス動力学スコア更新（Inception / Centripetal / Space Management）
+                  updateDynamicsScores(slots, all, si0, si1, prevSlotDist, frameIndexRef.current);
+
+                  // ── 動力学スコアによる動的ロール再評価（確定後も継続的に補正）
+                  // Sticky 期間中はより高い閾値を要求し、syncError がある場合は閾値を下げる
+                  if (roleDetectedRef.current && si0 >= 0 && si1 >= 0
+                      && !isOccludedRef.current
+                      && slots[0].role !== null && slots[1].role !== null) {
+                    const dynDiff = slots[0].dynamicsScore - slots[1].dynamicsScore;
+                    const stickyMult = roleStableFramesRef.current >= STICKY_MIN_FRAMES ? 2.5 : 1.0;
+                    const dynThreshold = syncErrorRef.current
+                      ? DYNAMICS_REASSIGN_THRESHOLD * 0.6  // syncError 時は緩やかに
+                      : DYNAMICS_REASSIGN_THRESHOLD * stickyMult;
+                    if (Math.abs(dynDiff) > dynThreshold) {
+                      const dynSays0Leader = dynDiff > 0;
+                      if ((dynSays0Leader && slots[0].role !== 'leader') ||
+                          (!dynSays0Leader && slots[0].role !== 'follower')) {
+                        const r0 = slots[0].role, r1 = slots[1].role;
+                        slots[0].role = r1; slots[1].role = r0;
+                        roleStableFramesRef.current = 0;
+                        personRoles.set(si0, slots[0].role);
+                        personRoles.set(si1, slots[1].role);
+                      }
+                    }
+                  }
+
                   // ── プロファイル完成 → 体格ベースでロール初期割り当て
                   if (!profileCompleteRef.current && !roleDetectedRef.current
                       && slots[0].profile.sampleCount >= PROFILE_FRAMES
@@ -1837,6 +1972,7 @@ export function usePoseEstimation(
                           noseY: nose && (nose.visibility ?? 1) >= VIS_THRESHOLD ? nose.y : -1,
                           predictedX: -1, predictedY: -1,
                           omega: slot.omega,
+                          dynamicsScore: slot.dynamicsScore,
                         });
                       } else {
                         // 遮蔽中（未検出）: 予測座標のみ記録
@@ -1850,6 +1986,7 @@ export function usePoseEstimation(
                           predictedX: slot.phantomPos?.x ?? -1,
                           predictedY: slot.phantomPos?.y ?? -1,
                           omega: slot.omega,
+                          dynamicsScore: slot.dynamicsScore,
                         });
                       }
                     }

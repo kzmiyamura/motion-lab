@@ -1149,6 +1149,23 @@
 }
 .swapBtn:hover { background: rgba(255, 200, 0, 0.22); }
 
+.heightHintLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--color-fg-dim);
+  cursor: pointer;
+  user-select: none;
+  padding: 0 0.2rem;
+}
+.heightHintLabel input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: #66aaff;
+  cursor: pointer;
+}
+
 .exportLogBtn {
   height: 34px;
   padding: 0 0.6rem;

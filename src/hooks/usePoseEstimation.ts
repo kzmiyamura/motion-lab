@@ -95,7 +95,27 @@ type Centroid    = { x: number; y: number };
 type VelocityVec = { vx: number; vy: number };
 type AnkleFrame  = { lx: number; ly: number; rx: number; ry: number };
 type DrawColors  = { line: string; joint: string; lw: number; jr: number };
-type RoleSlot    = { hip: Centroid | null; hipZ: number; role: PersonRole; xHistory: number[]; staleness: number };
+
+/** 個人の体格プロファイル（プロファイリング期間中に蓄積） */
+interface PersonProfile {
+  totalHeight: number;        // 鼻〜足首中点の累積
+  totalShoulderWidth: number; // 肩幅の累積
+  totalHipWidth: number;      // 腰幅の累積
+  sampleCount: number;        // 有効サンプル数
+}
+const makeProfile = (): PersonProfile => ({ totalHeight: 0, totalShoulderWidth: 0, totalHipWidth: 0, sampleCount: 0 });
+
+type RoleSlot = {
+  hip:      Centroid | null;
+  hipZ:     number;
+  role:     PersonRole;
+  xHistory: number[];
+  staleness: number;
+  nose:     Centroid | null;  // 顔アンカー（Re-ID用）
+  velX:     number;           // 直前フレームの腰速度（オクルージョン予測用）
+  velY:     number;
+  profile:  PersonProfile;    // 体格プロファイル
+};
 
 // ── ロール描画カラー ──────────────────────────────────────────────────────
 const COLOR_LEADER:   DrawColors = { line: '#0066ff', joint: '#66aaff', lw: 3,   jr: 5 };
@@ -104,9 +124,13 @@ const COLOR_MAIN:     DrawColors = { line: 'rgba(255,60,60,0.95)',   joint: 'rgb
 const COLOR_OTHER:    DrawColors = { line: 'rgba(255,255,255,0.45)', joint: 'rgba(200,200,200,0.50)', lw: 1.5, jr: 3 };
 
 // ── ロール検出定数 ────────────────────────────────────────────────────────
-const ROLE_MATCH_DIST   = 0.55;  // スロットマッチング距離閾値（サルサは動きが大きいため余裕を持たせる）
+const ROLE_MATCH_DIST   = 0.55;  // スロットマッチング距離閾値
+const FACE_MATCH_DIST   = 0.40;  // 顔アンカーマッチング距離閾値
+const NOSE_SEP_MIN      = 0.08;  // 顔が独立していると見なす最小距離
 const PHASE_WINDOW      = 6;     // 位相モニタリングウィンドウ（サンプル数）
-const SLOT_STALE_FRAMES = 20;   // この連続フレーム数トラッキングが途切れたらスロット位置をリセット
+const SLOT_STALE_FRAMES = 20;    // この連続フレーム数途切れたらスロット位置をリセット
+const PROFILE_FRAMES    = 30;    // 体格プロファイリング期間（フレーム数）
+const OCCLUSION_DIST    = 0.18;  // オクルージョン判定距離（正規化座標）
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
 const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
 
@@ -705,14 +729,37 @@ function drawRoleBadge(
   ctx.restore();
 }
 
-// ── ロールスロットマッチング（Nearest Neighbor） ─────────────────────────
+// ── 体格スコア（リーダーらしさ） ─────────────────────────────────────────
+function profileLeaderScore(p: PersonProfile, heightWeight: number): number {
+  if (p.sampleCount === 0) return 0;
+  const avgH  = p.totalHeight       / p.sampleCount;
+  const avgSW = p.totalShoulderWidth / p.sampleCount;
+  const avgHW = p.totalHipWidth      / p.sampleCount;
+  const ratio = avgHW > 0 ? avgSW / avgHW : 1; // 逆三角形指数
+  return avgH * heightWeight + ratio;
+}
+
+function assignRolesByProfile(slots: [RoleSlot, RoleSlot], useHeight: boolean): void {
+  const w = useHeight ? 3 : 1;
+  const s0 = profileLeaderScore(slots[0].profile, w);
+  const s1 = profileLeaderScore(slots[1].profile, w);
+  if (s0 >= s1) { slots[0].role = 'leader'; slots[1].role = 'follower'; }
+  else          { slots[0].role = 'follower'; slots[1].role = 'leader'; }
+}
+
+// ── ロールスロットマッチング（顔アンカー優先 + Nearest Neighbor） ─────────
 
 function matchRoleSlots(
   all: NormalizedLandmark[][],
   slots: [RoleSlot, RoleSlot],
+  useNosePrimary: boolean,   // オクルージョン離脱直後や顔分離確認時に true
 ): [number, number] {
   if (all.length === 0) return [-1, -1];
-  const hips = all.map(lm => computeMidHip(lm));
+  const hips  = all.map(lm => computeMidHip(lm));
+  const noses = all.map(lm => {
+    const n = lm[0];
+    return (n && (n.visibility ?? 1) >= VIS_THRESHOLD) ? { x: n.x, y: n.y } : null;
+  });
 
   // 両スロット未初期化時: 最初の2人を割り当て
   if (!slots[0].hip && !slots[1].hip) {
@@ -722,6 +769,42 @@ function matchRoleSlots(
   const result: [number, number] = [-1, -1];
   const used = new Set<number>();
 
+  // ─ 顔優先マッチング（useNosePrimary=true かつ両スロットに顔アンカーがある場合）
+  if (useNosePrimary && slots[0].nose && slots[1].nose) {
+    for (let s = 0; s < 2; s++) {
+      if (!slots[s].nose) continue;
+      let minDist = FACE_MATCH_DIST, best = -1;
+      for (let i = 0; i < all.length; i++) {
+        if (used.has(i)) continue;
+        const n = noses[i];
+        if (!n) continue;
+        const d = Math.hypot(n.x - slots[s].nose!.x, n.y - slots[s].nose!.y);
+        if (d < minDist) { minDist = d; best = i; }
+      }
+      if (best >= 0) { result[s] = best; used.add(best); }
+    }
+    // 顔マッチで割り当てられなかったスロットは腰でフォールバック
+    for (let s = 0; s < 2; s++) {
+      if (result[s] >= 0) continue;
+      if (!slots[s].hip) {
+        for (let i = 0; i < all.length; i++) {
+          if (!used.has(i) && hips[i]) { result[s] = i; used.add(i); break; }
+        }
+      } else {
+        let minDist = ROLE_MATCH_DIST, best = -1;
+        for (let i = 0; i < all.length; i++) {
+          if (used.has(i)) continue;
+          const h = hips[i]; if (!h) continue;
+          const d = Math.hypot(h.x - slots[s].hip!.x, h.y - slots[s].hip!.y);
+          if (d < minDist) { minDist = d; best = i; }
+        }
+        if (best >= 0) { result[s] = best; used.add(best); }
+      }
+    }
+    return result;
+  }
+
+  // ─ 通常: 腰ベース Nearest Neighbor
   for (let s = 0; s < 2; s++) {
     if (!slots[s].hip) {
       for (let i = 0; i < all.length; i++) {
@@ -732,8 +815,7 @@ function matchRoleSlots(
     let minDist = ROLE_MATCH_DIST, best = -1;
     for (let i = 0; i < all.length; i++) {
       if (used.has(i)) continue;
-      const h = hips[i];
-      if (!h) continue;
+      const h = hips[i]; if (!h) continue;
       const d = Math.hypot(h.x - slots[s].hip!.x, h.y - slots[s].hip!.y);
       if (d < minDist) { minDist = d; best = i; }
     }
@@ -751,6 +833,7 @@ export function usePoseEstimation(
   bpm = 0,
   isMirrored = false,
   salsaStyle: SalsaStyle = 'on1',
+  heightLeaderHint = false,   // true = 背が高い方をリーダーとして重み付け
 ): UsePoseEstimationResult {
   const modeRef      = useRef<VizMode>(mode);
   modeRef.current    = mode;
@@ -798,13 +881,22 @@ export function usePoseEstimation(
   const [sequence, setSequence] = useState<SequenceEvent[]>([]);
 
   // ── ロール判定（On1/On2）
-  const makeRoleSlot = (): RoleSlot => ({ hip: null, hipZ: 0, role: null, xHistory: [], staleness: 0 });
+  const makeRoleSlot = (): RoleSlot => ({
+    hip: null, hipZ: 0, role: null, xHistory: [], staleness: 0,
+    nose: null, velX: 0, velY: 0, profile: makeProfile(),
+  });
   const roleSlots          = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
   const roleDetectedRef    = useRef(false);
   const prevBeatNumRef     = useRef<number | undefined>(undefined);
   const [syncError, setSyncError]     = useState(false);
   const syncErrorRef       = useRef(false);
   const [roleDetected, setRoleDetected] = useState(false);
+
+  // 体格プロファイル & オクルージョン管理
+  const profileCompleteRef  = useRef(false);
+  const isOccludedRef       = useRef(false);
+  const heightLeaderHintRef = useRef(heightLeaderHint);
+  heightLeaderHintRef.current = heightLeaderHint;
 
   // ── フレームバッファ & アノテーション
   const frameBufferRef      = useRef<FrameSnapshot[]>([]);
@@ -823,6 +915,8 @@ export function usePoseEstimation(
   const clearRoles = useCallback(() => {
     roleSlots.current        = [makeRoleSlot(), makeRoleSlot()];
     roleDetectedRef.current  = false;
+    profileCompleteRef.current = false;
+    isOccludedRef.current    = false;
     prevBeatNumRef.current   = undefined;
     syncErrorRef.current     = false;
     setSyncError(false);
@@ -1080,7 +1174,31 @@ export function usePoseEstimation(
 
                   // ── ロールスロット更新 & 役割判定 ────────────────────────
                   const slots   = roleSlots.current;
-                  const [si0, si1] = matchRoleSlots(all, slots);
+
+                  // オクルージョン判定（マッチング前に前フレームのスロット距離で判定）
+                  const prevSlotDist = (slots[0].hip && slots[1].hip)
+                    ? Math.hypot(slots[0].hip.x - slots[1].hip.x, slots[0].hip.y - slots[1].hip.y)
+                    : Infinity;
+                  const wasOccluded = isOccludedRef.current;
+                  if (prevSlotDist < OCCLUSION_DIST) {
+                    isOccludedRef.current = true;
+                  } else if (wasOccluded && prevSlotDist > OCCLUSION_DIST * 1.6) {
+                    // 十分離れたらオクルージョン解除
+                    isOccludedRef.current = false;
+                  }
+                  const justSeparated = wasOccluded && !isOccludedRef.current;
+
+                  // 顔が独立して検出されているか（密着中でない場合のみ有効）
+                  const detectedNoses = all.map(lm => {
+                    const n = lm[0];
+                    return (n && (n.visibility ?? 1) >= VIS_THRESHOLD) ? { x: n.x, y: n.y } : null;
+                  });
+                  const noseSep = (all.length >= 2 && detectedNoses[0] && detectedNoses[1])
+                    ? Math.hypot(detectedNoses[0].x - detectedNoses[1].x, detectedNoses[0].y - detectedNoses[1].y)
+                    : 0;
+                  const facePriority = justSeparated || noseSep >= NOSE_SEP_MIN;
+
+                  const [si0, si1] = matchRoleSlots(all, slots, facePriority);
                   const personRoles = new Map<number, PersonRole>();
 
                   // ビート番号（役割判定に使用）
@@ -1095,19 +1213,32 @@ export function usePoseEstimation(
                   for (let s = 0; s < 2; s++) {
                     const si = s === 0 ? si0 : si1;
                     if (si < 0) {
-                      // トラッキング途切れ: xHistory をクリアして古い方向履歴による誤検知を防ぐ
+                      // トラッキング途切れ: 速度で位置を予測（オクルージョン中の Re-ID 精度向上）
+                      if (isOccludedRef.current && slots[s].hip) {
+                        slots[s].hip = { x: slots[s].hip!.x + slots[s].velX, y: slots[s].hip!.y + slots[s].velY };
+                      }
                       slots[s].xHistory = [];
                       slots[s].staleness++;
-                      // N フレーム以上途切れたらスロット位置をリセット → 再検出時に正しく再割り当て
-                      if (slots[s].staleness >= SLOT_STALE_FRAMES) {
-                        slots[s].hip = null;
-                      }
+                      if (slots[s].staleness >= SLOT_STALE_FRAMES) slots[s].hip = null;
                       continue;
                     }
                     slots[s].staleness = 0;
                     const hip = computeMidHip(all[si]);
                     if (!hip) continue;
                     const newZ = ((all[si][23]?.z ?? 0) + (all[si][24]?.z ?? 0)) / 2;
+
+                    // 速度を記録
+                    if (slots[s].hip) {
+                      slots[s].velX = hip.x - slots[s].hip!.x;
+                      slots[s].velY = hip.y - slots[s].hip!.y;
+                    }
+
+                    // 顔アンカーを更新
+                    const n = all[si][0];
+                    if (n && (n.visibility ?? 1) >= VIS_THRESHOLD) {
+                      slots[s].nose = { x: n.x, y: n.y };
+                    }
+
                     // X方向履歴（位相モニタリング用）
                     if (slots[s].hip) {
                       const dx = hip.x - slots[s].hip!.x;
@@ -1118,28 +1249,52 @@ export function usePoseEstimation(
                     }
                     slots[s].hip  = hip;
                     slots[s].hipZ = newZ;
+
+                    // ── 体格プロファイル蓄積（プロファイリング期間中・2人同時検出時）
+                    if (!profileCompleteRef.current && si0 >= 0 && si1 >= 0) {
+                      const lm = all[si];
+                      const nose = lm[0], sL = lm[11], sR = lm[12], hL = lm[23], hR = lm[24], aL = lm[27], aR = lm[28];
+                      if (nose && aL && aR && (nose.visibility ?? 1) >= VIS_THRESHOLD) {
+                        slots[s].profile.totalHeight += Math.abs(nose.y - (aL.y + aR.y) / 2);
+                        slots[s].profile.sampleCount++;
+                      }
+                      if (sL && sR && (sL.visibility ?? 1) >= VIS_THRESHOLD && (sR.visibility ?? 1) >= VIS_THRESHOLD) {
+                        slots[s].profile.totalShoulderWidth += Math.abs(sR.x - sL.x);
+                      }
+                      if (hL && hR) {
+                        slots[s].profile.totalHipWidth += Math.abs(hR.x - hL.x);
+                      }
+                    }
+
                     if (slots[s].role) personRoles.set(si, slots[s].role);
                   }
 
-                  // ── ブレイクステップでロール判定（初回のみ）
-                  // 2人同時検出時はZ軸差分で判定。1人のみの場合は暫定でリーダーとして割り当て
+                  // ── プロファイル完成 → 体格ベースでロール初期割り当て
+                  if (!profileCompleteRef.current && !roleDetectedRef.current
+                      && slots[0].profile.sampleCount >= PROFILE_FRAMES
+                      && slots[1].profile.sampleCount >= PROFILE_FRAMES) {
+                    profileCompleteRef.current = true;
+                    assignRolesByProfile(slots, heightLeaderHintRef.current);
+                    roleDetectedRef.current = true;
+                    setRoleDetected(true);
+                    if (si0 >= 0) personRoles.set(si0, slots[0].role);
+                    if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                  }
+
+                  // ── プロファイル未完の場合: BPMがあれば暫定ロール割り当て（1人のみ検出でも可）
                   if (!roleDetectedRef.current && (si0 >= 0 || si1 >= 0) && currentBeatNum !== undefined) {
                     const breakBeat = styleRef.current === 'on1' ? 1 : 2;
                     if (currentBeatNum === breakBeat && prevBeatNumRef.current !== breakBeat) {
                       if (si0 >= 0 && si1 >= 0) {
-                        // 2人同時検出: Z軸差分でリーダー判定（前方に出た方がリーダー）
+                        // 2人同時検出かつプロファイル未完: Z軸差分で暫定判定
                         const dz0 = slots[0].hipZ - prevZ[0];
                         const dz1 = slots[1].hipZ - prevZ[1];
-                        if (dz0 < dz1) {
-                          slots[0].role = 'leader'; slots[1].role = 'follower';
-                        } else {
-                          slots[0].role = 'follower'; slots[1].role = 'leader';
-                        }
+                        if (dz0 < dz1) { slots[0].role = 'leader'; slots[1].role = 'follower'; }
+                        else           { slots[0].role = 'follower'; slots[1].role = 'leader'; }
                       } else {
-                        // 1人のみ検出: 暫定でリーダーとして割り当て（スワップで修正可能）
+                        // 1人のみ: 暫定リーダー
                         const s = si0 >= 0 ? 0 : 1;
                         slots[s].role = 'leader';
-                        // 相手スロットは null のまま — 検出され次第自動割り当て
                       }
                       roleDetectedRef.current = true;
                       setRoleDetected(true);

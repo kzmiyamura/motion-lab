@@ -116,6 +116,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const [vizMode, setVizMode] = useState<VizMode>('off');
   const [lockModeActive, setLockModeActive] = useState(false);
   const [salsaStyle, setSalsaStyle] = useState<SalsaStyle>('on1');
+  const [heightLeaderHint, setHeightLeaderHint] = useState(false);
 
   // Zoom gesture refs
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
@@ -129,7 +130,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     annotations, exportDebugLog,
   } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
-    bpm, isMirrored, salsaStyle,
+    bpm, isMirrored, salsaStyle, heightLeaderHint,
   );
 
   // ── BPM 計測（音声モード）
@@ -658,6 +659,17 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               </button>
             ))}
           </div>
+        )}
+        {/* 背が高い方をリーダーにするヒントチェックボックス */}
+        {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (
+          <label className={styles.heightHintLabel}>
+            <input
+              type="checkbox"
+              checked={heightLeaderHint}
+              onChange={e => { setHeightLeaderHint(e.target.checked); clearRoles(); }}
+            />
+            背が高い方がリーダー
+          </label>
         )}
         {/* Swap Roles ボタン（ロール判定済み時） */}
         {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && roleDetected && (

@@ -5,6 +5,7 @@ import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/loca
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import { useWakeLock } from '../hooks/useWakeLock';
 import { usePoseEstimation, type VizMode } from '../hooks/usePoseEstimation';
+import { SequenceView } from './SequenceView';
 import styles from './FilePlayer.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -112,7 +113,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
 
-  const { lockAt, unlock, isLocked } = usePoseEstimation(
+  const { lockAt, unlock, isLocked, sequence, clearSequence } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored,
   );
@@ -212,7 +213,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     // ロック状態をリセット
     unlock();
     setLockModeActive(false);
-  }, [bpm, unlock]);
+    clearSequence();
+  }, [bpm, unlock, clearSequence]);
 
   const handleFileSelect = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
@@ -891,6 +893,16 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             </div>
           )}
         </div>
+      )}
+
+      {/* ── Sequence View ── */}
+      {source?.isVideo && vizMode !== 'off' && (
+        <SequenceView
+          events={sequence}
+          duration={duration}
+          currentTime={currentTime}
+          onClear={clearSequence}
+        />
       )}
 
       {/* ── File selection UI ── */}

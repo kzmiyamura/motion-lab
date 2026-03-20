@@ -5,6 +5,14 @@ interface NormalizedLandmark { x: number; y: number; z: number; visibility?: num
 
 export type VizMode = 'off' | 'full' | 'salsa' | 'trail';
 
+export interface SequenceEvent {
+  id: number;
+  time: number;       // video currentTime in seconds
+  action: string;     // 'Turn' | 'SideStep' | 'Dip' | 'CBL' | 'Hammerlock' | 'Basic'
+  quality: number;    // 0.0 - 1.0
+  beatNum?: number;   // 1-8
+}
+
 export interface UsePoseEstimationResult {
   /** CSS transform 逆変換済みのキャンバス座標を受け取り、最近傍の人物をロックオン */
   lockAt: (canvasX: number, canvasY: number) => void;
@@ -12,6 +20,10 @@ export interface UsePoseEstimationResult {
   unlock: () => void;
   /** 現在ロック中かどうか（ボタン表示用） */
   isLocked: boolean;
+  /** 検出されたシーケンスイベント */
+  sequence: SequenceEvent[];
+  /** シーケンスをクリア */
+  clearSequence: () => void;
 }
 
 // ── 定数 ─────────────────────────────────────────────────────────────────
@@ -33,6 +45,9 @@ const MOVEMENT_TH   = 0.015; // 正規化座標での閾値
 const TRAIL_LENGTH  = 10;    // 足首軌跡のフレーム数
 const OCCLUSION_MAX = 12;    // オクルージョン時の最大予測フレーム数
 
+// パターン検出
+const COOLDOWN_SEC  = 1.5;   // 同じアクション間の最小インターバル（秒）
+
 // ── 型 ───────────────────────────────────────────────────────────────────
 
 type Connection = { start: number; end: number };
@@ -40,6 +55,182 @@ type Letterbox  = { offsetX: number; offsetY: number; renderW: number; renderH: 
 type Centroid   = { x: number; y: number };
 type VelocityVec = { vx: number; vy: number };
 type AnkleFrame  = { lx: number; ly: number; rx: number; ry: number };
+
+interface PatternDetectionState {
+  turnFrames: number;
+  sideFrames: number;
+  dipFrames: number;
+  cblFrames: number;
+  hammerFrames: number;
+  baseShoulderSpan: number;   // -1 = not initialized
+  baseHipX: number;           // -1 = not initialized
+  lastEventTime: Record<string, number>;  // action → last video time
+}
+
+function makeInitialPatternState(): PatternDetectionState {
+  return {
+    turnFrames: 0,
+    sideFrames: 0,
+    dipFrames: 0,
+    cblFrames: 0,
+    hammerFrames: 0,
+    baseShoulderSpan: -1,
+    baseHipX: -1,
+    lastEventTime: {},
+  };
+}
+
+function runPatternDetection(
+  lm: NormalizedLandmark[],
+  videoTime: number,
+  bpmVal: number,
+  state: PatternDetectionState,
+  emit: (action: string, quality: number, beatNum: number | undefined) => void,
+) {
+  const beatNum = bpmVal > 0
+    ? Math.floor((videoTime * bpmVal / 60) % 8) + 1
+    : undefined;
+
+  const canEmit = (action: string) => {
+    const last = state.lastEventTime[action] ?? -Infinity;
+    return videoTime - last >= COOLDOWN_SEC;
+  };
+
+  const doEmit = (action: string, quality: number) => {
+    state.lastEventTime[action] = videoTime;
+    emit(action, quality, beatNum);
+  };
+
+  // Key landmarks
+  const nose = lm[0];
+  const sL   = lm[11];  // left shoulder
+  const sR   = lm[12];  // right shoulder
+  const hL   = lm[23];  // left hip
+  const hR   = lm[24];  // right hip
+  const aL   = lm[27];  // left ankle
+  const aR   = lm[28];  // right ankle
+  const elbowR  = lm[14]; // right elbow
+  const wristR  = lm[16]; // right wrist
+  const shoulderR = lm[12]; // right shoulder (same as sR)
+
+  const hasVis = (landmark: NormalizedLandmark | undefined) =>
+    landmark !== undefined && (landmark.visibility ?? 1) >= VIS_THRESHOLD;
+
+  // Hip mid-point
+  const hipMidX = hasVis(hL) && hasVis(hR)
+    ? (hL.x + hR.x) / 2
+    : hasVis(hL) ? hL.x : hasVis(hR) ? hR.x : null;
+  const hipMidY = hasVis(hL) && hasVis(hR)
+    ? (hL.y + hR.y) / 2
+    : hasVis(hL) ? hL.y : hasVis(hR) ? hR.y : null;
+
+  // ── 1. Turn detection ────────────────────────────────────────────────
+  if (hasVis(sL) && hasVis(sR)) {
+    const shoulderSpan = Math.abs(sR.x - sL.x);
+
+    if (state.baseShoulderSpan < 0) {
+      state.baseShoulderSpan = shoulderSpan;
+    }
+
+    const isTurning = shoulderSpan < state.baseShoulderSpan * 0.40;
+
+    if (isTurning) {
+      state.turnFrames++;
+      if (state.turnFrames >= 4 && canEmit('Turn')) {
+        const quality = Math.min(1, 0.5 + state.turnFrames * 0.05);
+        doEmit('Turn', quality);
+        state.turnFrames = 0;
+      }
+    } else {
+      state.turnFrames = 0;
+      // Slowly update baseline when not turning
+      state.baseShoulderSpan = state.baseShoulderSpan * 0.95 + shoulderSpan * 0.05;
+    }
+  }
+
+  // ── 2. SideStep detection ─────────────────────────────────────────────
+  if (hipMidX !== null && hasVis(aL) && hasVis(aR)) {
+    const hipX = hipMidX;
+    const maxDev = Math.max(Math.abs(aL.x - hipX), Math.abs(aR.x - hipX));
+
+    if (maxDev > 0.20) {
+      state.sideFrames++;
+      if (state.sideFrames >= 3 && canEmit('SideStep')) {
+        doEmit('SideStep', 0.7);
+        state.sideFrames = 0;
+      }
+    } else {
+      state.sideFrames = 0;
+    }
+  }
+
+  // ── 3. Dip detection ──────────────────────────────────────────────────
+  if (nose && hasVis(nose) && hipMidY !== null) {
+    // In MediaPipe normalized coords, higher Y = lower on screen
+    if (nose.y > hipMidY + 0.05) {
+      state.dipFrames++;
+      if (state.dipFrames >= 5 && canEmit('Dip')) {
+        const quality = Math.min(1, 0.6 + state.dipFrames * 0.04);
+        doEmit('Dip', quality);
+        state.dipFrames = 0;
+      }
+    } else {
+      state.dipFrames = 0;
+    }
+  }
+
+  // ── 4. CBL (Cross Body Lead) detection ───────────────────────────────
+  if (hipMidX !== null) {
+    const hipX = hipMidX;
+
+    if (state.baseHipX < 0) {
+      state.baseHipX = hipX;
+    }
+
+    const hipShift = Math.abs(hipX - state.baseHipX);
+
+    if (hipShift > 0.20) {
+      state.cblFrames++;
+      if (state.cblFrames >= 5 && canEmit('CBL')) {
+        doEmit('CBL', 0.65);
+        state.cblFrames = 0;
+        state.baseHipX = hipX; // reset baseline after emit
+      }
+    } else {
+      state.cblFrames = 0;
+      // Slowly update baseHipX when stable
+      state.baseHipX = state.baseHipX * 0.98 + hipX * 0.02;
+    }
+  }
+
+  // ── 5. Hammerlock detection ──────────────────────────────────────────
+  if (hasVis(shoulderR) && hasVis(elbowR) && hasVis(wristR) && hipMidY !== null) {
+    // Calculate angle at right elbow (landmarks 12, 14, 16)
+    const ax = shoulderR.x - elbowR.x;
+    const ay = shoulderR.y - elbowR.y;
+    const bx = wristR.x - elbowR.x;
+    const by = wristR.y - elbowR.y;
+    const dot = ax * bx + ay * by;
+    const magA = Math.hypot(ax, ay);
+    const magB = Math.hypot(bx, by);
+    const elbowAngle = magA > 0 && magB > 0
+      ? Math.acos(Math.max(-1, Math.min(1, dot / (magA * magB)))) * 180 / Math.PI
+      : 180;
+
+    const isHammer = elbowAngle < 70 && wristR.y > hipMidY;
+
+    if (isHammer) {
+      state.hammerFrames++;
+      if (state.hammerFrames >= 4 && canEmit('Hammerlock')) {
+        const quality = Math.min(1, 0.5 + state.hammerFrames * 0.05);
+        doEmit('Hammerlock', quality);
+        state.hammerFrames = 0;
+      }
+    } else {
+      state.hammerFrames = 0;
+    }
+  }
+}
 
 // ── letterbox 計算（object-fit: contain 相当） ────────────────────────────
 
@@ -471,6 +662,21 @@ export function usePoseEstimation(
   // ── 適応型サンプリング
   const detectIntervalRef = useRef(50);
 
+  // ── パターン検出状態
+  const patternStateRef = useRef<PatternDetectionState>(makeInitialPatternState());
+
+  // ── イベントID
+  const eventIdRef = useRef(0);
+
+  // ── シーケンス
+  const [sequence, setSequence] = useState<SequenceEvent[]>([]);
+
+  // ── シーケンスクリア
+  const clearSequence = useCallback(() => {
+    setSequence([]);
+    patternStateRef.current = makeInitialPatternState();
+  }, []);
+
   // ── ロックオン（CSS transform 逆変換済みのキャンバス座標を受け取る）
   const lockAt = useCallback((canvasX: number, canvasY: number) => {
     const video = videoRef.current, canvas = canvasRef.current;
@@ -491,6 +697,7 @@ export function usePoseEstimation(
     velocityRef.current      = { vx: 0, vy: 0 };
     occlusionCountRef.current = 0;
     ankleHistoryRef.current   = [];
+    patternStateRef.current   = makeInitialPatternState();
     setIsLocked(true);
   }, [videoRef, canvasRef]);
 
@@ -501,6 +708,7 @@ export function usePoseEstimation(
     velocityRef.current       = { vx: 0, vy: 0 };
     occlusionCountRef.current  = 0;
     ankleHistoryRef.current    = [];
+    patternStateRef.current    = makeInitialPatternState();
     setIsLocked(false);
   }, []);
 
@@ -645,6 +853,24 @@ export function usePoseEstimation(
                     if (ankleHistoryRef.current.length > TRAIL_LENGTH) ankleHistoryRef.current.shift();
                   }
 
+                  // ── パターン検出（再生中のみ）
+                  runPatternDetection(
+                    all[targetIdx],
+                    video.currentTime,
+                    bpmRef.current,
+                    patternStateRef.current,
+                    (action, quality, beatNum) => {
+                      const evt: SequenceEvent = {
+                        id: eventIdRef.current++,
+                        time: video.currentTime,
+                        action,
+                        quality,
+                        beatNum,
+                      };
+                      setSequence(prev => [...prev, evt].slice(-300));
+                    },
+                  );
+
                   // ── 描画
                   const isLockMode = lockedRef.current !== null;
 
@@ -719,5 +945,5 @@ export function usePoseEstimation(
     };
   }, [enabled, videoRef, canvasRef]);
 
-  return { lockAt, unlock, isLocked };
+  return { lockAt, unlock, isLocked, sequence, clearSequence };
 }

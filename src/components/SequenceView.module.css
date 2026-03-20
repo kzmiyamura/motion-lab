@@ -1,0 +1,156 @@
+.wrap {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid #21262d;
+  font-size: 0.82rem;
+  gap: 8px;
+}
+
+.title {
+  flex: 1;
+  color: #58a6ff;
+  font-weight: 600;
+}
+
+.btnGroup {
+  display: flex;
+  gap: 6px;
+}
+
+.clearBtn,
+.copyBtn {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #c9d1d9;
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.clearBtn:hover,
+.copyBtn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.timeline {
+  position: relative;
+  height: 36px;
+  padding: 0 8px;
+  margin: 4px 0;
+  background: #0a0f16;
+}
+
+.timelineBar {
+  position: absolute;
+  inset: 4px 8px;
+  background: #161b22;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.timelineCursor {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.4);
+  height: 100%;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.timelineChip {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 12px;
+  border-radius: 6px;
+  min-width: 8px;
+  opacity: 0.85;
+}
+
+.timeLabels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #555;
+  padding: 0 8px;
+  margin-bottom: 2px;
+}
+
+.eventList {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.eventRow {
+  display: flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-bottom: 1px solid #1a2030;
+  font-size: 0.78rem;
+  gap: 8px;
+}
+
+.eventRow:hover {
+  background: #1a2030;
+}
+
+.timeTag {
+  color: #8b949e;
+  min-width: 52px;
+  font-family: monospace;
+}
+
+.actionBadge {
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 0.72rem;
+  color: #fff;
+}
+
+.quality {
+  color: #f0c040;
+  letter-spacing: 0.05em;
+  font-size: 0.75rem;
+  flex: 1;
+}
+
+.beatTag {
+  color: #666;
+  font-size: 0.7rem;
+  min-width: 28px;
+  text-align: right;
+}
+
+.empty {
+  text-align: center;
+  padding: 16px;
+  color: #444;
+  font-size: 0.8rem;
+}
+
+.toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #22c55e;
+  color: #fff;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  z-index: 9999;
+  pointer-events: none;
+}

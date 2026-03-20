@@ -1765,6 +1765,22 @@ export function usePoseEstimation(
                   // ── ロールスロット更新 & 役割判定 ────────────────────────
                   const slots   = roleSlots.current;
 
+                  // ── [Frame Top] ps リアクティブ整合チェック（第0原則の先頭守護）──────
+                  // per-personループより先に実行することで、ループ内の personRoles.set が
+                  // 必ず ps確定済みの正しいロールを読む。genderLocked確定後は毎フレーム最優先。
+                  if (genderLockedRef.current && !manualRoleLockedRef.current) {
+                    const ps0t = profileLeaderScore(slots[0].profile, 1);
+                    const ps1t = profileLeaderScore(slots[1].profile, 1);
+                    if (ps0t > 0 && ps1t > 0) {
+                      const exp0t: PersonRole = ps0t >= ps1t ? 'leader' : 'follower';
+                      const exp1t: PersonRole = ps0t >= ps1t ? 'follower' : 'leader';
+                      if (slots[0].role !== exp0t || slots[1].role !== exp1t) {
+                        slots[0].role = exp0t;
+                        slots[1].role = exp1t;
+                      }
+                    }
+                  }
+
                   // オクルージョン判定（マッチング前に前フレームのスロット距離で判定）
                   const prevSlotDist = (slots[0].hip && slots[1].hip)
                     ? Math.hypot(slots[0].hip.x - slots[1].hip.x, slots[0].hip.y - slots[1].hip.y)
@@ -1988,6 +2004,36 @@ export function usePoseEstimation(
                     setRoleDetected(true);
                     if (si0 >= 0) personRoles.set(si0, slots[0].role);
                     if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                    // ── profileComplete発火フレームでdebugInfoを即時強制更新（スロットル待ちなし）
+                    // ps値とRole表示が同一フレームで確定することを保証する
+                    setDebugInfo({
+                      slots: [0, 1].map(s => {
+                        const sl = slots[s as 0 | 1];
+                        const p  = sl.profile;
+                        return {
+                          slotIdx: s as 0 | 1,
+                          role: sl.role,
+                          dynamicsScore: sl.dynamicsScore,
+                          omega: sl.omega,
+                          zFront: sl.zFront,
+                          isDetected: (s === 0 ? si0 : si1) >= 0,
+                          swh: 0, swhAvg: 0,
+                          avgSW: p.shoulderSamples > 0 ? p.totalShoulderWidth / p.shoulderSamples : 0,
+                          avgBH: 0,
+                          shr: p.maxHipX > 0 ? p.maxShoulderX / p.maxHipX : 0,
+                          frontalN: p.frontalSampleCount,
+                          profileScore: profileLeaderScore(p, 1),
+                          profileSamples: p.shoulderSamples,
+                          shoulderSamples: p.shoulderSamples,
+                          isFrontal: false,
+                        } as PoseDebugSlot;
+                      }) as [PoseDebugSlot, PoseDebugSlot],
+                      isOccluded: isOccludedRef.current,
+                      zOrderFront: slots[0].zFront ? 0 : slots[1].zFront ? 1 : -1,
+                      profileComplete: true,
+                      genderLocked: true,
+                      manualLocked: manualRoleLockedRef.current,
+                    });
                   }
 
                   // ── ロール割り当ては ps（3D SHR）完了時のみ。BPM暫定・逆ロール伝播は廃止 ──
@@ -2106,8 +2152,8 @@ export function usePoseEstimation(
                       }
                     }
 
-                    // ── デバッグパネル更新（10フレームごと）
-                    if (frameIndexRef.current % 10 === 0) {
+                    // ── デバッグパネル更新（毎フレーム — psとRole表示のズレをゼロに）
+                    {
                       const zOF = slots[0].zFront ? 0 : slots[1].zFront ? 1 : -1;
                       // 各スロットの Cold Start スコアデバッグ値を計算
                       const makeDebugSlot = (s: 0 | 1): PoseDebugSlot => {

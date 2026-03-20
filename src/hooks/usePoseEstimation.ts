@@ -185,6 +185,11 @@ const STICKY_MIN_FRAMES       = 45;   // 粘り強い追跡を有効化するま
 const STICKY_HARD_LOCK_FRAMES = 100;  // この安定フレーム数を超えたら dynamics による上書きを完全禁止
 const POST_OCCLUSION_COOLDOWN = 15;   // オクルージョン解除直後の dynamics 再評価スキップフレーム数
 
+// ── Self-Healing 定数 ──────────────────────────────────────────────────────
+const SELF_HEAL_INVERSION_FRAMES  = 30;  // スコア逆転がこのフレーム数続いたら自動復旧を検討
+const SELF_HEAL_OCCLUSION_WINDOW  = 90;  // 重なり終了後このフレーム数以内なら自動復旧対象
+const MANUAL_SWAP_LOCK_FRAMES     = 90;  // 手動Swap後に自動補正をブロックするフレーム数
+
 // ── ダンス動力学（Dynamics）定数 ─────────────────────────────────────────
 const INCEPTION_VEL_THRESHOLD    = 0.012; // 先行動作の動き出し速度閾値（正規化座標/frame）
 const INCEPTION_FRAME_WINDOW     = 4;     // 先行動作として認める最大フレーム差（~130ms @ 30fps）
@@ -1374,7 +1379,11 @@ export function usePoseEstimation(
   const syncErrorRef       = useRef(false);
   const [roleDetected, setRoleDetected] = useState(false);
   const [debugInfo, setDebugInfo]       = useState<PoseDebugInfo | null>(null);
-  const postOcclusionCooldownRef        = useRef(0); // オクルージョン解除後の冷却カウンタ
+  const postOcclusionCooldownRef        = useRef(0);  // オクルージョン解除後の冷却カウンタ
+  // Self-Healing refs
+  const scoreInversionFramesRef        = useRef(0);  // dynamics スコア逆転継続フレーム数
+  const lastOcclusionEndFrameRef       = useRef(-1); // 最後のオクルージョン解除フレームインデックス
+  const manualSwapLockFramesRef        = useRef(0);  // 手動Swap後の自動補正ブロックカウンタ
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
@@ -1407,6 +1416,9 @@ export function usePoseEstimation(
     profileCompleteRef.current  = false;
     isOccludedRef.current            = false;
     postOcclusionCooldownRef.current = 0;
+    scoreInversionFramesRef.current  = 0;
+    lastOcclusionEndFrameRef.current = -1;
+    manualSwapLockFramesRef.current  = 0;
     analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
     syncErrorRef.current     = false;
@@ -1425,7 +1437,17 @@ export function usePoseEstimation(
     const r1 = slots[1].role;
     slots[0].role = r1;
     slots[1].role = r0;
-    roleStableFramesRef.current = 0;  // スワップ後は Sticky カウンタをリセット
+    // stbl リセット（Sticky を解除）
+    roleStableFramesRef.current = 0;
+    // dynamicsScore・omegaHist をクリア — 直前までの誤ったスコア蓄積を破棄
+    slots[0].dynamicsScore = 0;
+    slots[1].dynamicsScore = 0;
+    slots[0].omegaHist = [];
+    slots[1].omegaHist = [];
+    // Self-Healing カウンタをリセット
+    scoreInversionFramesRef.current = 0;
+    // 手動Swap後 90f は自動補正をブロック（正解を「正解」として維持）
+    manualSwapLockFramesRef.current = MANUAL_SWAP_LOCK_FRAMES;
 
     const entry: AnnotationEntry = {
       errorFrameIndex: frameIndexRef.current,
@@ -2002,6 +2024,59 @@ export function usePoseEstimation(
                     // ターン中 or 片方がトラッキング不能な場合はエラーを自動クリア（stale状態での誤表示防止）
                     syncErrorRef.current = false;
                     setSyncError(false);
+                  }
+
+                  // ── Self-Healing: ロール反転自動復旧 ──────────────────────────────
+                  // justSeparated のタイミングを記録（重なり終了フレーム）
+                  if (justSeparated) {
+                    lastOcclusionEndFrameRef.current = frameIndexRef.current;
+                  }
+
+                  // 手動Swap ロックカウンタを消費
+                  if (manualSwapLockFramesRef.current > 0) {
+                    manualSwapLockFramesRef.current--;
+                  } else if (roleDetectedRef.current && si0 >= 0 && si1 >= 0 && !isOccludedRef.current) {
+                    // ① 移動方向の矛盾検知 + ② 信頼度逆転: dynamicsScore が逆転中か判定
+                    const lSlot = slots[0].role === 'leader' ? slots[0] : slots[1];
+                    const fSlot = slots[0].role === 'follower' ? slots[0] : slots[1];
+                    const isScoreInverted = lSlot.dynamicsScore < fSlot.dynamicsScore;
+
+                    // 速度方向の矛盾: 「リーダー」がフォロワーに向かって突き進んでいる
+                    // (toFollower と leader.velX が同符号 = leader が follower に接近中)
+                    const velContradiction = (() => {
+                      if (!lSlot.hip || !fSlot.hip) return false;
+                      const toFollower = fSlot.hip.x - lSlot.hip.x;
+                      return Math.abs(toFollower) > 0.05
+                        && Math.sign(toFollower) === Math.sign(lSlot.velX)
+                        && Math.abs(lSlot.velX) > 0.005;
+                    })();
+
+                    if (isScoreInverted || velContradiction) {
+                      scoreInversionFramesRef.current++;
+                    } else {
+                      scoreInversionFramesRef.current = Math.max(0, scoreInversionFramesRef.current - 2);
+                    }
+
+                    // 重なり直後 + 矛盾が閾値フレーム継続 → ロール自動復旧
+                    const framesSinceOcclusion = frameIndexRef.current - lastOcclusionEndFrameRef.current;
+                    const recentOcclusion = lastOcclusionEndFrameRef.current >= 0
+                      && framesSinceOcclusion < SELF_HEAL_OCCLUSION_WINDOW;
+
+                    if (scoreInversionFramesRef.current >= SELF_HEAL_INVERSION_FRAMES && recentOcclusion) {
+                      const higherIdx = slots[0].dynamicsScore >= slots[1].dynamicsScore ? 0 : 1;
+                      if (slots[higherIdx].role !== 'leader') {
+                        // ロール反転（dynamicsScore が高い方を Leader に）
+                        const r0 = slots[0].role, r1 = slots[1].role;
+                        slots[0].role = r1; slots[1].role = r0;
+                        if (si0 >= 0) personRoles.set(si0, slots[0].role);
+                        if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                        roleStableFramesRef.current = 0;
+                        postOcclusionCooldownRef.current = POST_OCCLUSION_COOLDOWN;
+                      }
+                      // カウンタリセット（連続発火防止）
+                      scoreInversionFramesRef.current = 0;
+                      lastOcclusionEndFrameRef.current = -1;
+                    }
                   }
 
                   // ── フレームスナップショットをバッファに追加

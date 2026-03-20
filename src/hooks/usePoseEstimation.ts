@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { detectGendersFromVideo, type FaceGenderResult } from '../utils/genderInference';
 
 // @mediapipe/tasks-vision の exports 形式が非標準のため型を自前定義
 interface NormalizedLandmark { x: number; y: number; z: number; visibility?: number; }
@@ -1428,6 +1429,9 @@ export function usePoseEstimation(
   const scoreInversionFramesRef        = useRef(0);  // dynamics スコア逆転継続フレーム数
   const lastOcclusionEndFrameRef       = useRef(-1); // 最後のオクルージョン解除フレームインデックス
   const manualSwapLockFramesRef        = useRef(0);  // 手動Swap後の自動補正ブロックカウンタ
+  // Cold Start refs（face-api.js による初期性別判定）
+  const coldStartDoneRef               = useRef(false); // 発火済みフラグ（1回限り）
+  const coldStartResultRef             = useRef<FaceGenderResult[] | null>(null); // face-api 結果保持
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
@@ -1463,6 +1467,8 @@ export function usePoseEstimation(
     scoreInversionFramesRef.current  = 0;
     lastOcclusionEndFrameRef.current = -1;
     manualSwapLockFramesRef.current  = 0;
+    coldStartDoneRef.current         = false;
+    coldStartResultRef.current       = null;
     analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
     syncErrorRef.current     = false;
@@ -1921,7 +1927,71 @@ export function usePoseEstimation(
                   // dynamicsScore は引き続き計算（初期判定・Self-Healing・デバッグ用）するが
                   // ここでのロール変更トリガーとしては使用しない。
 
-                  // ── プロファイル完成 → 体格ベースでロール初期割り当て
+                  // ── Cold Start: face-api.js による初期性別判定（1回限り発火）──────────
+                  // 両者同時検出かつ未実行のとき、非同期で性別推定を起動する。
+                  // 結果は次フレーム以降に coldStartResultRef 経由で適用される。
+                  if (!coldStartDoneRef.current && si0 >= 0 && si1 >= 0 && !roleDetectedRef.current) {
+                    coldStartDoneRef.current = true; // 2重発火防止
+                    const vid = video;
+                    detectGendersFromVideo(vid).then(results => {
+                      if (results.length >= 2) coldStartResultRef.current = results;
+                    }).catch(() => { /* face-api 未ロード時は無視 */ });
+                  }
+
+                  // Cold Start 結果を MediaPipe スロットに適用
+                  if (coldStartResultRef.current && si0 >= 0 && si1 >= 0 && !roleDetectedRef.current) {
+                    const faceResults = coldStartResultRef.current;
+                    coldStartResultRef.current = null; // 適用後はクリア（Ephemeral）
+
+                    const vw = video.videoWidth || 1;
+                    const vh = video.videoHeight || 1;
+
+                    // face-api box と MediaPipe 鼻座標の IoU マッチング（鼻がbox内に入るか）
+                    const matchFace = (lm: NormalizedLandmark[]): FaceGenderResult | null => {
+                      const nose = lm[0];
+                      if (!nose) return null;
+                      const nx = nose.x * vw, ny = nose.y * vh;
+                      return faceResults.find(f =>
+                        nx >= f.box.x && nx <= f.box.x + f.box.w &&
+                        ny >= f.box.y && ny <= f.box.y + f.box.h,
+                      ) ?? null;
+                    };
+
+                    const face0 = matchFace(all[si0]);
+                    const face1 = matchFace(all[si1]);
+
+                    if (face0 && face1) {
+                      // FinalScore = GenderProb * 0.4 + SHR_Score * 0.6
+                      const shrScore = (slot: (typeof slots)[0]) => {
+                        const sc = slot.profile.sampleCount || 1;
+                        const sw = slot.profile.totalShoulderWidth / sc;
+                        const hw = slot.profile.totalHipWidth / sc;
+                        const shr = hw > 0 ? sw / hw : 1;
+                        return shr > 1.2 ? 1.0 + (shr - 1.2) * 3.0
+                             : shr < 0.9 ? shr * 0.7 : shr;
+                      };
+                      const score0 = face0.maleProb * 0.4 + shrScore(slots[0]) * 0.6;
+                      const score1 = face1.maleProb * 0.4 + shrScore(slots[1]) * 0.6;
+
+                      if (score0 >= score1) { slots[0].role = 'leader'; slots[1].role = 'follower'; }
+                      else                  { slots[0].role = 'follower'; slots[1].role = 'leader'; }
+
+                      // Safety Guard: 低確信度チェック
+                      const diff = Math.abs(score0 - score1);
+                      const maxS = Math.max(score0, score1, 0.01);
+                      setRoleConfidenceLow(diff / maxS < CONFIDENCE_THRESHOLD);
+
+                      // Sticky Start: 初期ボーナス stbl=100（Sticky を即座にアクティブ化）
+                      profileCompleteRef.current  = true;
+                      roleDetectedRef.current     = true;
+                      roleStableFramesRef.current = 100;
+                      setRoleDetected(true);
+                      if (si0 >= 0) personRoles.set(si0, slots[0].role);
+                      if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                    }
+                  }
+
+                  // ── プロファイル完成 → 体格ベースでロール初期割り当て（face-api 未検出時のフォールバック）
                   if (!profileCompleteRef.current && !roleDetectedRef.current
                       && slots[0].profile.sampleCount >= PROFILE_FRAMES
                       && slots[1].profile.sampleCount >= PROFILE_FRAMES) {

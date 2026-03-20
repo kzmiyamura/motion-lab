@@ -1094,13 +1094,8 @@ export function usePoseEstimation(
   const [roleDetected, setRoleDetected] = useState(false);
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
-  const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // iOS 2パス用
+  const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
   const analysisCacheRef    = useRef<CachedResult[]>([]);                 // iOS キャッシュ
-  const workerRef           = useRef<Worker | null>(null);                // PC Worker
-  const workerReadyRef      = useRef(false);
-  const workerFailedRef     = useRef(false);
-  const latestLandmarksRef  = useRef<NormalizedLandmark[][]>([]);         // Worker最新結果
-  const lastCaptureRef      = useRef(0);                                  // Worker送信間隔
 
   // 体格プロファイル & オクルージョン管理
   const profileCompleteRef  = useRef(false);
@@ -1233,8 +1228,8 @@ export function usePoseEstimation(
     let cancelled = false;
     activeRef.current = true;
 
-    // iOS: オフスクリーンキャンバス初期化（2パス用）
-    if (IS_IOS && !offscreenCanvasRef.current) {
+    // 2パスカスケード用オフスクリーンキャンバスを全デバイスで初期化
+    if (!offscreenCanvasRef.current) {
       offscreenCanvasRef.current = document.createElement('canvas');
     }
 
@@ -1242,40 +1237,25 @@ export function usePoseEstimation(
       const connections: Connection[] = POSE_CONNECTIONS;
       let lastDetect = 0;
 
-      if (IS_IOS) {
-        // ── iOS: メインスレッドで MediaPipe を初期化 ──────────────────────
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision' as any) as any;
-        if (cancelled) return;
+      // ── 全デバイス共通: メインスレッドで MediaPipe を初期化 ─────────────
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision' as any) as any;
+      if (cancelled) return;
 
-        const vision = await FilesetResolver.forVisionTasks(WASM_BASE);
-        if (cancelled) return;
+      const vision = await FilesetResolver.forVisionTasks(WASM_BASE);
+      if (cancelled) return;
 
-        const landmarker = await PoseLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
-          runningMode: 'VIDEO',
-          numPoses: NUM_POSES,
-          minPoseDetectionConfidence: DETECT_CONFIDENCE,
-          minPosePresenceConfidence: PRESENCE_CONFIDENCE,
-          minTrackingConfidence: TRACKING_CONFIDENCE,
-        });
+      const landmarker = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+        runningMode: 'VIDEO',
+        numPoses: NUM_POSES,
+        minPoseDetectionConfidence: DETECT_CONFIDENCE,
+        minPosePresenceConfidence: PRESENCE_CONFIDENCE,
+        minTrackingConfidence: TRACKING_CONFIDENCE,
+      });
 
-        if (cancelled) { landmarker.close(); return; }
-        landmarkerRef.current = landmarker;
-      } else {
-        // ── PC: Web Worker で MediaPipe を非同期実行 ─────────────────────
-        const worker = new Worker(
-          new URL('../workers/salsaAnalyzer.worker.ts', import.meta.url),
-          { type: 'module' },
-        );
-        workerRef.current = worker;
-        worker.addEventListener('message', (ev: MessageEvent) => {
-          if (cancelled) return;
-          if (ev.data.type === 'ready') workerReadyRef.current = true;
-          if (ev.data.type === 'result') latestLandmarksRef.current = ev.data.landmarks ?? [];
-        });
-        worker.addEventListener('error', () => { workerFailedRef.current = true; });
-      }
+      if (cancelled) { landmarker.close(); return; }
+      landmarkerRef.current = landmarker;
 
       function loop() {
         if (!activeRef.current || cancelled) return;
@@ -1302,47 +1282,36 @@ export function usePoseEstimation(
           }
 
           const now = performance.now();
-          const shouldDetect = now - lastDetect >= detectIntervalRef.current;
-
-          // PC: 毎フレーム描画（Worker 結果を常時反映）
-          // iOS: 検出インターバル時のみ描画（バッテリー節約）
-          if (!IS_IOS || shouldDetect) {
-            if (shouldDetect) lastDetect = now;
+          if (now - lastDetect >= detectIntervalRef.current) {
+            lastDetect = now;
             const ctx = canvas.getContext('2d');
             if (ctx) {
               try {
-                // ── 検出（デバイスに応じて分岐） ────────────────────────
-                let all: NormalizedLandmark[][];
+                // ── 検出（2パスカスケード + キャッシュ） ────────────────
+                const lm = landmarkerRef.current;
+                if (!lm) throw new Error('landmarker not ready');
 
-                if (IS_IOS) {
-                  const lm = landmarkerRef.current;
-                  if (!lm) throw new Error('landmarker not ready');
-                  const rate = video.playbackRate;
-                  if (rate <= SLOW_RATE_THRESHOLD) {
-                    // 2パスカスケード + キャッシュ保存
-                    const raw = runTwoPassDetect(lm, video, now, offscreenCanvasRef.current!);
-                    all = raw.filter(isPoseCoherent);
-                    analysisCacheRef.current.push({ time: video.currentTime, landmarks: all });
-                    if (analysisCacheRef.current.length > CACHE_MAX_FRAMES) analysisCacheRef.current.shift();
+                let all: NormalizedLandmark[][];
+                const rate = video.playbackRate;
+
+                if (IS_IOS && rate > SLOW_RATE_THRESHOLD) {
+                  // iOS 通常速度: キャッシュ優先、ミスなら単一パス
+                  const cached = findCachedResult(analysisCacheRef.current, video.currentTime);
+                  if (cached !== null) {
+                    all = cached;
                   } else {
-                    // 通常速度: キャッシュ優先、キャッシュミス時は単一パス検出
-                    const cached = findCachedResult(analysisCacheRef.current, video.currentTime);
-                    if (cached !== null) {
-                      all = cached;
-                    } else {
-                      const r = lm.detectForVideo(video, now);
-                      all = (r.landmarks as NormalizedLandmark[][]).filter(isPoseCoherent);
-                    }
+                    const r = lm.detectForVideo(video, now);
+                    all = (r.landmarks as NormalizedLandmark[][]).filter(isPoseCoherent);
                   }
                 } else {
-                  // PC: Worker にフレームを送信（interval 制御）、最新結果を使用
-                  if (shouldDetect && workerReadyRef.current && !workerFailedRef.current) {
-                    lastCaptureRef.current = now;
-                    createImageBitmap(video).then(bitmap => {
-                      workerRef.current?.postMessage({ type: 'detect', bitmap, timestamp: now }, [bitmap]);
-                    }).catch(() => {});
+                  // PC（常時）/ iOS スロー再生時: 2パスカスケード
+                  const raw = runTwoPassDetect(lm, video, now, offscreenCanvasRef.current!);
+                  all = raw.filter(isPoseCoherent);
+                  // iOS スロー時はキャッシュに保存（通常速度で再生する際に再利用）
+                  if (IS_IOS) {
+                    analysisCacheRef.current.push({ time: video.currentTime, landmarks: all });
+                    if (analysisCacheRef.current.length > CACHE_MAX_FRAMES) analysisCacheRef.current.shift();
                   }
-                  all = latestLandmarksRef.current.filter(isPoseCoherent);
                 }
 
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1761,17 +1730,8 @@ export function usePoseEstimation(
       cancelled = true;
       activeRef.current = false;
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-      // iOS: MediaPipe メインスレッドリソース解放
       landmarkerRef.current?.close?.();
       landmarkerRef.current = null;
-      // PC: Worker 終了
-      if (!IS_IOS) {
-        workerRef.current?.terminate();
-        workerRef.current = null;
-        workerReadyRef.current = false;
-        workerFailedRef.current = false;
-        latestLandmarksRef.current = [];
-      }
     };
   }, [enabled, videoRef, canvasRef]);
 

@@ -39,6 +39,28 @@ interface TokenResponse {
 
 const GSI_SCRIPT_ID = 'gsi-client';
 
+// ── トークンのローカル永続化 ─────────────────────────────────────────────
+const LS_TOKEN  = 'gd_access_token';
+const LS_EXPIRY = 'gd_token_expiry';
+const MARGIN_MS = 120_000; // 期限2分前に「期限切れ」とみなす
+
+function saveToken(token: string, expiresIn: number): void {
+  localStorage.setItem(LS_TOKEN,  token);
+  localStorage.setItem(LS_EXPIRY, String(Date.now() + expiresIn * 1000));
+}
+
+function loadToken(): string | null {
+  const token  = localStorage.getItem(LS_TOKEN);
+  const expiry = Number(localStorage.getItem(LS_EXPIRY) ?? '0');
+  if (token && expiry - MARGIN_MS > Date.now()) return token;
+  return null;
+}
+
+export function clearStoredToken(): void {
+  localStorage.removeItem(LS_TOKEN);
+  localStorage.removeItem(LS_EXPIRY);
+}
+
 function loadGsiScript(): Promise<void> {
   return new Promise((resolve, reject) => {
     if (window.google?.accounts) { resolve(); return; }
@@ -77,6 +99,10 @@ export async function requestDriveWriteToken(clientId: string): Promise<string> 
 }
 
 async function _requestToken(clientId: string, scope: string): Promise<string> {
+  // キャッシュが有効なら即返す（ボタン操作不要）
+  const cached = loadToken();
+  if (cached) return cached;
+
   await loadGsiScript();
   return new Promise((resolve, reject) => {
     const client = window.google!.accounts.oauth2.initTokenClient({
@@ -84,6 +110,8 @@ async function _requestToken(clientId: string, scope: string): Promise<string> {
       scope,
       callback: (res) => {
         if (res.error) { reject(new Error(res.error)); return; }
+        // 取得したトークンを localStorage に保存
+        saveToken(res.access_token, res.expires_in);
         resolve(res.access_token);
       },
       error_callback: (err) => reject(new Error(err.type)),
@@ -94,5 +122,6 @@ async function _requestToken(clientId: string, scope: string): Promise<string> {
 }
 
 export function revokeDriveToken(token: string): void {
+  clearStoredToken();
   window.google?.accounts.oauth2.revoke(token, () => {});
 }

@@ -98,12 +98,18 @@ type DrawColors  = { line: string; joint: string; lw: number; jr: number };
 
 /** 個人の体格プロファイル（プロファイリング期間中に蓄積） */
 interface PersonProfile {
-  totalHeight: number;        // 鼻〜足首中点の累積
-  totalShoulderWidth: number; // 肩幅の累積
-  totalHipWidth: number;      // 腰幅の累積
-  sampleCount: number;        // 有効サンプル数
+  totalHeight: number;         // 鼻〜足首中点の2D累積（生値）
+  totalNormHeight: number;     // パース補正済み身長の累積
+  totalHeadBodyRatio: number;  // (鼻〜足首) / (耳幅) の累積 — パース不変量
+  totalShoulderWidth: number;  // 肩幅の累積
+  totalHipWidth: number;       // 腰幅の累積
+  sampleCount: number;         // 有効サンプル数
+  ratioSamples: number;        // headBodyRatio の有効サンプル数
 }
-const makeProfile = (): PersonProfile => ({ totalHeight: 0, totalShoulderWidth: 0, totalHipWidth: 0, sampleCount: 0 });
+const makeProfile = (): PersonProfile => ({
+  totalHeight: 0, totalNormHeight: 0, totalHeadBodyRatio: 0,
+  totalShoulderWidth: 0, totalHipWidth: 0, sampleCount: 0, ratioSamples: 0,
+});
 
 type RoleSlot = {
   hip:      Centroid | null;
@@ -729,10 +735,50 @@ function drawRoleBadge(
   ctx.restore();
 }
 
+// ── パース補正身長 ────────────────────────────────────────────────────────
+/**
+ * 足首Y座標を基準に遠近補正した見かけ上の身長を返す。
+ * 画面下端（y≒0.9）ほどカメラに近く大きく見えるため、
+ * ankleY / REF_ANKLE_Y で割って正規化する。
+ */
+function getNormalizedHeight(lm: NormalizedLandmark[]): number {
+  const nose = lm[0], aL = lm[27], aR = lm[28];
+  if (!nose || !aL || !aR || (nose.visibility ?? 1) < VIS_THRESHOLD) return 0;
+  const ankleY = (aL.y + aR.y) / 2;
+  const h2d    = Math.abs(nose.y - ankleY);
+  // 3D 補正: Z スケールは推定値のため 0.4 で減衰（Lite モデルは Z が小さい）
+  const dz   = ((nose.z ?? 0) - ((aL.z ?? 0) + (aR.z ?? 0)) / 2) * 0.4;
+  const h3d  = Math.sqrt(h2d * h2d + dz * dz);
+  // 足元Y基準の遠近補正（参照距離 = 0.7）
+  const perspFactor = Math.max(0.3, ankleY / 0.7);
+  return h3d / perspFactor;
+}
+
+// ── 頭身比率（パース不変量） ──────────────────────────────────────────────
+/**
+ * (鼻〜足首中点の距離) / (左右耳間の距離) を返す。
+ * 同一人物では距離・角度に依らず安定する身体特徴量。
+ * カメラからの距離（遠近）が変わっても比率は変わらない。
+ */
+function getHeadBodyRatio(lm: NormalizedLandmark[]): number {
+  const nose = lm[0], lEar = lm[7], rEar = lm[8], aL = lm[27], aR = lm[28];
+  if (!nose || !lEar || !rEar || !aL || !aR) return 0;
+  if ((nose.visibility ?? 1) < VIS_THRESHOLD) return 0;
+  if ((lEar.visibility ?? 1) < VIS_THRESHOLD || (rEar.visibility ?? 1) < VIS_THRESHOLD) return 0;
+  const earW = Math.hypot(rEar.x - lEar.x, rEar.y - lEar.y, ((rEar.z ?? 0) - (lEar.z ?? 0)) * 0.4);
+  if (earW < 0.015) return 0; // 横顔でほぼ0になる場合は無効
+  const ankleY = (aL.y + aR.y) / 2;
+  const bodyH  = Math.abs(nose.y - ankleY);
+  return bodyH / earW;
+}
+
 // ── 体格スコア（リーダーらしさ） ─────────────────────────────────────────
 function profileLeaderScore(p: PersonProfile, heightWeight: number): number {
   if (p.sampleCount === 0) return 0;
-  const avgH  = p.totalHeight       / p.sampleCount;
+  // パース補正済み身長を優先、なければ生身長
+  const avgH  = p.sampleCount > 0
+    ? (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount
+    : 0;
   const avgSW = p.totalShoulderWidth / p.sampleCount;
   const avgHW = p.totalHipWidth      / p.sampleCount;
   const ratio = avgHW > 0 ? avgSW / avgHW : 1; // 逆三角形指数
@@ -1255,8 +1301,15 @@ export function usePoseEstimation(
                       const lm = all[si];
                       const nose = lm[0], sL = lm[11], sR = lm[12], hL = lm[23], hR = lm[24], aL = lm[27], aR = lm[28];
                       if (nose && aL && aR && (nose.visibility ?? 1) >= VIS_THRESHOLD) {
-                        slots[s].profile.totalHeight += Math.abs(nose.y - (aL.y + aR.y) / 2);
+                        slots[s].profile.totalHeight    += Math.abs(nose.y - (aL.y + aR.y) / 2);
+                        const nh = getNormalizedHeight(lm);
+                        if (nh > 0) slots[s].profile.totalNormHeight += nh;
                         slots[s].profile.sampleCount++;
+                      }
+                      const hbr = getHeadBodyRatio(lm);
+                      if (hbr > 0) {
+                        slots[s].profile.totalHeadBodyRatio += hbr;
+                        slots[s].profile.ratioSamples++;
                       }
                       if (sL && sR && (sL.visibility ?? 1) >= VIS_THRESHOLD && (sR.visibility ?? 1) >= VIS_THRESHOLD) {
                         slots[s].profile.totalShoulderWidth += Math.abs(sR.x - sL.x);
@@ -1316,6 +1369,29 @@ export function usePoseEstimation(
                     }
                   }
                   prevBeatNumRef.current = currentBeatNum;
+
+                  // ── オクルージョン離脱直後: 頭身比率でロール正当性を検証
+                  if (justSeparated && si0 >= 0 && si1 >= 0 && profileCompleteRef.current) {
+                    const p0 = slots[0].profile, p1 = slots[1].profile;
+                    if (p0.ratioSamples > 0 && p1.ratioSamples > 0) {
+                      const profRatio0 = p0.totalHeadBodyRatio / p0.ratioSamples;
+                      const profRatio1 = p1.totalHeadBodyRatio / p1.ratioSamples;
+                      const curRatio0  = getHeadBodyRatio(all[si0]);
+                      const curRatio1  = getHeadBodyRatio(all[si1]);
+                      if (curRatio0 > 0 && curRatio1 > 0) {
+                        // 現在割り当て vs スワップ後 のどちらがプロファイルに近いか
+                        const matchScore = Math.abs(curRatio0 - profRatio0) + Math.abs(curRatio1 - profRatio1);
+                        const swapScore  = Math.abs(curRatio0 - profRatio1) + Math.abs(curRatio1 - profRatio0);
+                        if (swapScore < matchScore * 0.80) {
+                          // スワップの方がプロファイルに 20% 以上近い → ロールを自動修正
+                          const r0 = slots[0].role, r1 = slots[1].role;
+                          slots[0].role = r1; slots[1].role = r0;
+                          if (si0 >= 0) personRoles.set(si0, slots[0].role);
+                          if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                        }
+                      }
+                    }
+                  }
 
                   // ── 位相モニタリング（同方向移動 = 解析エラー）
                   // ターン中・直後（2秒間）は抑制 — ターン時は両者が同方向に動くのが正常

@@ -128,6 +128,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     syncError, clearRoles,
     roleDetected, swapRoles,
     annotations, exportDebugLog,
+    debugInfo,
   } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle, heightLeaderHint,
@@ -1048,6 +1049,31 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                   onClick={handleOverlayClick}
                   style={{ cursor: lockModeActive && vizMode !== 'off' && !isLocked ? 'crosshair' : 'pointer' }}
                 />
+                {debugInfo && vizMode !== 'off' && (
+                  <div className={styles.debugPanel}>
+                    {debugInfo.slots.map(sl => (
+                      <div key={sl.slotIdx} className={styles.debugRow}>
+                        <span className={styles.debugSlot}
+                          style={{ color: sl.role === 'leader' ? '#4af' : sl.role === 'follower' ? '#f4a' : '#aaa' }}>
+                          [{sl.slotIdx}]{sl.role ? sl.role[0].toUpperCase() : '?'}
+                        </span>
+                        <span className={styles.debugVal}>dyn:{sl.dynamicsScore.toFixed(2)}</span>
+                        <span className={styles.debugVal}>ω:{sl.omega.toFixed(3)}</span>
+                        <span className={styles.debugVal}>{sl.zFront ? 'front' : 'back'}</span>
+                        <span className={styles.debugVal} style={{ color: sl.isDetected ? '#4f4' : '#f44' }}>
+                          {sl.isDetected ? 'det' : 'occ'}
+                        </span>
+                      </div>
+                    ))}
+                    <div className={styles.debugRow}>
+                      <span className={styles.debugVal}
+                        style={{ color: debugInfo.isOccluded ? '#fa4' : '#aaa' }}>
+                        {debugInfo.isOccluded ? 'OCCLUDED' : 'clear'}
+                      </span>
+                      <span className={styles.debugVal}>stbl:{debugInfo.roleStableFrames}</span>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>

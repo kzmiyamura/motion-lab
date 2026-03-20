@@ -452,6 +452,41 @@
   cursor: pointer;
 }
 
+/* ── Debug panel (top-left overlay) ── */
+.debugPanel {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 5px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #ccc;
+  z-index: 10;
+}
+
+.debugRow {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.debugSlot {
+  font-weight: 700;
+  min-width: 2.8em;
+}
+
+.debugVal {
+  color: #aaa;
+}
+
 /* Audio mode — video element hidden but still plays */
 .audioOnlyWrap { display: none; }
 

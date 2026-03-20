@@ -53,6 +53,23 @@ export interface AnnotationEntry {
   };
 }
 
+/** デバッグパネル用のリアルタイムスロット情報 */
+export interface PoseDebugSlot {
+  slotIdx: 0 | 1;
+  role: PersonRole;
+  dynamicsScore: number;
+  omega: number;
+  zFront: boolean;
+  isDetected: boolean;   // 今フレームで検出できたか
+}
+
+export interface PoseDebugInfo {
+  slots: [PoseDebugSlot, PoseDebugSlot];
+  isOccluded: boolean;
+  zOrderFront: number;   // 手前スロットインデックス (-1 = 未判定)
+  roleStableFrames: number;
+}
+
 export interface UsePoseEstimationResult {
   lockAt: (canvasX: number, canvasY: number) => void;
   unlock: () => void;
@@ -65,6 +82,7 @@ export interface UsePoseEstimationResult {
   swapRoles: () => void;
   annotations: AnnotationEntry[];
   exportDebugLog: (videoName?: string) => void;
+  debugInfo: PoseDebugInfo | null;
 }
 
 // ── 定数 ─────────────────────────────────────────────────────────────────
@@ -1319,6 +1337,7 @@ export function usePoseEstimation(
   const [syncError, setSyncError]     = useState(false);
   const syncErrorRef       = useRef(false);
   const [roleDetected, setRoleDetected] = useState(false);
+  const [debugInfo, setDebugInfo]       = useState<PoseDebugInfo | null>(null);
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
@@ -1358,6 +1377,7 @@ export function usePoseEstimation(
     annotationsRef.current   = [];
     setAnnotations([]);
     pendingAnnotationRef.current = null;
+    setDebugInfo(null);
   }, []);
 
   // ── Swap Roles（ロール反転 + アノテーション記録）
@@ -2004,6 +2024,20 @@ export function usePoseEstimation(
                         setAnnotations([...annotationsRef.current]);
                       }
                     }
+
+                    // ── デバッグパネル更新（10フレームごと）
+                    if (frameIndexRef.current % 10 === 0) {
+                      const zOF = slots[0].zFront ? 0 : slots[1].zFront ? 1 : -1;
+                      setDebugInfo({
+                        slots: [
+                          { slotIdx: 0, role: slots[0].role, dynamicsScore: slots[0].dynamicsScore, omega: slots[0].omega, zFront: slots[0].zFront, isDetected: si0 >= 0 },
+                          { slotIdx: 1, role: slots[1].role, dynamicsScore: slots[1].dynamicsScore, omega: slots[1].omega, zFront: slots[1].zFront, isDetected: si1 >= 0 },
+                        ],
+                        isOccluded: isOccludedRef.current,
+                        zOrderFront: zOF,
+                        roleStableFrames: roleStableFramesRef.current,
+                      });
+                    }
                   }
 
                   // ── 描画
@@ -2088,5 +2122,5 @@ export function usePoseEstimation(
     };
   }, [enabled, videoRef, canvasRef]);
 
-  return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles, roleDetected, swapRoles, annotations, exportDebugLog };
+  return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles, roleDetected, swapRoles, annotations, exportDebugLog, debugInfo };
 }

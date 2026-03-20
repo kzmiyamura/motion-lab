@@ -979,6 +979,74 @@
   white-space: nowrap;
 }
 
+/* ── Swap Roles / Export ── */
+.swapBtn {
+  height: 34px;
+  padding: 0 0.65rem;
+  border-radius: 8px;
+  background: rgba(255, 200, 0, 0.12);
+  border: 1.5px solid rgba(255, 200, 0, 0.35);
+  color: #ffc800;
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+.swapBtn:hover { background: rgba(255, 200, 0, 0.22); }
+
+.exportLogBtn {
+  height: 34px;
+  padding: 0 0.6rem;
+  border-radius: 8px;
+  background: rgba(100, 200, 100, 0.12);
+  border: 1.5px solid rgba(100, 200, 100, 0.35);
+  color: #80e080;
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+.exportLogBtn:hover { background: rgba(100, 200, 100, 0.22); }
+
+/* ── Annotation bar ── */
+.annotationBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(255, 200, 0, 0.06);
+  border: 1px solid rgba(255, 200, 0, 0.18);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.annotationBarLabel {
+  font-size: 0.68rem;
+  color: #ffc800;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.annotationDot {
+  background: rgba(255, 200, 0, 0.18);
+  border: 1px solid rgba(255, 200, 0, 0.4);
+  color: #ffd040;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 0.67rem;
+  font-family: monospace;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+.annotationDot:hover { background: rgba(255, 200, 0, 0.32); }
+
 /* ── Target lock button ── */
 .lockBtn {
   height: 34px;

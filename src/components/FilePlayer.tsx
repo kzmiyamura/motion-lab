@@ -116,7 +116,13 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
 
-  const { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles } = usePoseEstimation(
+  const {
+    lockAt, unlock, isLocked,
+    sequence, clearSequence,
+    syncError, clearRoles,
+    roleDetected, swapRoles,
+    annotations, exportDebugLog,
+  } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle,
   );
@@ -618,6 +624,26 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             ))}
           </div>
         )}
+        {/* Swap Roles ボタン（ロール判定済み時） */}
+        {source.isVideo && vizMode !== 'off' && roleDetected && (
+          <button
+            className={styles.swapBtn}
+            onClick={swapRoles}
+            title="Leader/Follower を手動で入れ替え、前後5フレームをデバッグログに記録"
+          >
+            ⇄ Swap{annotations.length > 0 ? ` (${annotations.length})` : ''}
+          </button>
+        )}
+        {/* Export Debug Log ボタン */}
+        {source.isVideo && annotations.length > 0 && (
+          <button
+            className={styles.exportLogBtn}
+            onClick={() => exportDebugLog(source.name)}
+            title="salsa_debug_log.json をダウンロード"
+          >
+            ⬇ Log
+          </button>
+        )}
         {source.isVideo && (
           <div className={styles.vizModeGroup} role="group" aria-label="骨格表示モード">
             {(['off', 'full', 'salsa', 'trail'] as const).map(m => (
@@ -934,6 +960,23 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               {playerControlsContent}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── 修正アノテーション一覧（クリックでシーク） */}
+      {annotations.length > 0 && (
+        <div className={styles.annotationBar}>
+          <span className={styles.annotationBarLabel}>修正済み:</span>
+          {annotations.map((a, i) => (
+            <button
+              key={i}
+              className={styles.annotationDot}
+              onClick={() => { const el = mediaRef.current; if (el) el.currentTime = a.videoTime; }}
+              title={`修正 #${i + 1} @ ${formatTime(a.videoTime)} — クリックでジャンプ`}
+            >
+              {formatTime(a.videoTime)}
+            </button>
+          ))}
         </div>
       )}
 

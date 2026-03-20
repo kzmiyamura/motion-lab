@@ -15,16 +15,50 @@ export interface SequenceEvent {
   beatNum?: number;   // 1-8
 }
 
+/** フレームごとのスナップショット（デバッグログ用） */
+export interface FrameSnapshot {
+  frameIndex: number;
+  videoTime: number;
+  distanceBetweenPersons: number;  // -1 = 1人のみ
+  persons: Array<{
+    slotIdx: 0 | 1;
+    role: PersonRole;
+    hipX: number; hipY: number; hipZ: number;
+    velX: number; velY: number;      // 正規化座標/フレーム
+    shoulderWidth: number;           // 正規化座標。-1 = 不明
+    bodyHeight: number;              // 鼻〜足首中点（正規化）。-1 = 不明
+    noseX: number; noseY: number;    // -1 = 不明
+  }>;
+}
+
+/** Swap & Mark アノテーション */
+export interface AnnotationEntry {
+  errorFrameIndex: number;
+  videoTime: number;
+  preSceneData: FrameSnapshot[];    // swap 直前 5フレーム
+  postSceneData: FrameSnapshot[];   // swap 直後 5フレーム
+  resolvedBy: 'manual_swap';
+  salsaStyle: SalsaStyle;
+  swapDetail: {
+    slot0RoleBefore: PersonRole;
+    slot1RoleBefore: PersonRole;
+    slot0RoleAfter: PersonRole;
+    slot1RoleAfter: PersonRole;
+  };
+}
+
 export interface UsePoseEstimationResult {
   lockAt: (canvasX: number, canvasY: number) => void;
   unlock: () => void;
   isLocked: boolean;
   sequence: SequenceEvent[];
   clearSequence: () => void;
-  /** On1/On2 判定後の位相同期エラー */
   syncError: boolean;
-  /** ロール判定をリセット */
   clearRoles: () => void;
+  roleDetected: boolean;
+  swapRoles: () => void;
+  annotations: AnnotationEntry[];
+  exportDebugLog: (videoName?: string) => void;
 }
 
 // ── 定数 ─────────────────────────────────────────────────────────────────
@@ -66,8 +100,10 @@ const COLOR_MAIN:     DrawColors = { line: 'rgba(255,60,60,0.95)',   joint: 'rgb
 const COLOR_OTHER:    DrawColors = { line: 'rgba(255,255,255,0.45)', joint: 'rgba(200,200,200,0.50)', lw: 1.5, jr: 3 };
 
 // ── ロール検出定数 ────────────────────────────────────────────────────────
-const ROLE_MATCH_DIST = 0.35;  // スロットマッチング距離閾値
-const PHASE_WINDOW    = 3;     // 位相モニタリングウィンドウ（サンプル数）
+const ROLE_MATCH_DIST   = 0.35;  // スロットマッチング距離閾値
+const PHASE_WINDOW      = 3;     // 位相モニタリングウィンドウ（サンプル数）
+const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
+const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
 
 interface PatternDetectionState {
   turnFrames: number;
@@ -756,11 +792,19 @@ export function usePoseEstimation(
 
   // ── ロール判定（On1/On2）
   const makeRoleSlot = (): RoleSlot => ({ hip: null, hipZ: 0, role: null, xHistory: [] });
-  const roleSlots        = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
-  const roleDetectedRef  = useRef(false);
-  const prevBeatNumRef   = useRef<number | undefined>(undefined);
-  const [syncError, setSyncError]   = useState(false);
-  const syncErrorRef     = useRef(false);
+  const roleSlots          = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
+  const roleDetectedRef    = useRef(false);
+  const prevBeatNumRef     = useRef<number | undefined>(undefined);
+  const [syncError, setSyncError]     = useState(false);
+  const syncErrorRef       = useRef(false);
+  const [roleDetected, setRoleDetected] = useState(false);
+
+  // ── フレームバッファ & アノテーション
+  const frameBufferRef      = useRef<FrameSnapshot[]>([]);
+  const frameIndexRef       = useRef(0);
+  const annotationsRef      = useRef<AnnotationEntry[]>([]);
+  const pendingAnnotationRef = useRef<AnnotationEntry | null>(null);
+  const [annotations, setAnnotations] = useState<AnnotationEntry[]>([]);
 
   // ── シーケンスクリア
   const clearSequence = useCallback(() => {
@@ -770,11 +814,63 @@ export function usePoseEstimation(
 
   // ── ロール判定リセット
   const clearRoles = useCallback(() => {
-    roleSlots.current = [makeRoleSlot(), makeRoleSlot()];
-    roleDetectedRef.current = false;
-    prevBeatNumRef.current  = undefined;
-    syncErrorRef.current    = false;
+    roleSlots.current        = [makeRoleSlot(), makeRoleSlot()];
+    roleDetectedRef.current  = false;
+    prevBeatNumRef.current   = undefined;
+    syncErrorRef.current     = false;
     setSyncError(false);
+    setRoleDetected(false);
+    annotationsRef.current   = [];
+    setAnnotations([]);
+    pendingAnnotationRef.current = null;
+  }, []);
+
+  // ── Swap Roles（ロール反転 + アノテーション記録）
+  const swapRoles = useCallback(() => {
+    const slots = roleSlots.current;
+    const r0 = slots[0].role;
+    const r1 = slots[1].role;
+    slots[0].role = r1;
+    slots[1].role = r0;
+
+    const entry: AnnotationEntry = {
+      errorFrameIndex: frameIndexRef.current,
+      videoTime: videoRef.current?.currentTime ?? 0,
+      preSceneData: frameBufferRef.current.slice(-POST_SCENE_FRAMES).map(f => ({ ...f, persons: f.persons.map(p => ({ ...p })) })),
+      postSceneData: [],
+      resolvedBy: 'manual_swap',
+      salsaStyle: styleRef.current,
+      swapDetail: { slot0RoleBefore: r0, slot1RoleBefore: r1, slot0RoleAfter: r1, slot1RoleAfter: r0 },
+    };
+    pendingAnnotationRef.current = entry;
+  }, [videoRef]);
+
+  // ── デバッグ JSON エクスポート
+  const exportDebugLog = useCallback((videoName?: string) => {
+    const style = styleRef.current;
+    const log = {
+      meta: {
+        exportTime: new Date().toISOString(),
+        videoName: videoName ?? 'unknown',
+        salsaStyle: style,
+        totalFramesProcessed: frameIndexRef.current,
+        totalAnnotations: annotationsRef.current.length,
+        analysisNote: [
+          `Claude Code解析用 — ${style === 'on1' ? 'On1 (LA Style, break on beat 1)' : 'On2 (NY Style, break on beat 2)'}`,
+          'annotations[].preSceneData / postSceneData を比較し、IDスイッチが発生した物理的要因を特定してください。',
+          '着目ポイント: distanceBetweenPersons の急減（オクルージョン開始）、shoulderWidth の急変、velX の符号逆転。',
+        ].join(' '),
+      },
+      annotations: annotationsRef.current,
+      recentFrameBuffer: frameBufferRef.current.slice(-60),
+    };
+    const blob = new Blob([JSON.stringify(log, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `salsa_debug_log_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }, []);
 
   // ── ロックオン（CSS transform 逆変換済みのキャンバス座標を受け取る）
@@ -981,7 +1077,10 @@ export function usePoseEstimation(
                     ? Math.floor((video.currentTime * bpmRef.current / 60) % 8) + 1
                     : undefined;
 
+                  // 速度計算用: 更新前の位置を保存
+                  const prevSlotHips: (Centroid | null)[] = [slots[0].hip, slots[1].hip];
                   const prevZ = [slots[0].hipZ, slots[1].hipZ];
+
                   for (let s = 0; s < 2; s++) {
                     const si = s === 0 ? si0 : si1;
                     if (si < 0) continue;
@@ -1014,6 +1113,7 @@ export function usePoseEstimation(
                         slots[0].role = 'follower'; slots[1].role = 'leader';
                       }
                       roleDetectedRef.current = true;
+                      setRoleDetected(true);
                       if (si0 >= 0) personRoles.set(si0, slots[0].role);
                       if (si1 >= 0) personRoles.set(si1, slots[1].role);
                     }
@@ -1031,6 +1131,53 @@ export function usePoseEstimation(
                       if (allSame !== syncErrorRef.current) {
                         syncErrorRef.current = allSame;
                         setSyncError(allSame);
+                      }
+                    }
+                  }
+
+                  // ── フレームスナップショットをバッファに追加
+                  {
+                    const snapshot: FrameSnapshot = {
+                      frameIndex: frameIndexRef.current,
+                      videoTime: video.currentTime,
+                      distanceBetweenPersons: slots[0].hip && slots[1].hip
+                        ? Math.hypot(slots[0].hip.x - slots[1].hip.x, slots[0].hip.y - slots[1].hip.y)
+                        : -1,
+                      persons: [],
+                    };
+                    for (let s = 0; s < 2; s++) {
+                      const si = s === 0 ? si0 : si1;
+                      if (si < 0 || !slots[s].hip) continue;
+                      const lm    = all[si];
+                      const prev  = prevSlotHips[s];
+                      const nose  = lm[0], sL = lm[11], sR = lm[12], aL = lm[27], aR = lm[28];
+                      const sw = sL && sR && (sL.visibility ?? 1) >= VIS_THRESHOLD && (sR.visibility ?? 1) >= VIS_THRESHOLD
+                        ? Math.abs(sR.x - sL.x) : -1;
+                      const bh = nose && (nose.visibility ?? 1) >= VIS_THRESHOLD && (aL || aR)
+                        ? Math.abs(nose.y - (((aL?.y ?? aR?.y ?? 0) + (aR?.y ?? aL?.y ?? 0)) / 2)) : -1;
+                      snapshot.persons.push({
+                        slotIdx: s as 0 | 1,
+                        role: slots[s].role,
+                        hipX: slots[s].hip!.x, hipY: slots[s].hip!.y, hipZ: slots[s].hipZ,
+                        velX: prev ? slots[s].hip!.x - prev.x : 0,
+                        velY: prev ? slots[s].hip!.y - prev.y : 0,
+                        shoulderWidth: sw, bodyHeight: bh,
+                        noseX: nose && (nose.visibility ?? 1) >= VIS_THRESHOLD ? nose.x : -1,
+                        noseY: nose && (nose.visibility ?? 1) >= VIS_THRESHOLD ? nose.y : -1,
+                      });
+                    }
+                    frameBufferRef.current.push(snapshot);
+                    if (frameBufferRef.current.length > FRAME_BUFFER_SIZE) frameBufferRef.current.shift();
+                    frameIndexRef.current++;
+
+                    // post-scene 収集（Swap直後）
+                    if (pendingAnnotationRef.current !== null) {
+                      pendingAnnotationRef.current.postSceneData.push(snapshot);
+                      if (pendingAnnotationRef.current.postSceneData.length >= POST_SCENE_FRAMES) {
+                        const completed = pendingAnnotationRef.current;
+                        pendingAnnotationRef.current = null;
+                        annotationsRef.current = [...annotationsRef.current, completed];
+                        setAnnotations([...annotationsRef.current]);
                       }
                     }
                   }
@@ -1117,5 +1264,5 @@ export function usePoseEstimation(
     };
   }, [enabled, videoRef, canvasRef]);
 
-  return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles };
+  return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles, roleDetected, swapRoles, annotations, exportDebugLog };
 }

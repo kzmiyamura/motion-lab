@@ -181,7 +181,9 @@ const MIN_UL_RATIO      = 0.22;  // 上半身/下半身比の最小値
 const MAX_UL_RATIO      = 4.5;   // 上半身/下半身比の最大値
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
 const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
-const STICKY_MIN_FRAMES = 45;    // 粘り強い追跡を有効化するまでの安定フレーム数（~1.5秒）
+const STICKY_MIN_FRAMES       = 45;   // 粘り強い追跡を有効化するまでの安定フレーム数（~1.5秒）
+const STICKY_HARD_LOCK_FRAMES = 100;  // この安定フレーム数を超えたら dynamics による上書きを完全禁止
+const POST_OCCLUSION_COOLDOWN = 15;   // オクルージョン解除直後の dynamics 再評価スキップフレーム数
 
 // ── ダンス動力学（Dynamics）定数 ─────────────────────────────────────────
 const INCEPTION_VEL_THRESHOLD    = 0.012; // 先行動作の動き出し速度閾値（正規化座標/frame）
@@ -1338,6 +1340,7 @@ export function usePoseEstimation(
   const syncErrorRef       = useRef(false);
   const [roleDetected, setRoleDetected] = useState(false);
   const [debugInfo, setDebugInfo]       = useState<PoseDebugInfo | null>(null);
+  const postOcclusionCooldownRef        = useRef(0); // オクルージョン解除後の冷却カウンタ
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
@@ -1368,7 +1371,8 @@ export function usePoseEstimation(
     roleDetectedRef.current     = false;
     roleStableFramesRef.current = 0;
     profileCompleteRef.current  = false;
-    isOccludedRef.current    = false;
+    isOccludedRef.current            = false;
+    postOcclusionCooldownRef.current = 0;
     analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
     syncErrorRef.current     = false;
@@ -1672,6 +1676,11 @@ export function usePoseEstimation(
                     isOccludedRef.current = false;
                   }
                   const justSeparated = wasOccluded && !isOccludedRef.current;
+                  if (justSeparated) {
+                    postOcclusionCooldownRef.current = POST_OCCLUSION_COOLDOWN;
+                  } else if (postOcclusionCooldownRef.current > 0) {
+                    postOcclusionCooldownRef.current--;
+                  }
 
                   // 顔が独立して検出されているか（密着中でない場合のみ有効）
                   const detectedNoses = all.map(lm => {
@@ -1798,9 +1807,15 @@ export function usePoseEstimation(
                   updateDynamicsScores(slots, all, si0, si1, prevSlotDist, frameIndexRef.current);
 
                   // ── 動力学スコアによる動的ロール再評価（確定後も継続的に補正）
+                  // Hard-lock: stbl >= STICKY_HARD_LOCK_FRAMES のとき再評価を完全スキップ
+                  // Cooldown: オクルージョン解除直後 POST_OCCLUSION_COOLDOWN フレームはスキップ
                   // Sticky 期間中はより高い閾値を要求し、syncError がある場合は閾値を下げる
+                  const isHardLocked = roleStableFramesRef.current >= STICKY_HARD_LOCK_FRAMES;
+                  const isInCooldown = postOcclusionCooldownRef.current > 0;
                   if (roleDetectedRef.current && si0 >= 0 && si1 >= 0
                       && !isOccludedRef.current
+                      && !isHardLocked
+                      && !isInCooldown
                       && slots[0].role !== null && slots[1].role !== null) {
                     const dynDiff = slots[0].dynamicsScore - slots[1].dynamicsScore;
                     const stickyMult = roleStableFramesRef.current >= STICKY_MIN_FRAMES ? 2.5 : 1.0;

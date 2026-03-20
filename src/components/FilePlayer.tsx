@@ -129,6 +129,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     roleDetected, swapRoles,
     annotations, exportDebugLog,
     debugInfo,
+    roleConfidenceLow,
   } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle, heightLeaderHint,
@@ -1071,6 +1072,9 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                         {debugInfo.isOccluded ? 'OCCLUDED' : 'clear'}
                       </span>
                       <span className={styles.debugVal}>stbl:{debugInfo.roleStableFrames}</span>
+                      {roleConfidenceLow && (
+                        <span className={styles.debugVal} style={{ color: '#fa4' }}>LOW-CONF</span>
+                      )}
                     </div>
                   </div>
                 )}

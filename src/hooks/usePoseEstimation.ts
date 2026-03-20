@@ -83,6 +83,7 @@ export interface UsePoseEstimationResult {
   annotations: AnnotationEntry[];
   exportDebugLog: (videoName?: string) => void;
   debugInfo: PoseDebugInfo | null;
+  roleConfidenceLow: boolean;  // Safety Guard: 初期判定の確信度が低い（動き出し優先）
 }
 
 // ── 定数 ─────────────────────────────────────────────────────────────────
@@ -127,12 +128,14 @@ interface PersonProfile {
   totalHeadBodyRatio: number;  // (鼻〜足首) / (耳幅) の累積 — パース不変量
   totalShoulderWidth: number;  // 肩幅の累積
   totalHipWidth: number;       // 腰幅の累積
+  totalEarWidth: number;       // 耳幅（lm[7]〜lm[8]）の累積 — 顔幅の代理指標
   sampleCount: number;         // 有効サンプル数
   ratioSamples: number;        // headBodyRatio の有効サンプル数
 }
 const makeProfile = (): PersonProfile => ({
   totalHeight: 0, totalNormHeight: 0, totalHeadBodyRatio: 0,
-  totalShoulderWidth: 0, totalHipWidth: 0, sampleCount: 0, ratioSamples: 0,
+  totalShoulderWidth: 0, totalHipWidth: 0, totalEarWidth: 0,
+  sampleCount: 0, ratioSamples: 0,
 });
 
 type RoleSlot = {
@@ -911,27 +914,69 @@ function isPoseCoherent(lm: NormalizedLandmark[]): boolean {
 }
 
 // ── 体格スコア（リーダーらしさ） ─────────────────────────────────────────
+/**
+ * Cold Start Logic — 静的特徴量による Leader スコア算出
+ *
+ * PoseScore（重み 0.6）:
+ *   - 身長（パース補正済み）
+ *   - SHR (Shoulder-to-Hip Ratio): Ratio > 1.2 → Leader候補ボーナス
+ *
+ * FaceScore（重み 0.4）:
+ *   - 耳幅 / 肩幅比（PoseLandmarkerの lm[7]/[8] を使用した顔幅代理指標）
+ *   - ※ Face Landmarker 478点は別モデルが必要なため pose 近似を使用
+ *   - 値が大きいほど顔が相対的に広い = 男性的骨格 = Leader候補
+ *
+ * 戻り値が大きい方を Leader と判定する。
+ */
 function profileLeaderScore(p: PersonProfile, heightWeight: number): number {
   if (p.sampleCount === 0) return 0;
-  // パース補正済み身長を優先、なければ生身長
-  const avgH  = p.sampleCount > 0
-    ? (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount
-    : 0;
+
+  // ── PoseScore ──────────────────────────────────────────────────────────
+  const avgH  = (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount;
   const avgSW = p.totalShoulderWidth / p.sampleCount;
   const avgHW = p.totalHipWidth      / p.sampleCount;
-  const ratio = avgHW > 0 ? avgSW / avgHW : 1; // 逆三角形指数
-  return avgH * heightWeight + ratio;
+  // SHR: Ratio > 1.2 → Leader候補ボーナス（逆三角形体型）
+  const shr     = avgHW > 0 ? avgSW / avgHW : 1;
+  const shrScore = shr > 1.2 ? 1.0 + (shr - 1.2) * 3.0  // 超過分を強調
+                 : shr < 0.9 ? shr * 0.7                  // 女性的骨格は減点
+                 : shr;
+  const poseScore = avgH * heightWeight + shrScore;
+
+  // ── FaceScore（耳幅 / 肩幅比 による顔幅推定） ─────────────────────────
+  const avgEW = p.totalEarWidth > 0 ? p.totalEarWidth / p.sampleCount : 0;
+  // 顔幅/肩幅比: 大きいほど顔が相対的に広い（男性的傾向）
+  // 正規化: 典型値 0.4-0.7 → 0-1 スケールに変換（中心0.5 で ±0.2 を飽和）
+  const faceRatio    = avgSW > 0 && avgEW > 0 ? avgEW / avgSW : 0.5;
+  const faceScore    = Math.max(0, Math.min(1, (faceRatio - 0.3) / 0.4));
+
+  // ── Combined Score: PoseScore * 0.6 + FaceScore * 0.4 ─────────────────
+  // FaceScore を PoseScore と同スケールに引き上げて合成
+  const poseNorm = poseScore;               // 典型 1.5〜3.0 の範囲
+  const faceNorm = faceScore * poseNorm;    // 0〜poseNorm の範囲でスケール合わせ
+  return poseNorm * 0.6 + faceNorm * 0.4;
 }
 
-function assignRolesByProfile(slots: [RoleSlot, RoleSlot], useHeight: boolean): void {
-  // 遠近法の影響を受ける見かけ身長の重みを抑える（3→1.5）
-  // ファントム座標・Z-order推論の精度向上により体格依存度を下げる
+/**
+ * 体格プロファイル + dynamicsScore でロールを初期割り当てする。
+ * Safety Guard: スコア差が CONFIDENCE_THRESHOLD 未満の場合は低確信度フラグを返す。
+ * 低確信度時は初期判定を行うが、後続の dynamicsScore 蓄積による上書きを優先する。
+ */
+const CONFIDENCE_THRESHOLD = 0.25; // スコア差がこれ未満 → 低確信度（動き出し優先）
+
+function assignRolesByProfile(
+  slots: [RoleSlot, RoleSlot],
+  useHeight: boolean,
+): { confidenceLow: boolean } {
   const w = useHeight ? 1.5 : 1;
-  // 動力学スコアを体格スコアに加算（動き出し・向心力・スペース管理の蓄積値）
   const s0 = profileLeaderScore(slots[0].profile, w) + slots[0].dynamicsScore * DYNAMICS_WEIGHT;
   const s1 = profileLeaderScore(slots[1].profile, w) + slots[1].dynamicsScore * DYNAMICS_WEIGHT;
   if (s0 >= s1) { slots[0].role = 'leader'; slots[1].role = 'follower'; }
   else          { slots[0].role = 'follower'; slots[1].role = 'leader'; }
+  // Safety Guard: スコア差が小さいほど不確実 → dynamicsScore 蓄積を優先させる
+  const scoreDiff = Math.abs(s0 - s1);
+  const maxScore  = Math.max(Math.abs(s0), Math.abs(s1), 0.01);
+  const confidenceLow = scoreDiff / maxScore < CONFIDENCE_THRESHOLD;
+  return { confidenceLow };
 }
 
 // ── ロールスロットマッチング（顔アンカー優先 + Nearest Neighbor） ─────────
@@ -1375,8 +1420,9 @@ export function usePoseEstimation(
   const prevBeatNumRef     = useRef<number | undefined>(undefined);
   const [syncError, setSyncError]     = useState(false);
   const syncErrorRef       = useRef(false);
-  const [roleDetected, setRoleDetected] = useState(false);
-  const [debugInfo, setDebugInfo]       = useState<PoseDebugInfo | null>(null);
+  const [roleDetected, setRoleDetected]       = useState(false);
+  const [roleConfidenceLow, setRoleConfidenceLow] = useState(false); // Safety Guard: 初期判定の確信度が低い
+  const [debugInfo, setDebugInfo]             = useState<PoseDebugInfo | null>(null);
   const postOcclusionCooldownRef        = useRef(0);  // オクルージョン解除後の冷却カウンタ
   // Self-Healing refs
   const scoreInversionFramesRef        = useRef(0);  // dynamics スコア逆転継続フレーム数
@@ -1422,6 +1468,7 @@ export function usePoseEstimation(
     syncErrorRef.current     = false;
     setSyncError(false);
     setRoleDetected(false);
+    setRoleConfidenceLow(false);
     annotationsRef.current   = [];
     setAnnotations([]);
     pendingAnnotationRef.current = null;
@@ -1845,6 +1892,11 @@ export function usePoseEstimation(
                       if (hL && hR) {
                         slots[s].profile.totalHipWidth += Math.abs(hR.x - hL.x);
                       }
+                      // 耳幅（landmark 7=左耳, 8=右耳）: 顔幅の代理指標
+                      const eL = lm[7], eR = lm[8];
+                      if (eL && eR && (eL.visibility ?? 1) >= VIS_THRESHOLD && (eR.visibility ?? 1) >= VIS_THRESHOLD) {
+                        slots[s].profile.totalEarWidth += Math.abs(eR.x - eL.x);
+                      }
                     }
 
                     if (slots[s].role) personRoles.set(si, slots[s].role);
@@ -1874,7 +1926,8 @@ export function usePoseEstimation(
                       && slots[0].profile.sampleCount >= PROFILE_FRAMES
                       && slots[1].profile.sampleCount >= PROFILE_FRAMES) {
                     profileCompleteRef.current = true;
-                    assignRolesByProfile(slots, heightLeaderHintRef.current);
+                    const { confidenceLow } = assignRolesByProfile(slots, heightLeaderHintRef.current);
+                    setRoleConfidenceLow(confidenceLow);
                     roleDetectedRef.current = true;
                     setRoleDetected(true);
                     if (si0 >= 0) personRoles.set(si0, slots[0].role);
@@ -2230,5 +2283,5 @@ export function usePoseEstimation(
     };
   }, [enabled, videoRef, canvasRef]);
 
-  return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles, roleDetected, swapRoles, annotations, exportDebugLog, debugInfo };
+  return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles, roleDetected, swapRoles, annotations, exportDebugLog, debugInfo, roleConfidenceLow };
 }

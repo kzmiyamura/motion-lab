@@ -205,7 +205,7 @@ const FACE_MATCH_DIST   = 0.40;  // 顔アンカーマッチング距離閾値
 const NOSE_SEP_MIN      = 0.08;  // 顔が独立していると見なす最小距離
 const PHASE_WINDOW      = 6;     // 位相モニタリングウィンドウ（サンプル数）
 const SLOT_STALE_FRAMES = 20;    // この連続フレーム数途切れたらスロット位置をリセット
-const PROFILE_FRAMES    = 30;    // 体格プロファイリング期間（フレーム数）
+const PROFILE_FRAMES    = 8;     // 体格プロファイリング期間（フレーム数）— 3D計測で早期確定
 const OCCLUSION_DIST    = 0.18;  // オクルージョン判定距離（正規化座標）
 // 合成人体フィルタ定数（同色衣装で2人が1体として誤検出されるケースを除去）
 const MAX_BODY_HEIGHT   = 0.72;  // 正規化座標での最大有効体長（これ以上は合成人体）
@@ -222,8 +222,7 @@ const SELF_HEAL_OCCLUSION_WINDOW  = 90;  // 重なり終了後このフレーム
 const MANUAL_SWAP_LOCK_FRAMES     = 90;  // 手動Swap後に自動補正をブロックするフレーム数
 
 // ── Cold Start 定数 ───────────────────────────────────────────────────────
-const SHR_LEADER_THRESHOLD    = 1.15;  // SHR ≥ これ = Leader候補（逆三角形体型）
-const SHR_FOLLOWER_THRESHOLD  = 1.05;  // SHR ≤ これ = Follower候補（ペアシェイプ体型）
+// 判定基準参考値: 男性(Leader)のSHR > 1.10, 女性(Follower)のSHR < 1.05
 const ANKLE_STILL_THRESH      = 0.008; // 準備動作: 足首静止判定閾値（正規化座標/frame）
 const HIP_MOVE_THRESH         = 0.008; // 準備動作: 腰先行判定閾値（正規化座標/frame）
 const CONF_TURN_ALLOW_OMEGA   = 0.25;  // 拮抗時に最初のターンで再評価する omega 閾値
@@ -237,7 +236,7 @@ const INCEPTION_SCORE            = 0.5;   // Inception 検知スコア加算量
 const CENTRIPETAL_SCORE          = 0.12;  // 向心力スコア（ターン中毎フレーム加算）
 const SPACE_SCORE                = 0.7;   // スペース管理スコア（オクルージョン直前）
 const DYNAMICS_DECAY             = 0.993; // スコア減衰係数（毎フレーム; ~100f で半減）
-const DYNAMICS_WEIGHT            = 1.0;   // 動力学スコアのプロファイルスコアへの重み（初期判定用）
+// DYNAMICS_WEIGHT は第0原則により性別判定には使用しない（dynamicsScore は別用途で継続計算）
 
 // ── 物理ステートマシン定数 ────────────────────────────────────────────────
 const OMEGA_HIST_LEN = 90;  // 角速度推定用 X履歴フレーム数（~3秒 @ 30fps）
@@ -965,70 +964,18 @@ function isFrontalPose(lm: NormalizedLandmark[]): boolean {
 
 // ── 体格スコア（リーダーらしさ） ─────────────────────────────────────────
 /**
- * Normalized Structural Scoring — 遠近法不変の骨格比率で Leader スコアを算出
+ * 第0原則: 純粋な3D SHR (肩幅 / 腰幅) のみで Leader スコアを算出。
  *
- * Primary: ShoulderWidth / BodyHeight (SW/H)
- *   正面向きデータを優先（横向き時の肩幅過小評価を排除）。
- *   この比率はカメラからの距離に依存しない不変量:
- *   男性: ~0.30–0.45, 女性: ~0.22–0.35
+ * 3D XZ平面距離（Math.hypot）を使用するため、横向き時も骨格の「厚み」で正確に計測。
+ * 向き・遠近・Visibility・高さ等は一切参照しない。
  *
- * Secondary: SHR (Shoulder/Hip), Head Volume, Prep Dynamics
- *   各々小さなボーナス/ペナルティとして加算（SW/H を覆さない程度）。
- *
- * ★ visibility/Z-value は役割判定に使用しない。
- *
- * heightWeight > 1 のとき: 「背が高い方をリーダー」補足信号を微小に加算。
+ * 典型値: 男性（Leader）SHR > 1.10, 女性（Follower）SHR < 1.05
  */
-function profileLeaderScore(p: PersonProfile, heightWeight: number): number {
-  if (p.sampleCount === 0) return 0;
-
-  // 各指標は独立した sample count で正規化（希釈バグを防ぐ）
+function profileLeaderScore(p: PersonProfile, _heightWeight: number): number {
   const avgSW = p.shoulderSamples > 0 ? p.totalShoulderWidth / p.shoulderSamples : 0;
-  const avgHW2 = p.hipSamples     > 0 ? p.totalHipWidth      / p.hipSamples      : 0;
-  const avgH2  = p.sampleCount    > 0
-    ? (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount : 0;
-
-  // ── Primary: SW/H 構造比率（遠近法不変）──────────────────────────────
-  // 正面向きフレームが MIN_FRONTAL_SAMPLES 以上あれば優先使用
-  let structScore: number;
-  if (p.frontalSampleCount >= MIN_FRONTAL_SAMPLES) {
-    const fSW = p.frontalShoulderWidth / p.frontalSampleCount;
-    const fBH = p.frontalBodyHeight    / p.frontalSampleCount;
-    structScore = fBH > 0 ? fSW / fBH : 0.30;
-  } else if (p.shoulderSamples > 0 && avgH2 > 0) {
-    // フォールバック: 独立 sample count で正確に正規化
-    structScore = avgSW / avgH2;
-  } else {
-    structScore = 0.30; // データ不足のデフォルト（中立値）
-  }
-  // structScore 典型値: 男性 0.30–0.45, 女性 0.22–0.35
-
-  // ── Secondary: SHR ボーナス/ペナルティ（SW/H を補強）─────────────────
-  const avgHW  = avgHW2; // 正しい hipSamples で正規化済み
-  const shr    = avgHW > 0 ? avgSW / avgHW : 1;
-  const shrAdj = shr >= SHR_LEADER_THRESHOLD
-    ? (shr - SHR_LEADER_THRESHOLD) * 0.08        // 逆三角形 → +
-    : shr <= SHR_FOLLOWER_THRESHOLD
-    ? -(SHR_FOLLOWER_THRESHOLD - shr) * 0.08     // ペアシェイプ → -
-    : 0;
-
-  // ── Secondary: Head Volume（大きい = Follower傾向 → 小さなペナルティ）
-  const avgEW = p.totalEarWidth > 0 ? p.totalEarWidth / p.sampleCount : 0;
-  const faceRatio = avgSW > 0 && avgEW > 0 ? avgEW / avgSW : 0.5;
-  const headAdj   = -Math.max(0, Math.min(0.04, (faceRatio - 0.45) * 0.12));
-  const avgTriArea = p.totalHeadTriangleArea / Math.max(p.sampleCount, 1);
-  const triAdj    = -Math.max(0, Math.min(0.04, (avgTriArea - 0.002) * 8));
-
-  // ── Secondary: Preparation Dynamics ──────────────────────────────────
-  const totalPrep = p.coldPrepLeader + p.coldPrepFollower;
-  const prepAdj   = totalPrep >= 3 ? (p.coldPrepLeader / totalPrep - 0.5) * 0.06 : 0;
-
-  // ── Supplement: heightLeaderHint（補足のみ、SW/H を覆さない）──────────
-  const heightAdj = heightWeight > 1
-    ? ((p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount) * 0.04
-    : 0;
-
-  return structScore + shrAdj + headAdj + triAdj + prepAdj + heightAdj;
+  const avgHW = p.hipSamples      > 0 ? p.totalHipWidth      / p.hipSamples      : 0;
+  if (avgSW === 0 || avgHW === 0) return 0;
+  return avgSW / avgHW; // 3D SHR: 男性 > 1.10, 女性 < 1.05
 }
 
 /**
@@ -1036,21 +983,18 @@ function profileLeaderScore(p: PersonProfile, heightWeight: number): number {
  * Safety Guard: スコア差が CONFIDENCE_THRESHOLD 未満の場合は低確信度フラグを返す。
  * 低確信度時は初期判定を行うが、後続の dynamicsScore 蓄積による上書きを優先する。
  */
-const CONFIDENCE_THRESHOLD = 0.25; // スコア差がこれ未満 → 低確信度（動き出し優先）
+const CONFIDENCE_THRESHOLD = 0.05; // SHR差がこれ未満 → 低確信度（5%以内は体型が近い）
 
 function assignRolesByProfile(
   slots: [RoleSlot, RoleSlot],
-  useHeight: boolean,
+  _useHeight: boolean,
 ): { confidenceLow: boolean } {
-  const w = useHeight ? 1.5 : 1;
-  const s0 = profileLeaderScore(slots[0].profile, w) + slots[0].dynamicsScore * DYNAMICS_WEIGHT;
-  const s1 = profileLeaderScore(slots[1].profile, w) + slots[1].dynamicsScore * DYNAMICS_WEIGHT;
+  // 第0原則: 純粋な3D SHR（肩幅/腰幅）のみで判定
+  const s0 = profileLeaderScore(slots[0].profile, 1);
+  const s1 = profileLeaderScore(slots[1].profile, 1);
   if (s0 >= s1) { slots[0].role = 'leader'; slots[1].role = 'follower'; }
   else          { slots[0].role = 'follower'; slots[1].role = 'leader'; }
-  // Safety Guard: スコア差が小さいほど不確実 → dynamicsScore 蓄積を優先させる
-  const scoreDiff = Math.abs(s0 - s1);
-  const maxScore  = Math.max(Math.abs(s0), Math.abs(s1), 0.01);
-  const confidenceLow = scoreDiff / maxScore < CONFIDENCE_THRESHOLD;
+  const confidenceLow = Math.abs(s0 - s1) < CONFIDENCE_THRESHOLD;
   return { confidenceLow };
 }
 
@@ -2066,18 +2010,21 @@ export function usePoseEstimation(
                   // dynamicsScore は引き続き計算（初期判定・Self-Healing・デバッグ用）するが
                   // ここでのロール変更トリガーとしては使用しない。
 
-                  // ── Cold Start: 3特徴量（SHR + Head Volume + PrepDynamics）による初期ロール確定
-                  // プロファイル蓄積が完了したとき（PROFILE_FRAMES フレーム分の2人同時検出）に発火。
-                  // !roleDetectedRef.current は不要: BPM ビート暫定判定があっても上書きする。
+                  // ── Cold Start: 3D SHR（肩幅/腰幅）による性別判定 → 初期ロール確定
+                  // 第0原則: 向き・遠近・BPM暫定判定を問わず、PROFILE_FRAMES 分の骨格が揃った
+                  // 瞬間に即時発火してロールを確定。一切のブロック条件なし。
                   if (!profileCompleteRef.current
-                      && slots[0].profile.sampleCount >= PROFILE_FRAMES
-                      && slots[1].profile.sampleCount >= PROFILE_FRAMES) {
-                    profileCompleteRef.current = true;
+                      && slots[0].profile.shoulderSamples >= PROFILE_FRAMES
+                      && slots[1].profile.shoulderSamples >= PROFILE_FRAMES
+                      && slots[0].profile.hipSamples >= PROFILE_FRAMES
+                      && slots[1].profile.hipSamples >= PROFILE_FRAMES) {
+                    profileCompleteRef.current  = true;
                     const { confidenceLow } = assignRolesByProfile(slots, heightLeaderHintRef.current);
                     setRoleConfidenceLow(confidenceLow);
-                    // Sticky Start: 初期ボーナス stbl=100 で即座にStickyをアクティブ化
                     roleDetectedRef.current     = true;
-                    roleStableFramesRef.current = 100;
+                    roleStableFramesRef.current = 999;  // 永続Sticky
+                    // 性別ハードロック: 判定後は一切の自動ロール変更を禁止
+                    manualRoleLockedRef.current = true;
                     setRoleDetected(true);
                     if (si0 >= 0) personRoles.set(si0, slots[0].role);
                     if (si1 >= 0) personRoles.set(si1, slots[1].role);
@@ -2361,7 +2308,6 @@ export function usePoseEstimation(
                     // ── デバッグパネル更新（10フレームごと）
                     if (frameIndexRef.current % 10 === 0) {
                       const zOF = slots[0].zFront ? 0 : slots[1].zFront ? 1 : -1;
-                      const w = heightLeaderHintRef.current ? 1.5 : 1;
                       // 各スロットの Cold Start スコアデバッグ値を計算
                       const makeDebugSlot = (s: 0 | 1): PoseDebugSlot => {
                         const si  = s === 0 ? si0 : si1;
@@ -2411,8 +2357,8 @@ export function usePoseEstimation(
                           avgBH: aH,
                           shr,
                           frontalN: p.frontalSampleCount,
-                          profileScore: p.sampleCount > 0 ? profileLeaderScore(p, w) : 0,
-                          profileSamples: p.sampleCount,
+                          profileScore: profileLeaderScore(p, 1),  // 純粋な3D SHR値
+                          profileSamples: p.shoulderSamples,  // 肩幅サンプル数を表示
                           shoulderSamples: p.shoulderSamples,
                           isFrontal: frontalNow,
                         };

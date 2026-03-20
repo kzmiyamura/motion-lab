@@ -1828,9 +1828,6 @@ export function usePoseEstimation(
                     ? Math.floor((video.currentTime * bpmRef.current / 60) % 8) + 1
                     : undefined;
 
-                  // 速度計算用: 更新前の Z を保存
-                  const prevZ = [slots[0].hipZ, slots[1].hipZ];
-
                   // justSeparated フェーズ確認用: スロット更新前の期待位置を保存
                   // omega > 0.05 時はファントム予測座標を使い回転の連続性を確保
                   const expectedHips: (Centroid | null)[] = [
@@ -2030,40 +2027,8 @@ export function usePoseEstimation(
                     if (si1 >= 0) personRoles.set(si1, slots[1].role);
                   }
 
-                  // ── プロファイル未完の場合: BPMがあれば暫定ロール割り当て（1人のみ検出でも可）
-                  if (!roleDetectedRef.current && (si0 >= 0 || si1 >= 0) && currentBeatNum !== undefined) {
-                    const breakBeat = styleRef.current === 'on1' ? 1 : 2;
-                    if (currentBeatNum === breakBeat && prevBeatNumRef.current !== breakBeat) {
-                      if (si0 >= 0 && si1 >= 0) {
-                        // 2人同時検出かつプロファイル未完: Z軸差分で暫定判定
-                        const dz0 = slots[0].hipZ - prevZ[0];
-                        const dz1 = slots[1].hipZ - prevZ[1];
-                        if (dz0 < dz1) { slots[0].role = 'leader'; slots[1].role = 'follower'; }
-                        else           { slots[0].role = 'follower'; slots[1].role = 'leader'; }
-                      } else {
-                        // 1人のみ: 暫定リーダー
-                        const s = si0 >= 0 ? 0 : 1;
-                        slots[s].role = 'leader';
-                      }
-                      roleDetectedRef.current = true;
-                      setRoleDetected(true);
-                      if (si0 >= 0) personRoles.set(si0, slots[0].role);
-                      if (si1 >= 0) personRoles.set(si1, slots[1].role);
-                    }
-                  }
-
-                  // ── 2人目が初めて検出されたとき、逆ロールを自動割り当て
-                  if (roleDetectedRef.current) {
-                    for (let s = 0; s < 2; s++) {
-                      const si = s === 0 ? si0 : si1;
-                      if (si >= 0 && slots[s].role === null) {
-                        const otherRole = slots[1 - s].role;
-                        slots[s].role = otherRole === 'leader' ? 'follower'
-                          : otherRole === 'follower' ? 'leader' : null;
-                        if (slots[s].role) personRoles.set(si, slots[s].role);
-                      }
-                    }
-                  }
+                  // ── ロール割り当ては ps（3D SHR）完了時のみ。BPM暫定・逆ロール伝播は廃止 ──
+                  // 第0原則: ロールを変更できる唯一のパスは assignRolesByProfile（ps値比較）。
                   prevBeatNumRef.current = currentBeatNum;
 
                   // ── オクルージョン離脱直後: ロール正当性を検証（3段階ガード）

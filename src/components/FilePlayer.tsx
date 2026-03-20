@@ -4,7 +4,7 @@ import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable,
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import { useWakeLock } from '../hooks/useWakeLock';
-import { usePoseEstimation, type VizMode } from '../hooks/usePoseEstimation';
+import { usePoseEstimation, type VizMode, type SalsaStyle } from '../hooks/usePoseEstimation';
 import { SequenceView } from './SequenceView';
 import styles from './FilePlayer.module.css';
 
@@ -110,14 +110,15 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [vizMode, setVizMode] = useState<VizMode>('off');
   const [lockModeActive, setLockModeActive] = useState(false);
+  const [salsaStyle, setSalsaStyle] = useState<SalsaStyle>('on1');
 
   // Zoom gesture refs
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
 
-  const { lockAt, unlock, isLocked, sequence, clearSequence } = usePoseEstimation(
+  const { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
-    bpm, isMirrored,
+    bpm, isMirrored, salsaStyle,
   );
 
   // Derived
@@ -602,6 +603,21 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             aria-label="ミラー反転"
           >↔</button>
         )}
+        {/* On1/On2 スタイルトグル（骨格ON時のみ） */}
+        {source.isVideo && vizMode !== 'off' && (
+          <div className={styles.styleToggleGroup}>
+            {(['on1', 'on2'] as const).map(s => (
+              <button
+                key={s}
+                className={`${styles.styleToggleBtn} ${salsaStyle === s ? styles.styleToggleBtnActive : ''}`}
+                onClick={() => { setSalsaStyle(s); clearRoles(); }}
+                title={s === 'on1' ? 'On1 (LA Style) — Count 1 でブレイク' : 'On2 (NY Style) — Count 2 でブレイク'}
+              >
+                {s === 'on1' ? 'On1' : 'On2'}
+              </button>
+            ))}
+          </div>
+        )}
         {source.isVideo && (
           <div className={styles.vizModeGroup} role="group" aria-label="骨格表示モード">
             {(['off', 'full', 'salsa', 'trail'] as const).map(m => (
@@ -918,6 +934,14 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               {playerControlsContent}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── ロール同期エラー通知 */}
+      {syncError && (
+        <div className={styles.syncErrorNotice}>
+          ⚠ 解析エラー：同期が取れていません（LeaderとFollowerが同方向に移動しています）
+          <button className={styles.syncErrorDismiss} onClick={clearRoles}>リセット</button>
         </div>
       )}
 

@@ -3,7 +3,9 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 // @mediapipe/tasks-vision の exports 形式が非標準のため型を自前定義
 interface NormalizedLandmark { x: number; y: number; z: number; visibility?: number; }
 
-export type VizMode = 'off' | 'full' | 'salsa' | 'trail';
+export type VizMode      = 'off' | 'full' | 'salsa' | 'trail';
+export type SalsaStyle   = 'on1' | 'on2';
+export type PersonRole   = 'leader' | 'follower' | null;
 
 export interface SequenceEvent {
   id: number;
@@ -14,16 +16,15 @@ export interface SequenceEvent {
 }
 
 export interface UsePoseEstimationResult {
-  /** CSS transform 逆変換済みのキャンバス座標を受け取り、最近傍の人物をロックオン */
   lockAt: (canvasX: number, canvasY: number) => void;
-  /** ロック解除 */
   unlock: () => void;
-  /** 現在ロック中かどうか（ボタン表示用） */
   isLocked: boolean;
-  /** 検出されたシーケンスイベント */
   sequence: SequenceEvent[];
-  /** シーケンスをクリア */
   clearSequence: () => void;
+  /** On1/On2 判定後の位相同期エラー */
+  syncError: boolean;
+  /** ロール判定をリセット */
+  clearRoles: () => void;
 }
 
 // ── 定数 ─────────────────────────────────────────────────────────────────
@@ -50,11 +51,23 @@ const COOLDOWN_SEC  = 1.5;   // 同じアクション間の最小インターバ
 
 // ── 型 ───────────────────────────────────────────────────────────────────
 
-type Connection = { start: number; end: number };
-type Letterbox  = { offsetX: number; offsetY: number; renderW: number; renderH: number };
-type Centroid   = { x: number; y: number };
+type Connection  = { start: number; end: number };
+type Letterbox   = { offsetX: number; offsetY: number; renderW: number; renderH: number };
+type Centroid    = { x: number; y: number };
 type VelocityVec = { vx: number; vy: number };
 type AnkleFrame  = { lx: number; ly: number; rx: number; ry: number };
+type DrawColors  = { line: string; joint: string; lw: number; jr: number };
+type RoleSlot    = { hip: Centroid | null; hipZ: number; role: PersonRole; xHistory: number[] };
+
+// ── ロール描画カラー ──────────────────────────────────────────────────────
+const COLOR_LEADER:   DrawColors = { line: '#0066ff', joint: '#66aaff', lw: 3,   jr: 5 };
+const COLOR_FOLLOWER: DrawColors = { line: '#ff00cc', joint: '#ff66ee', lw: 3,   jr: 5 };
+const COLOR_MAIN:     DrawColors = { line: 'rgba(255,60,60,0.95)',   joint: 'rgba(255,210,50,0.95)', lw: 3,   jr: 5 };
+const COLOR_OTHER:    DrawColors = { line: 'rgba(255,255,255,0.45)', joint: 'rgba(200,200,200,0.50)', lw: 1.5, jr: 3 };
+
+// ── ロール検出定数 ────────────────────────────────────────────────────────
+const ROLE_MATCH_DIST = 0.35;  // スロットマッチング距離閾値
+const PHASE_WINDOW    = 3;     // 位相モニタリングウィンドウ（サンプル数）
 
 interface PatternDetectionState {
   turnFrames: number;
@@ -334,6 +347,14 @@ function fillTextMirrorSafe(
   ctx.restore();
 }
 
+// ── ロール → 描画カラー ────────────────────────────────────────────────────
+
+function getRoleColors(role: PersonRole, isMain: boolean): DrawColors {
+  if (role === 'leader')   return COLOR_LEADER;
+  if (role === 'follower') return COLOR_FOLLOWER;
+  return isMain ? COLOR_MAIN : COLOR_OTHER;
+}
+
 // ── Draw: Full モード（全身33点） ─────────────────────────────────────────
 
 function drawFullPerson(
@@ -341,26 +362,22 @@ function drawFullPerson(
   landmarks: NormalizedLandmark[],
   connections: Connection[],
   lb: Letterbox,
-  isMain: boolean,
+  dc: DrawColors,
 ) {
-  const lc = isMain ? 'rgba(255,60,60,0.95)' : 'rgba(255,255,255,0.50)';
-  const jc = isMain ? 'rgba(255,210,50,0.95)' : 'rgba(200,200,200,0.55)';
-  const lw = isMain ? 3 : 1.5;
-  const jr = isMain ? 5 : 3;
   const toC = (lm: NormalizedLandmark) => ({ x: lb.offsetX + lm.x * lb.renderW, y: lb.offsetY + lm.y * lb.renderH });
 
-  ctx.strokeStyle = lc; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.strokeStyle = dc.line; ctx.lineWidth = dc.lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   for (const { start, end } of connections) {
     const a = landmarks[start], b = landmarks[end];
     if (!a || !b || (a.visibility ?? 1) < VIS_THRESHOLD || (b.visibility ?? 1) < VIS_THRESHOLD) continue;
     const pA = toC(a), pB = toC(b);
     ctx.beginPath(); ctx.moveTo(pA.x, pA.y); ctx.lineTo(pB.x, pB.y); ctx.stroke();
   }
-  ctx.fillStyle = jc;
+  ctx.fillStyle = dc.joint;
   for (const lm of landmarks) {
     if ((lm.visibility ?? 1) < VIS_THRESHOLD) continue;
     const p = toC(lm);
-    ctx.beginPath(); ctx.arc(p.x, p.y, jr, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x, p.y, dc.jr, 0, Math.PI * 2); ctx.fill();
   }
 }
 
@@ -621,6 +638,69 @@ function drawDebugOverlay(
   ctx.restore();
 }
 
+// ── Draw: ロールバッジ（LEADER / FOLLOWER ラベル） ───────────────────────
+
+function drawRoleBadge(
+  ctx: CanvasRenderingContext2D,
+  landmarks: NormalizedLandmark[],
+  lb: Letterbox,
+  role: PersonRole,
+  cw: number,
+  mirrored: boolean,
+) {
+  if (!role) return;
+  const nose = landmarks[0];
+  if (!nose || (nose.visibility ?? 1) < VIS_THRESHOLD) return;
+  const px = lb.offsetX + nose.x * lb.renderW;
+  const py = lb.offsetY + nose.y * lb.renderH - 24;
+  const color = role === 'leader' ? '#0066ff' : '#ff00cc';
+  const label = role === 'leader' ? 'LEADER' : 'FOLLOWER';
+  ctx.save();
+  ctx.font = 'bold 11px monospace';
+  ctx.fillStyle = color;
+  ctx.shadowColor = 'black';
+  ctx.shadowBlur = 4;
+  fillTextMirrorSafe(ctx, label, px, py, cw, mirrored);
+  ctx.restore();
+}
+
+// ── ロールスロットマッチング（Nearest Neighbor） ─────────────────────────
+
+function matchRoleSlots(
+  all: NormalizedLandmark[][],
+  slots: [RoleSlot, RoleSlot],
+): [number, number] {
+  if (all.length === 0) return [-1, -1];
+  const hips = all.map(lm => computeMidHip(lm));
+
+  // 両スロット未初期化時: 最初の2人を割り当て
+  if (!slots[0].hip && !slots[1].hip) {
+    return [0, all.length > 1 ? 1 : -1];
+  }
+
+  const result: [number, number] = [-1, -1];
+  const used = new Set<number>();
+
+  for (let s = 0; s < 2; s++) {
+    if (!slots[s].hip) {
+      for (let i = 0; i < all.length; i++) {
+        if (!used.has(i) && hips[i]) { result[s] = i; used.add(i); break; }
+      }
+      continue;
+    }
+    let minDist = ROLE_MATCH_DIST, best = -1;
+    for (let i = 0; i < all.length; i++) {
+      if (used.has(i)) continue;
+      const h = hips[i];
+      if (!h) continue;
+      const d = Math.hypot(h.x - slots[s].hip!.x, h.y - slots[s].hip!.y);
+      if (d < minDist) { minDist = d; best = i; }
+    }
+    if (best >= 0) { result[s] = best; used.add(best); }
+  }
+  return result;
+}
+
 // ── フック本体 ────────────────────────────────────────────────────────────
 
 export function usePoseEstimation(
@@ -629,6 +709,7 @@ export function usePoseEstimation(
   mode: VizMode,
   bpm = 0,
   isMirrored = false,
+  salsaStyle: SalsaStyle = 'on1',
 ): UsePoseEstimationResult {
   const modeRef      = useRef<VizMode>(mode);
   modeRef.current    = mode;
@@ -636,6 +717,8 @@ export function usePoseEstimation(
   bpmRef.current     = bpm;
   const mirroredRef  = useRef(isMirrored);
   mirroredRef.current = isMirrored;
+  const styleRef     = useRef<SalsaStyle>(salsaStyle);
+  styleRef.current   = salsaStyle;
 
   const enabled = mode !== 'off';
 
@@ -671,10 +754,27 @@ export function usePoseEstimation(
   // ── シーケンス
   const [sequence, setSequence] = useState<SequenceEvent[]>([]);
 
+  // ── ロール判定（On1/On2）
+  const makeRoleSlot = (): RoleSlot => ({ hip: null, hipZ: 0, role: null, xHistory: [] });
+  const roleSlots        = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
+  const roleDetectedRef  = useRef(false);
+  const prevBeatNumRef   = useRef<number | undefined>(undefined);
+  const [syncError, setSyncError]   = useState(false);
+  const syncErrorRef     = useRef(false);
+
   // ── シーケンスクリア
   const clearSequence = useCallback(() => {
     setSequence([]);
     patternStateRef.current = makeInitialPatternState();
+  }, []);
+
+  // ── ロール判定リセット
+  const clearRoles = useCallback(() => {
+    roleSlots.current = [makeRoleSlot(), makeRoleSlot()];
+    roleDetectedRef.current = false;
+    prevBeatNumRef.current  = undefined;
+    syncErrorRef.current    = false;
+    setSyncError(false);
   }, []);
 
   // ── ロックオン（CSS transform 逆変換済みのキャンバス座標を受け取る）
@@ -871,24 +971,93 @@ export function usePoseEstimation(
                     },
                   );
 
+                  // ── ロールスロット更新 & 役割判定 ────────────────────────
+                  const slots   = roleSlots.current;
+                  const [si0, si1] = matchRoleSlots(all, slots);
+                  const personRoles = new Map<number, PersonRole>();
+
+                  // ビート番号（役割判定に使用）
+                  const currentBeatNum = bpmRef.current > 0
+                    ? Math.floor((video.currentTime * bpmRef.current / 60) % 8) + 1
+                    : undefined;
+
+                  const prevZ = [slots[0].hipZ, slots[1].hipZ];
+                  for (let s = 0; s < 2; s++) {
+                    const si = s === 0 ? si0 : si1;
+                    if (si < 0) continue;
+                    const hip = computeMidHip(all[si]);
+                    if (!hip) continue;
+                    const newZ = ((all[si][23]?.z ?? 0) + (all[si][24]?.z ?? 0)) / 2;
+                    // X方向履歴（位相モニタリング用）
+                    if (slots[s].hip) {
+                      const dx = hip.x - slots[s].hip!.x;
+                      if (Math.abs(dx) > 0.004) {
+                        slots[s].xHistory.push(Math.sign(dx));
+                        if (slots[s].xHistory.length > PHASE_WINDOW + 2) slots[s].xHistory.shift();
+                      }
+                    }
+                    slots[s].hip  = hip;
+                    slots[s].hipZ = newZ;
+                    if (slots[s].role) personRoles.set(si, slots[s].role);
+                  }
+
+                  // ── ブレイクステップでロール判定（初回のみ）
+                  if (!roleDetectedRef.current && si0 >= 0 && si1 >= 0 && currentBeatNum !== undefined) {
+                    const breakBeat = styleRef.current === 'on1' ? 1 : 2;
+                    if (currentBeatNum === breakBeat && prevBeatNumRef.current !== breakBeat) {
+                      const dz0 = slots[0].hipZ - prevZ[0];
+                      const dz1 = slots[1].hipZ - prevZ[1];
+                      // deltaZ < 0 = 前方（カメラに近づく）= LEADER
+                      if (dz0 < dz1) {
+                        slots[0].role = 'leader'; slots[1].role = 'follower';
+                      } else {
+                        slots[0].role = 'follower'; slots[1].role = 'leader';
+                      }
+                      roleDetectedRef.current = true;
+                      if (si0 >= 0) personRoles.set(si0, slots[0].role);
+                      if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                    }
+                  }
+                  prevBeatNumRef.current = currentBeatNum;
+
+                  // ── 位相モニタリング（同方向移動 = 解析エラー）
+                  if (roleDetectedRef.current) {
+                    const ls = slots.find(s => s.role === 'leader');
+                    const fs = slots.find(s => s.role === 'follower');
+                    if (ls && fs && ls.xHistory.length >= PHASE_WINDOW && fs.xHistory.length >= PHASE_WINDOW) {
+                      const lr = ls.xHistory.slice(-PHASE_WINDOW);
+                      const fr = fs.xHistory.slice(-PHASE_WINDOW);
+                      const allSame = lr.every((d, i) => d !== 0 && d === fr[i]);
+                      if (allSame !== syncErrorRef.current) {
+                        syncErrorRef.current = allSame;
+                        setSyncError(allSame);
+                      }
+                    }
+                  }
+
                   // ── 描画
                   const isLockMode = lockedRef.current !== null;
 
                   if (currentMode === 'trail') {
-                    // 全員の骨格をゴーストで描画
+                    // 全員の骨格をゴースト（ロール色）で描画
                     for (let i = 0; i < all.length; i++) {
-                      drawFullPerson(ctx, all[i], connections, lb, false);
+                      drawFullPerson(ctx, all[i], connections, lb, getRoleColors(personRoles.get(i) ?? null, false));
                     }
-                    // メイン/ロック対象の足首軌跡
                     drawStepTrail(ctx, ankleHistoryRef.current, lb, true);
+                    for (let i = 0; i < all.length; i++) {
+                      drawRoleBadge(ctx, all[i], lb, personRoles.get(i) ?? null, cw, mirrored);
+                    }
 
                   } else if (currentMode === 'full') {
                     if (isLockMode) {
-                      drawFullPerson(ctx, all[targetIdx], connections, lb, true);
+                      drawFullPerson(ctx, all[targetIdx], connections, lb, getRoleColors(personRoles.get(targetIdx) ?? null, true));
                     } else {
                       for (let i = 0; i < all.length; i++) {
-                        drawFullPerson(ctx, all[i], connections, lb, i === targetIdx);
+                        drawFullPerson(ctx, all[i], connections, lb, getRoleColors(personRoles.get(i) ?? null, i === targetIdx));
                       }
+                    }
+                    for (let i = 0; i < all.length; i++) {
+                      drawRoleBadge(ctx, all[i], lb, personRoles.get(i) ?? null, cw, mirrored);
                     }
 
                   } else {
@@ -899,6 +1068,9 @@ export function usePoseEstimation(
                       for (let i = 0; i < all.length; i++) {
                         drawSalsaPerson(ctx, all[i], lb, i === targetIdx, cw, mirrored);
                       }
+                    }
+                    for (let i = 0; i < all.length; i++) {
+                      drawRoleBadge(ctx, all[i], lb, personRoles.get(i) ?? null, cw, mirrored);
                     }
                   }
 
@@ -945,5 +1117,5 @@ export function usePoseEstimation(
     };
   }, [enabled, videoRef, canvasRef]);
 
-  return { lockAt, unlock, isLocked, sequence, clearSequence };
+  return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles };
 }

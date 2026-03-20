@@ -783,6 +783,8 @@ export function usePoseEstimation(
 
   // ── パターン検出状態
   const patternStateRef = useRef<PatternDetectionState>(makeInitialPatternState());
+  // ターン検出後の位相チェック抑制用（ターン中は同方向移動が正常なため）
+  const lastTurnTimeRef = useRef<number>(-Infinity);
 
   // ── イベントID
   const eventIdRef = useRef(0);
@@ -1056,6 +1058,10 @@ export function usePoseEstimation(
                     bpmRef.current,
                     patternStateRef.current,
                     (action, quality, beatNum) => {
+                      // ターン検出時刻を記録 → 位相チェックを一時抑制
+                      if (action === 'Turn') {
+                        lastTurnTimeRef.current = video.currentTime;
+                      }
                       const evt: SequenceEvent = {
                         id: eventIdRef.current++,
                         time: video.currentTime,
@@ -1121,7 +1127,10 @@ export function usePoseEstimation(
                   prevBeatNumRef.current = currentBeatNum;
 
                   // ── 位相モニタリング（同方向移動 = 解析エラー）
-                  if (roleDetectedRef.current) {
+                  // ターン中・直後（2秒間）は抑制 — ターン時は両者が同方向に動くのが正常
+                  const TURN_SUPPRESS_SEC = 2.0;
+                  const sinceLastTurn = video.currentTime - lastTurnTimeRef.current;
+                  if (roleDetectedRef.current && sinceLastTurn > TURN_SUPPRESS_SEC) {
                     const ls = slots.find(s => s.role === 'leader');
                     const fs = slots.find(s => s.role === 'follower');
                     if (ls && fs && ls.xHistory.length >= PHASE_WINDOW && fs.xHistory.length >= PHASE_WINDOW) {
@@ -1133,6 +1142,10 @@ export function usePoseEstimation(
                         setSyncError(allSame);
                       }
                     }
+                  } else if (sinceLastTurn <= TURN_SUPPRESS_SEC && syncErrorRef.current) {
+                    // ターン中に出ていたエラーを自動クリア
+                    syncErrorRef.current = false;
+                    setSyncError(false);
                   }
 
                   // ── フレームスナップショットをバッファに追加

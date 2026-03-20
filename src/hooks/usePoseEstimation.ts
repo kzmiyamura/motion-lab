@@ -182,8 +182,7 @@ const MAX_UL_RATIO      = 4.5;   // 上半身/下半身比の最大値
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
 const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
 const STICKY_MIN_FRAMES       = 45;   // 粘り強い追跡を有効化するまでの安定フレーム数（~1.5秒）
-const STICKY_HARD_LOCK_FRAMES = 100;  // この安定フレーム数を超えたら dynamics による上書きを完全禁止
-const POST_OCCLUSION_COOLDOWN = 15;   // オクルージョン解除直後の dynamics 再評価スキップフレーム数
+const POST_OCCLUSION_COOLDOWN = 15;   // オクルージョン解除直後のフレーム数（冷却期間）
 
 // ── Self-Healing 定数 ──────────────────────────────────────────────────────
 const SELF_HEAL_INVERSION_FRAMES  = 30;  // スコア逆転がこのフレーム数続いたら自動復旧を検討
@@ -197,8 +196,7 @@ const INCEPTION_SCORE            = 0.5;   // Inception 検知スコア加算量
 const CENTRIPETAL_SCORE          = 0.12;  // 向心力スコア（ターン中毎フレーム加算）
 const SPACE_SCORE                = 0.7;   // スペース管理スコア（オクルージョン直前）
 const DYNAMICS_DECAY             = 0.993; // スコア減衰係数（毎フレーム; ~100f で半減）
-const DYNAMICS_WEIGHT            = 1.0;   // 動力学スコアのプロファイルスコアへの重み
-const DYNAMICS_REASSIGN_THRESHOLD = 4.0;  // 動力学スコアによるロール再評価の閾値
+const DYNAMICS_WEIGHT            = 1.0;   // 動力学スコアのプロファイルスコアへの重み（初期判定用）
 
 // ── 物理ステートマシン定数 ────────────────────────────────────────────────
 const OMEGA_HIST_LEN = 90;  // 角速度推定用 X履歴フレーム数（~3秒 @ 30fps）
@@ -1862,34 +1860,14 @@ export function usePoseEstimation(
                   // ── ダンス動力学スコア更新（Inception / Centripetal / Space Management）
                   updateDynamicsScores(slots, all, si0, si1, prevSlotDist, frameIndexRef.current);
 
-                  // ── 動力学スコアによる動的ロール再評価（確定後も継続的に補正）
-                  // Hard-lock: stbl >= STICKY_HARD_LOCK_FRAMES のとき再評価を完全スキップ
-                  // Cooldown: オクルージョン解除直後 POST_OCCLUSION_COOLDOWN フレームはスキップ
-                  // Sticky 期間中はより高い閾値を要求し、syncError がある場合は閾値を下げる
-                  const isHardLocked = roleStableFramesRef.current >= STICKY_HARD_LOCK_FRAMES;
-                  const isInCooldown = postOcclusionCooldownRef.current > 0;
-                  if (roleDetectedRef.current && si0 >= 0 && si1 >= 0
-                      && !isOccludedRef.current
-                      && !isHardLocked
-                      && !isInCooldown
-                      && slots[0].role !== null && slots[1].role !== null) {
-                    const dynDiff = slots[0].dynamicsScore - slots[1].dynamicsScore;
-                    const stickyMult = roleStableFramesRef.current >= STICKY_MIN_FRAMES ? 2.5 : 1.0;
-                    const dynThreshold = syncErrorRef.current
-                      ? DYNAMICS_REASSIGN_THRESHOLD * 0.6  // syncError 時は緩やかに
-                      : DYNAMICS_REASSIGN_THRESHOLD * stickyMult;
-                    if (Math.abs(dynDiff) > dynThreshold) {
-                      const dynSays0Leader = dynDiff > 0;
-                      if ((dynSays0Leader && slots[0].role !== 'leader') ||
-                          (!dynSays0Leader && slots[0].role !== 'follower')) {
-                        const r0 = slots[0].role, r1 = slots[1].role;
-                        slots[0].role = r1; slots[1].role = r0;
-                        roleStableFramesRef.current = 0;
-                        personRoles.set(si0, slots[0].role);
-                        personRoles.set(si1, slots[1].role);
-                      }
-                    }
-                  }
+                  // ── No-Overlap Rule: 非重なり時はロール自動変更を完全禁止 ──────────────
+                  // dynamicsScore がどれだけ逆転していても、2人が物理的に重なっていない
+                  // (isOccluded=false) 間は「元気なフォロワー」に過ぎない。ラベルを変えない。
+                  // ロール変更の許可条件: ① 初期体格判定（一回のみ）
+                  //                      ② Self-Healing（重なり後 90f 以内のみ）
+                  //                      ③ 手動 Swap ボタン
+                  // dynamicsScore は引き続き計算（初期判定・Self-Healing・デバッグ用）するが
+                  // ここでのロール変更トリガーとしては使用しない。
 
                   // ── プロファイル完成 → 体格ベースでロール初期割り当て
                   if (!profileCompleteRef.current && !roleDetectedRef.current
@@ -2027,45 +2005,52 @@ export function usePoseEstimation(
                   }
 
                   // ── Self-Healing: ロール反転自動復旧 ──────────────────────────────
-                  // justSeparated のタイミングを記録（重なり終了フレーム）
+                  // No-Overlap Rule の下での動作:
+                  //   クリーンな分離中（IoU=0 かつ観察ウィンドウ外）はカウンタをゼロリセット。
+                  //   矛盾の蓄積・自動復旧は「重なり中 / 冷却期間 / 重なり後ウィンドウ内」に限定。
+
                   if (justSeparated) {
                     lastOcclusionEndFrameRef.current = frameIndexRef.current;
                   }
 
-                  // 手動Swap ロックカウンタを消費
                   if (manualSwapLockFramesRef.current > 0) {
                     manualSwapLockFramesRef.current--;
                   } else if (roleDetectedRef.current && si0 >= 0 && si1 >= 0 && !isOccludedRef.current) {
-                    // ① 移動方向の矛盾検知 + ② 信頼度逆転: dynamicsScore が逆転中か判定
-                    const lSlot = slots[0].role === 'leader' ? slots[0] : slots[1];
-                    const fSlot = slots[0].role === 'follower' ? slots[0] : slots[1];
-                    const isScoreInverted = lSlot.dynamicsScore < fSlot.dynamicsScore;
-
-                    // 速度方向の矛盾: 「リーダー」がフォロワーに向かって突き進んでいる
-                    // (toFollower と leader.velX が同符号 = leader が follower に接近中)
-                    const velContradiction = (() => {
-                      if (!lSlot.hip || !fSlot.hip) return false;
-                      const toFollower = fSlot.hip.x - lSlot.hip.x;
-                      return Math.abs(toFollower) > 0.05
-                        && Math.sign(toFollower) === Math.sign(lSlot.velX)
-                        && Math.abs(lSlot.velX) > 0.005;
-                    })();
-
-                    if (isScoreInverted || velContradiction) {
-                      scoreInversionFramesRef.current++;
-                    } else {
-                      scoreInversionFramesRef.current = Math.max(0, scoreInversionFramesRef.current - 2);
-                    }
-
-                    // 重なり直後 + 矛盾が閾値フレーム継続 → ロール自動復旧
                     const framesSinceOcclusion = frameIndexRef.current - lastOcclusionEndFrameRef.current;
                     const recentOcclusion = lastOcclusionEndFrameRef.current >= 0
                       && framesSinceOcclusion < SELF_HEAL_OCCLUSION_WINDOW;
+                    // 物理的分離 = isOccluded=false かつ冷却期間終了
+                    const isPhysicallySeparated = postOcclusionCooldownRef.current === 0;
 
+                    if (!isPhysicallySeparated || recentOcclusion) {
+                      // 重なり中・冷却期間・重なり後ウィンドウ内: 矛盾シグナルを蓄積
+                      const lSlot = slots[0].role === 'leader' ? slots[0] : slots[1];
+                      const fSlot = slots[0].role === 'follower' ? slots[0] : slots[1];
+                      // ① 信頼度逆転: リーダーの dynamicsScore がフォロワーより低い
+                      const isScoreInverted = lSlot.dynamicsScore < fSlot.dynamicsScore;
+                      // ② 速度矛盾: 「リーダー」がフォロワーに向かって突き進んでいる
+                      const velContradiction = (() => {
+                        if (!lSlot.hip || !fSlot.hip) return false;
+                        const toFollower = fSlot.hip.x - lSlot.hip.x;
+                        return Math.abs(toFollower) > 0.05
+                          && Math.sign(toFollower) === Math.sign(lSlot.velX)
+                          && Math.abs(lSlot.velX) > 0.005;
+                      })();
+                      if (isScoreInverted || velContradiction) {
+                        scoreInversionFramesRef.current++;
+                      } else {
+                        scoreInversionFramesRef.current = Math.max(0, scoreInversionFramesRef.current - 2);
+                      }
+                    } else {
+                      // 完全クリア状態（長期分離中）: カウンタをゼロリセット
+                      // 元気なフォロワーをリーダーと誤認させない
+                      scoreInversionFramesRef.current = 0;
+                    }
+
+                    // 重なり直後 + 矛盾が閾値フレーム継続 → ロール自動復旧
                     if (scoreInversionFramesRef.current >= SELF_HEAL_INVERSION_FRAMES && recentOcclusion) {
                       const higherIdx = slots[0].dynamicsScore >= slots[1].dynamicsScore ? 0 : 1;
                       if (slots[higherIdx].role !== 'leader') {
-                        // ロール反転（dynamicsScore が高い方を Leader に）
                         const r0 = slots[0].role, r1 = slots[1].role;
                         slots[0].role = r1; slots[1].role = r0;
                         if (si0 >= 0) personRoles.set(si0, slots[0].role);
@@ -2073,7 +2058,6 @@ export function usePoseEstimation(
                         roleStableFramesRef.current = 0;
                         postOcclusionCooldownRef.current = POST_OCCLUSION_COOLDOWN;
                       }
-                      // カウンタリセット（連続発火防止）
                       scoreInversionFramesRef.current = 0;
                       lastOcclusionEndFrameRef.current = -1;
                     }

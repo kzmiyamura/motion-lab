@@ -143,6 +143,8 @@ interface PersonProfile {
   shoulderSamples: number;        // 肩幅を蓄積できたフレーム数（sampleCountと別管理）
   totalHipWidth: number;          // 腰幅の累積
   hipSamples: number;             // 腰幅を蓄積できたフレーム数（sampleCountと別管理）
+  maxShoulderX: number;           // 最大2D X肩幅（Zノイズなし、正面向き時のベスト値）
+  maxHipX: number;                // 最大2D X腰幅（Zノイズなし）
   totalEarWidth: number;          // 耳幅（lm[7]〜lm[8]）の累積 — 顔幅の代理指標
   totalHeadTriangleArea: number;  // 鼻-左耳-右耳 三角形面積の累積（Hair & Head Volume）
   coldPrepLeader: number;         // 準備動作: 足首固定+腰/肩先行フレーム数
@@ -158,6 +160,7 @@ const makeProfile = (): PersonProfile => ({
   totalHeight: 0, totalNormHeight: 0, totalHeadBodyRatio: 0,
   totalShoulderWidth: 0, shoulderSamples: 0,
   totalHipWidth: 0, hipSamples: 0,
+  maxShoulderX: 0, maxHipX: 0,
   totalEarWidth: 0,
   totalHeadTriangleArea: 0, coldPrepLeader: 0, coldPrepFollower: 0,
   frontalShoulderWidth: 0, frontalBodyHeight: 0, frontalSampleCount: 0,
@@ -955,18 +958,18 @@ function isFrontalPose(lm: NormalizedLandmark[]): boolean {
 
 // ── 体格スコア（リーダーらしさ） ─────────────────────────────────────────
 /**
- * 第0原則: 純粋な3D SHR (肩幅 / 腰幅) のみで Leader スコアを算出。
+ * 第0原則: 最大2D X-diff SHR (肩幅 / 腰幅) のみで Leader スコアを算出。
  *
- * 3D XZ平面距離（Math.hypot）を使用するため、横向き時も骨格の「厚み」で正確に計測。
- * 向き・遠近・Visibility・高さ等は一切参照しない。
+ * max(|sR.x - sL.x|) / max(|hR.x - hL.x|) を使用。
+ * - Zノイズの影響ゼロ（2D X座標のみ）
+ * - 最大値を取るので正面向き時のベストフレームが自動選択される
+ * - 男性は肩幅 >> 腰幅 → SHR高い。女性は腰幅 ≈ 肩幅 → SHR低い。
  *
  * 典型値: 男性（Leader）SHR > 1.10, 女性（Follower）SHR < 1.05
  */
 function profileLeaderScore(p: PersonProfile, _heightWeight: number): number {
-  const avgSW = p.shoulderSamples > 0 ? p.totalShoulderWidth / p.shoulderSamples : 0;
-  const avgHW = p.hipSamples      > 0 ? p.totalHipWidth      / p.hipSamples      : 0;
-  if (avgSW === 0 || avgHW === 0) return 0;
-  return avgSW / avgHW; // 3D SHR: 男性 > 1.10, 女性 < 1.05
+  if (p.maxShoulderX === 0 || p.maxHipX === 0) return 0;
+  return p.maxShoulderX / p.maxHipX; // 最大2D SHR: Zノイズなし
 }
 
 /**
@@ -1874,12 +1877,18 @@ export function usePoseEstimation(
                         const sw3d = Math.hypot(sR.x - sL.x, (sR.z ?? 0) - (sL.z ?? 0));
                         slots[s].profile.totalShoulderWidth += sw3d;
                         slots[s].profile.shoulderSamples++;
+                        // 最大2D X肩幅（Zノイズなし — 正面時のベスト値を自動取得）
+                        const sw2d = Math.abs(sR.x - sL.x);
+                        if (sw2d > slots[s].profile.maxShoulderX) slots[s].profile.maxShoulderX = sw2d;
                       }
                       if (hL && hR && (hL.visibility ?? 1) >= VIS_THRESHOLD && (hR.visibility ?? 1) >= VIS_THRESHOLD) {
                         // 3D XZ平面距離
                         const hw3d = Math.hypot(hR.x - hL.x, (hR.z ?? 0) - (hL.z ?? 0));
                         slots[s].profile.totalHipWidth += hw3d;
                         slots[s].profile.hipSamples++;
+                        // 最大2D X腰幅（Zノイズなし）
+                        const hw2d = Math.abs(hR.x - hL.x);
+                        if (hw2d > slots[s].profile.maxHipX) slots[s].profile.maxHipX = hw2d;
                       }
                       // 耳幅（landmark 7=左耳, 8=右耳）: 顔幅の代理指標
                       const eL = lm[7], eR = lm[8];
@@ -2124,7 +2133,8 @@ export function usePoseEstimation(
                         const aSW = p.shoulderSamples > 0 ? p.totalShoulderWidth / p.shoulderSamples : 0;
                         const aH  = p.sampleCount    > 0
                           ? (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount : 0;
-                        const aHW = p.hipSamples > 0 ? p.totalHipWidth / p.hipSamples : 0;
+                        // aHW は旧3D平均腰幅。現在は maxHipX を使用するため参照なし
+                        // const aHW = p.hipSamples > 0 ? p.totalHipWidth / p.hipSamples : 0;
                         // プロファイル平均 SW/H
                         let swhAvg = 0;
                         if (p.frontalSampleCount >= MIN_FRONTAL_SAMPLES) {
@@ -2134,8 +2144,8 @@ export function usePoseEstimation(
                         } else {
                           swhAvg = aH > 0 && aSW > 0 ? aSW / aH : 0;
                         }
-                        // SHR
-                        const shr = aHW > 0 ? aSW / aHW : 0;
+                        // SHR — 実際のps値に使われる最大2D SHR
+                        const shr = p.maxHipX > 0 ? p.maxShoulderX / p.maxHipX : 0;
                         return {
                           slotIdx: s,
                           role: slot.role,

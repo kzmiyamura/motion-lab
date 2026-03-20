@@ -80,6 +80,7 @@ export interface PoseDebugInfo {
   zOrderFront: number;   // 手前スロットインデックス (-1 = 未判定)
   roleStableFrames: number;
   profileComplete: boolean;  // 初期骨格判定が完了したか
+  genderLocked: boolean;     // ps性別判定ハードロック中か
   manualLocked: boolean;     // 手動 Swap による永続ハードロック中か
 }
 
@@ -1450,8 +1451,10 @@ export function usePoseEstimation(
   const manualSwapLockFramesRef        = useRef(0);  // 手動Swap後の自動補正ブロックカウンタ
   // Cold Start refs（初回ターン再評価制御）
   const firstTurnUsedRef               = useRef(false); // 拮抗時の最初のターン再評価済みフラグ
-  // 手動 Swap 後の永続ハードロック（Swap is Truth）
-  const manualRoleLockedRef            = useRef(false); // true = 全自動ロール変更を禁止
+  // 性別判定ハードロック（ps確定後）— justSeparated/Self-Healing/FirstTurnをブロック
+  const genderLockedRef                = useRef(false); // true = ps性別判定完了済み
+  // 手動 Swap 後の永続ハードロック（Swap is Truth）— psリアクティブチェックもブロック
+  const manualRoleLockedRef            = useRef(false); // true = ユーザーの判断を最優先
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
@@ -1488,6 +1491,7 @@ export function usePoseEstimation(
     lastOcclusionEndFrameRef.current = -1;
     manualSwapLockFramesRef.current  = 0;
     firstTurnUsedRef.current         = false;
+    genderLockedRef.current          = false;
     manualRoleLockedRef.current      = false;
     analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
@@ -2019,9 +2023,8 @@ export function usePoseEstimation(
                     const { confidenceLow } = assignRolesByProfile(slots, heightLeaderHintRef.current);
                     setRoleConfidenceLow(confidenceLow);
                     roleDetectedRef.current     = true;
-                    roleStableFramesRef.current = 999;  // 永続Sticky
-                    // 性別ハードロック: 判定後は一切の自動ロール変更を禁止
-                    manualRoleLockedRef.current = true;
+                    // 性別ハードロック: justSeparated/Self-Healing/FirstTurnを全封鎖
+                    genderLockedRef.current     = true;
                     setRoleDetected(true);
                     if (si0 >= 0) personRoles.set(si0, slots[0].role);
                     if (si1 >= 0) personRoles.set(si1, slots[1].role);
@@ -2032,9 +2035,9 @@ export function usePoseEstimation(
                   prevBeatNumRef.current = currentBeatNum;
 
                   // ── オクルージョン離脱直後: ロール正当性を検証（3段階ガード）
-                  // manualRoleLocked = true のとき: 手動Swapの正解を守るため全スキップ
+                  // genderLocked / manualRoleLocked のとき: ps判定 / ユーザー判断を守るため全スキップ
                   if (justSeparated && si0 >= 0 && si1 >= 0 && profileCompleteRef.current
-                      && !manualRoleLockedRef.current) {
+                      && !genderLockedRef.current && !manualRoleLockedRef.current) {
                     // ガード1: Sticky追跡 — 一定フレーム安定していたらスワップを極力抑制
                     // syncError（移動ベクトル矛盾）が発生している場合のみ通過を許可
                     const isStickyActive = roleStableFramesRef.current >= STICKY_MIN_FRAMES
@@ -2098,11 +2101,10 @@ export function usePoseEstimation(
                   }
 
                   // ── 拮抗時の最初のターンで再評価（Confidence-Based First-Turn Swap）
-                  // 低確信度 + 未使用 + 一方の omega > 0.25 のとき、蓄積済み全スコアで再評価
-                  // manualRoleLocked = true のとき: 手動Swapの正解を守るためスキップ
+                  // genderLocked / manualRoleLocked = true のとき: ps / ユーザー判断を守るためスキップ
                   if (roleDetectedRef.current && profileCompleteRef.current
                       && !firstTurnUsedRef.current && roleConfidenceLow
-                      && !manualRoleLockedRef.current
+                      && !genderLockedRef.current && !manualRoleLockedRef.current
                       && (slots[0].omega > CONF_TURN_ALLOW_OMEGA || slots[1].omega > CONF_TURN_ALLOW_OMEGA)) {
                     firstTurnUsedRef.current = true;
                     const prevRole0 = slots[0].role;
@@ -2152,7 +2154,7 @@ export function usePoseEstimation(
                   if (manualSwapLockFramesRef.current > 0) {
                     manualSwapLockFramesRef.current--;
                   } else if (roleDetectedRef.current && si0 >= 0 && si1 >= 0 && !isOccludedRef.current
-                             && !manualRoleLockedRef.current) {
+                             && !genderLockedRef.current && !manualRoleLockedRef.current) {
                     const framesSinceOcclusion = frameIndexRef.current - lastOcclusionEndFrameRef.current;
                     const recentOcclusion = lastOcclusionEndFrameRef.current >= 0
                       && framesSinceOcclusion < SELF_HEAL_OCCLUSION_WINDOW;
@@ -2197,6 +2199,25 @@ export function usePoseEstimation(
                       }
                       scoreInversionFramesRef.current = 0;
                       lastOcclusionEndFrameRef.current = -1;
+                    }
+                  }
+
+                  // ── ps リアクティブ整合チェック（第0原則の最終守護）────────────────
+                  // 性別判定確定後・手動Swap前の状態で毎フレーム実行。
+                  // ロールがps大小関係と逆転していれば即座に修正する。
+                  // これにより、いかなるコードパスがロールを汚染しても1フレームで自動復旧。
+                  if (genderLockedRef.current && !manualRoleLockedRef.current) {
+                    const ps0 = profileLeaderScore(slots[0].profile, 1);
+                    const ps1 = profileLeaderScore(slots[1].profile, 1);
+                    if (ps0 > 0 && ps1 > 0) {
+                      const exp0: PersonRole = ps0 >= ps1 ? 'leader' : 'follower';
+                      const exp1: PersonRole = ps0 >= ps1 ? 'follower' : 'leader';
+                      if (slots[0].role !== exp0 || slots[1].role !== exp1) {
+                        slots[0].role = exp0;
+                        slots[1].role = exp1;
+                        if (si0 >= 0) personRoles.set(si0, exp0);
+                        if (si1 >= 0) personRoles.set(si1, exp1);
+                      }
                     }
                   }
 
@@ -2334,6 +2355,7 @@ export function usePoseEstimation(
                         zOrderFront: zOF,
                         roleStableFrames: roleStableFramesRef.current,
                         profileComplete: profileCompleteRef.current,
+                        genderLocked: genderLockedRef.current,
                         manualLocked: manualRoleLockedRef.current,
                       });
                     }

@@ -1115,8 +1115,11 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                       {debugInfo.profileComplete && roleConfidenceLow && (
                         <span className={styles.debugVal} style={{ color: '#fa4' }}>LOW-CONF</span>
                       )}
+                      {debugInfo.genderLocked && (
+                        <span className={styles.debugVal} style={{ color: '#4af' }}>ps-LOCK</span>
+                      )}
                       {debugInfo.manualLocked && (
-                        <span className={styles.debugVal} style={{ color: '#f44' }}>HARD-LOCK</span>
+                        <span className={styles.debugVal} style={{ color: '#f44' }}>MANUAL-LOCK</span>
                       )}
                     </div>
                   </div>

@@ -654,6 +654,11 @@
 
 .rateHint { font-size: 0.63rem; color: var(--color-accent); font-weight: 600; }
 
+.muteBtn {
+  background: none; border: none; cursor: pointer;
+  font-size: 1.1rem; padding: 0 2px; line-height: 1;
+}
+
 .bpmSlider {
   flex: 1; height: 4px;
   accent-color: var(--color-accent);

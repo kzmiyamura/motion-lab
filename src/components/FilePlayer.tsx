@@ -57,6 +57,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1.0);
+  const [isMuted, setIsMuted] = useState(false);
 
   // Training controls
   const [slowRate, setSlowRateState] = useState<SlowRate>(1.0);
@@ -153,6 +155,13 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   useEffect(() => {
     return () => { if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current); };
   }, []);
+
+  // Sync volume/mute to media element
+  useEffect(() => {
+    const el = mediaRef.current;
+    if (!el) return;
+    el.volume = isMuted ? 0 : volume;
+  }, [volume, isMuted]);
 
   // ── Fullscreen helpers ─────────────────────────────────────────────────
   const enterFullscreen = useCallback(async () => {
@@ -700,6 +709,23 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           className={styles.bpmSlider}
         />
         <span className={styles.bpmValue}>{sliderBpm}</span>
+      </div>
+
+      {/* Volume row */}
+      <div className={styles.bpmRow}>
+        <button
+          className={styles.muteBtn}
+          onClick={() => setIsMuted(v => !v)}
+          title={isMuted ? 'ミュート解除' : 'ミュート'}
+        >
+          {isMuted || volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊'}
+        </button>
+        <input
+          type="range" min={0} max={1} step={0.01} value={isMuted ? 0 : volume}
+          onChange={e => { setIsMuted(false); setVolume(Number(e.target.value)); }}
+          className={styles.bpmSlider}
+        />
+        <span className={styles.bpmValue}>{isMuted ? 0 : Math.round(volume * 100)}%</span>
       </div>
 
       {/* Google Drive バックアップ（ローカルファイルのみ） */}

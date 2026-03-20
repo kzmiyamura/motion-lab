@@ -132,13 +132,18 @@ interface PersonProfile {
   totalHeadTriangleArea: number;  // 鼻-左耳-右耳 三角形面積の累積（Hair & Head Volume）
   coldPrepLeader: number;         // 準備動作: 足首固定+腰/肩先行フレーム数
   coldPrepFollower: number;       // 準備動作: 垂直ヒップ振動フレーム数
-  sampleCount: number;            // 有効サンプル数
-  ratioSamples: number;           // headBodyRatio の有効サンプル数
+  // ── 正面向きフレームのみ蓄積（遠近法不変量）─────────────────────────────
+  frontalShoulderWidth: number;  // 正面向き時の肩幅累積
+  frontalBodyHeight: number;     // 正面向き時の身長（鼻〜足首）累積
+  frontalSampleCount: number;    // 正面向きフレーム数
+  sampleCount: number;           // 有効サンプル数
+  ratioSamples: number;          // headBodyRatio の有効サンプル数
 }
 const makeProfile = (): PersonProfile => ({
   totalHeight: 0, totalNormHeight: 0, totalHeadBodyRatio: 0,
   totalShoulderWidth: 0, totalHipWidth: 0, totalEarWidth: 0,
   totalHeadTriangleArea: 0, coldPrepLeader: 0, coldPrepFollower: 0,
+  frontalShoulderWidth: 0, frontalBodyHeight: 0, frontalSampleCount: 0,
   sampleCount: 0, ratioSamples: 0,
 });
 
@@ -200,11 +205,13 @@ const SELF_HEAL_OCCLUSION_WINDOW  = 90;  // 重なり終了後このフレーム
 const MANUAL_SWAP_LOCK_FRAMES     = 90;  // 手動Swap後に自動補正をブロックするフレーム数
 
 // ── Cold Start 定数 ───────────────────────────────────────────────────────
-const SHR_LEADER_THRESHOLD   = 1.15;  // SHR ≥ これ = Leader候補（逆三角形体型）
-const SHR_FOLLOWER_THRESHOLD = 1.05;  // SHR ≤ これ = Follower候補（ペアシェイプ体型）
-const ANKLE_STILL_THRESH     = 0.008; // 準備動作: 足首静止判定閾値（正規化座標/frame）
-const HIP_MOVE_THRESH        = 0.008; // 準備動作: 腰先行判定閾値（正規化座標/frame）
-const CONF_TURN_ALLOW_OMEGA  = 0.25;  // 拮抗時に最初のターンで再評価する omega 閾値
+const SHR_LEADER_THRESHOLD    = 1.15;  // SHR ≥ これ = Leader候補（逆三角形体型）
+const SHR_FOLLOWER_THRESHOLD  = 1.05;  // SHR ≤ これ = Follower候補（ペアシェイプ体型）
+const ANKLE_STILL_THRESH      = 0.008; // 準備動作: 足首静止判定閾値（正規化座標/frame）
+const HIP_MOVE_THRESH         = 0.008; // 準備動作: 腰先行判定閾値（正規化座標/frame）
+const CONF_TURN_ALLOW_OMEGA   = 0.25;  // 拮抗時に最初のターンで再評価する omega 閾値
+const FRONTAL_SHOULDER_Z_THRESH = 0.08; // 肩の Z 差がこれ未満 = 正面向き（遠近法不変）
+const MIN_FRONTAL_SAMPLES     = 3;     // 正面データ優先に必要な最小サンプル数
 
 // ── ダンス動力学（Dynamics）定数 ─────────────────────────────────────────
 const INCEPTION_VEL_THRESHOLD    = 0.012; // 先行動作の動き出し速度閾値（正規化座標/frame）
@@ -927,59 +934,79 @@ function isPoseCoherent(lm: NormalizedLandmark[]): boolean {
   return true;
 }
 
+// ── 正面向き判定 ──────────────────────────────────────────────────────────
+/**
+ * 両肩の Z 差が小さい（ = カメラに正面を向いている）かどうかを返す。
+ * 横向きの場合は肩幅が狭く出るため、正面向きフレームのみを骨格スコアに使用する。
+ */
+function isFrontalPose(lm: NormalizedLandmark[]): boolean {
+  const sL = lm[11], sR = lm[12];
+  if (!sL || !sR) return false;
+  if ((sL.visibility ?? 1) < VIS_THRESHOLD || (sR.visibility ?? 1) < VIS_THRESHOLD) return false;
+  return Math.abs((sL.z ?? 0) - (sR.z ?? 0)) < FRONTAL_SHOULDER_Z_THRESH;
+}
+
 // ── 体格スコア（リーダーらしさ） ─────────────────────────────────────────
 /**
- * Cold Start Logic — 3つの物理指標による Leader スコア算出
+ * Normalized Structural Scoring — 遠近法不変の骨格比率で Leader スコアを算出
  *
- * 1. Anatomical Ratio（重み 0.5）:
- *    - 身長（パース補正済み）
- *    - SHR (Shoulder-to-Hip Ratio): ≥1.15 → Leader候補ボーナス, ≤1.05 → Follower候補
+ * Primary: ShoulderWidth / BodyHeight (SW/H)
+ *   正面向きデータを優先（横向き時の肩幅過小評価を排除）。
+ *   この比率はカメラからの距離に依存しない不変量:
+ *   男性: ~0.30–0.45, 女性: ~0.22–0.35
  *
- * 2. Head Volume（重み 0.3）:
- *    - 耳幅 / 肩幅比（顔幅の代理指標）
- *    - 鼻-左耳-右耳 三角形面積（ヘアボリューム含む頭部大きさ）
- *    - 大きいほど Follower傾向（女性的頭部）→ スコアを下げる
+ * Secondary: SHR (Shoulder/Hip), Head Volume, Prep Dynamics
+ *   各々小さなボーナス/ペナルティとして加算（SW/H を覆さない程度）。
  *
- * 3. Preparation Dynamics（重み 0.2）:
- *    - 足首固定 + 腰/肩先行フレーム数 → Leader傾向
- *    - 垂直ヒップ振動フレーム数 → Follower傾向
+ * ★ visibility/Z-value は役割判定に使用しない。
  *
- * 戻り値が大きい方を Leader と判定する。
+ * heightWeight > 1 のとき: 「背が高い方をリーダー」補足信号を微小に加算。
  */
 function profileLeaderScore(p: PersonProfile, heightWeight: number): number {
   if (p.sampleCount === 0) return 0;
 
-  // ── 1. Anatomical Ratio ────────────────────────────────────────────────
-  const avgH  = (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount;
   const avgSW = p.totalShoulderWidth / p.sampleCount;
-  const avgHW = p.totalHipWidth      / p.sampleCount;
-  const shr = avgHW > 0 ? avgSW / avgHW : 1;
-  // SHR ≥ 1.15 = Leader候補（逆三角形体型）、≤ 1.05 = Follower候補（ペアシェイプ）
-  const shrScore = shr >= SHR_LEADER_THRESHOLD
-    ? 1.0 + (shr - SHR_LEADER_THRESHOLD) * 4.0
+
+  // ── Primary: SW/H 構造比率（遠近法不変）──────────────────────────────
+  // 正面向きフレームが MIN_FRONTAL_SAMPLES 以上あれば優先使用
+  let structScore: number;
+  if (p.frontalSampleCount >= MIN_FRONTAL_SAMPLES) {
+    const fSW = p.frontalShoulderWidth / p.frontalSampleCount;
+    const fBH = p.frontalBodyHeight    / p.frontalSampleCount;
+    structScore = fBH > 0 ? fSW / fBH : 0.30;
+  } else {
+    // フォールバック: 全フレーム平均（正面が取れなかった場合）
+    const avgH = (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount;
+    structScore = avgH > 0 ? avgSW / avgH : 0.30;
+  }
+  // structScore 典型値: 男性 0.30–0.45, 女性 0.22–0.35
+
+  // ── Secondary: SHR ボーナス/ペナルティ（SW/H を補強）─────────────────
+  const avgHW  = p.totalHipWidth / p.sampleCount;
+  const shr    = avgHW > 0 ? avgSW / avgHW : 1;
+  const shrAdj = shr >= SHR_LEADER_THRESHOLD
+    ? (shr - SHR_LEADER_THRESHOLD) * 0.08        // 逆三角形 → +
     : shr <= SHR_FOLLOWER_THRESHOLD
-    ? shr * 0.7
-    : shr;
-  const poseScore = avgH * heightWeight + shrScore; // 典型 1.5〜3.0 の範囲
+    ? -(SHR_FOLLOWER_THRESHOLD - shr) * 0.08     // ペアシェイプ → -
+    : 0;
 
-  // ── 2. Head Volume（大きいほど Follower → Leaderスコア低下）──────────
+  // ── Secondary: Head Volume（大きい = Follower傾向 → 小さなペナルティ）
   const avgEW = p.totalEarWidth > 0 ? p.totalEarWidth / p.sampleCount : 0;
-  // 耳幅/肩幅比: 大きいほど顔が相対的に広い = Follower傾向 → Leaderスコアを下げる
-  const faceRatio    = avgSW > 0 && avgEW > 0 ? avgEW / avgSW : 0.5;
-  const earVolScore  = 1.0 - Math.max(0, Math.min(1, (faceRatio - 0.3) / 0.4)); // 1=小顔(Leader), 0=大顔(Follower)
-  // 鼻-耳-耳 三角形面積: 大きいほど Follower傾向（典型値 0.001〜0.007）
-  const avgTriArea   = p.totalHeadTriangleArea / Math.max(p.sampleCount, 1);
-  const triVolScore  = 1.0 - Math.max(0, Math.min(1, (avgTriArea - 0.001) / 0.006)); // 1=小さい(Leader), 0=大きい(Follower)
-  const headScore    = (earVolScore + triVolScore) / 2; // 0〜1
+  const faceRatio = avgSW > 0 && avgEW > 0 ? avgEW / avgSW : 0.5;
+  const headAdj   = -Math.max(0, Math.min(0.04, (faceRatio - 0.45) * 0.12));
+  const avgTriArea = p.totalHeadTriangleArea / Math.max(p.sampleCount, 1);
+  const triAdj    = -Math.max(0, Math.min(0.04, (avgTriArea - 0.002) * 8));
 
-  // ── 3. Preparation Dynamics ───────────────────────────────────────────
-  // coldPrepLeader: 足首固定+腰先行 → Leader、coldPrepFollower: 垂直ヒップ振動 → Follower
+  // ── Secondary: Preparation Dynamics ──────────────────────────────────
   const totalPrep = p.coldPrepLeader + p.coldPrepFollower;
-  const prepScore = totalPrep >= 3 ? p.coldPrepLeader / totalPrep : 0.5; // 0〜1（0.5=中立）
+  const prepAdj   = totalPrep >= 3 ? (p.coldPrepLeader / totalPrep - 0.5) * 0.06 : 0;
 
-  // ── Combined: Anatomical(0.5) + HeadVolume(0.3) + PrepDynamics(0.2) ──
-  // headScore・prepScore を poseScore と同スケールに引き上げて合成
-  return poseScore * 0.5 + headScore * poseScore * 0.3 + prepScore * poseScore * 0.2;
+  // ── Supplement: heightLeaderHint（補足のみ、SW/H を覆さない）──────────
+  const heightAdj = heightWeight > 1
+    ? ((p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount) * 0.04
+    : 0;
+
+  return structScore + shrAdj + headAdj + triAdj + prepAdj + heightAdj;
 }
 
 /**
@@ -1457,6 +1484,8 @@ export function usePoseEstimation(
   const manualSwapLockFramesRef        = useRef(0);  // 手動Swap後の自動補正ブロックカウンタ
   // Cold Start refs（初回ターン再評価制御）
   const firstTurnUsedRef               = useRef(false); // 拮抗時の最初のターン再評価済みフラグ
+  // 手動 Swap 後の永続ハードロック（Swap is Truth）
+  const manualRoleLockedRef            = useRef(false); // true = 全自動ロール変更を禁止
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
@@ -1493,6 +1522,7 @@ export function usePoseEstimation(
     lastOcclusionEndFrameRef.current = -1;
     manualSwapLockFramesRef.current  = 0;
     firstTurnUsedRef.current         = false;
+    manualRoleLockedRef.current      = false;
     analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
     syncErrorRef.current     = false;
@@ -1521,7 +1551,8 @@ export function usePoseEstimation(
     slots[1].omegaHist = [];
     // Self-Healing カウンタをリセット
     scoreInversionFramesRef.current = 0;
-    // 手動Swap後 90f は自動補正をブロック（正解を「正解」として維持）
+    // 手動Swap後は永続ハードロック — 人間の判断を絶対的な正解として固定
+    manualRoleLockedRef.current     = true;
     manualSwapLockFramesRef.current = MANUAL_SWAP_LOCK_FRAMES;
 
     const entry: AnnotationEntry = {
@@ -1940,6 +1971,20 @@ export function usePoseEstimation(
                         slots[s].profile.totalHeadTriangleArea += triArea;
                       }
 
+                      // ── 正面向きフレームのみ蓄積（遠近法不変の SW/H 比率用）
+                      if (isFrontalPose(lm)) {
+                        const fSW = sL && sR ? Math.abs(sR.x - sL.x) : 0;
+                        const fNose = lm[0], fAnkL = lm[27], fAnkR = lm[28];
+                        const fBH = fNose && fAnkL && fAnkR
+                          && (fNose.visibility ?? 1) >= VIS_THRESHOLD
+                          ? Math.abs(fNose.y - (fAnkL.y + fAnkR.y) / 2) : 0;
+                        if (fSW > 0 && fBH > 0) {
+                          slots[s].profile.frontalShoulderWidth += fSW;
+                          slots[s].profile.frontalBodyHeight    += fBH;
+                          slots[s].profile.frontalSampleCount++;
+                        }
+                      }
+
                       // ── 準備動作検出（フレーム 5 〜 PROFILE_FRAMES）
                       slots[s].coldFrameCount++;
                       const cf = slots[s].coldFrameCount;
@@ -2046,7 +2091,9 @@ export function usePoseEstimation(
                   prevBeatNumRef.current = currentBeatNum;
 
                   // ── オクルージョン離脱直後: ロール正当性を検証（3段階ガード）
-                  if (justSeparated && si0 >= 0 && si1 >= 0 && profileCompleteRef.current) {
+                  // manualRoleLocked = true のとき: 手動Swapの正解を守るため全スキップ
+                  if (justSeparated && si0 >= 0 && si1 >= 0 && profileCompleteRef.current
+                      && !manualRoleLockedRef.current) {
                     // ガード1: Sticky追跡 — 一定フレーム安定していたらスワップを極力抑制
                     // syncError（移動ベクトル矛盾）が発生している場合のみ通過を許可
                     const isStickyActive = roleStableFramesRef.current >= STICKY_MIN_FRAMES
@@ -2111,8 +2158,10 @@ export function usePoseEstimation(
 
                   // ── 拮抗時の最初のターンで再評価（Confidence-Based First-Turn Swap）
                   // 低確信度 + 未使用 + 一方の omega > 0.25 のとき、蓄積済み全スコアで再評価
+                  // manualRoleLocked = true のとき: 手動Swapの正解を守るためスキップ
                   if (roleDetectedRef.current && profileCompleteRef.current
                       && !firstTurnUsedRef.current && roleConfidenceLow
+                      && !manualRoleLockedRef.current
                       && (slots[0].omega > CONF_TURN_ALLOW_OMEGA || slots[1].omega > CONF_TURN_ALLOW_OMEGA)) {
                     firstTurnUsedRef.current = true;
                     const prevRole0 = slots[0].role;
@@ -2161,7 +2210,8 @@ export function usePoseEstimation(
 
                   if (manualSwapLockFramesRef.current > 0) {
                     manualSwapLockFramesRef.current--;
-                  } else if (roleDetectedRef.current && si0 >= 0 && si1 >= 0 && !isOccludedRef.current) {
+                  } else if (roleDetectedRef.current && si0 >= 0 && si1 >= 0 && !isOccludedRef.current
+                             && !manualRoleLockedRef.current) {
                     const framesSinceOcclusion = frameIndexRef.current - lastOcclusionEndFrameRef.current;
                     const recentOcclusion = lastOcclusionEndFrameRef.current >= 0
                       && framesSinceOcclusion < SELF_HEAL_OCCLUSION_WINDOW;

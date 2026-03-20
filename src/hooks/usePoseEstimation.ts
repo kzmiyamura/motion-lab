@@ -64,10 +64,13 @@ export interface PoseDebugSlot {
   // ── Cold Start 骨格スコアデバッグ ─────────────────────────────────────
   swh: number;           // 現フレームの ShoulderWidth/BodyHeight（遠近法不変構造比率）
   swhAvg: number;        // プロファイル平均 SW/H（実際のスコアに使われる値）
+  avgSW: number;         // プロファイル平均肩幅（shoulderSamples で正規化）
+  avgBH: number;         // プロファイル平均身長（sampleCount で正規化）
   shr: number;           // 肩幅 / 腰幅比
   frontalN: number;      // 正面向きフレーム累積数
   profileScore: number;  // profileLeaderScore の現在値（大きい方が Leader）
-  profileSamples: number; // プロファイルサンプル数
+  profileSamples: number; // プロファイルサンプル数（n: 表示用）
+  shoulderSamples: number; // 肩幅が実際に蓄積されたフレーム数
   isFrontal: boolean;    // 現フレームが正面向きか
 }
 
@@ -137,7 +140,9 @@ interface PersonProfile {
   totalNormHeight: number;        // パース補正済み身長の累積
   totalHeadBodyRatio: number;     // (鼻〜足首) / (耳幅) の累積 — パース不変量
   totalShoulderWidth: number;     // 肩幅の累積
+  shoulderSamples: number;        // 肩幅を蓄積できたフレーム数（sampleCountと別管理）
   totalHipWidth: number;          // 腰幅の累積
+  hipSamples: number;             // 腰幅を蓄積できたフレーム数（sampleCountと別管理）
   totalEarWidth: number;          // 耳幅（lm[7]〜lm[8]）の累積 — 顔幅の代理指標
   totalHeadTriangleArea: number;  // 鼻-左耳-右耳 三角形面積の累積（Hair & Head Volume）
   coldPrepLeader: number;         // 準備動作: 足首固定+腰/肩先行フレーム数
@@ -146,12 +151,14 @@ interface PersonProfile {
   frontalShoulderWidth: number;  // 正面向き時の肩幅累積
   frontalBodyHeight: number;     // 正面向き時の身長（鼻〜足首）累積
   frontalSampleCount: number;    // 正面向きフレーム数
-  sampleCount: number;           // 有効サンプル数
+  sampleCount: number;           // 有効サンプル数（鼻+足首が見えたフレーム）
   ratioSamples: number;          // headBodyRatio の有効サンプル数
 }
 const makeProfile = (): PersonProfile => ({
   totalHeight: 0, totalNormHeight: 0, totalHeadBodyRatio: 0,
-  totalShoulderWidth: 0, totalHipWidth: 0, totalEarWidth: 0,
+  totalShoulderWidth: 0, shoulderSamples: 0,
+  totalHipWidth: 0, hipSamples: 0,
+  totalEarWidth: 0,
   totalHeadTriangleArea: 0, coldPrepLeader: 0, coldPrepFollower: 0,
   frontalShoulderWidth: 0, frontalBodyHeight: 0, frontalSampleCount: 0,
   sampleCount: 0, ratioSamples: 0,
@@ -975,7 +982,11 @@ function isFrontalPose(lm: NormalizedLandmark[]): boolean {
 function profileLeaderScore(p: PersonProfile, heightWeight: number): number {
   if (p.sampleCount === 0) return 0;
 
-  const avgSW = p.totalShoulderWidth / p.sampleCount;
+  // 各指標は独立した sample count で正規化（希釈バグを防ぐ）
+  const avgSW = p.shoulderSamples > 0 ? p.totalShoulderWidth / p.shoulderSamples : 0;
+  const avgHW2 = p.hipSamples     > 0 ? p.totalHipWidth      / p.hipSamples      : 0;
+  const avgH2  = p.sampleCount    > 0
+    ? (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount : 0;
 
   // ── Primary: SW/H 構造比率（遠近法不変）──────────────────────────────
   // 正面向きフレームが MIN_FRONTAL_SAMPLES 以上あれば優先使用
@@ -984,15 +995,16 @@ function profileLeaderScore(p: PersonProfile, heightWeight: number): number {
     const fSW = p.frontalShoulderWidth / p.frontalSampleCount;
     const fBH = p.frontalBodyHeight    / p.frontalSampleCount;
     structScore = fBH > 0 ? fSW / fBH : 0.30;
+  } else if (p.shoulderSamples > 0 && avgH2 > 0) {
+    // フォールバック: 独立 sample count で正確に正規化
+    structScore = avgSW / avgH2;
   } else {
-    // フォールバック: 全フレーム平均（正面が取れなかった場合）
-    const avgH = (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount;
-    structScore = avgH > 0 ? avgSW / avgH : 0.30;
+    structScore = 0.30; // データ不足のデフォルト（中立値）
   }
   // structScore 典型値: 男性 0.30–0.45, 女性 0.22–0.35
 
   // ── Secondary: SHR ボーナス/ペナルティ（SW/H を補強）─────────────────
-  const avgHW  = p.totalHipWidth / p.sampleCount;
+  const avgHW  = avgHW2; // 正しい hipSamples で正規化済み
   const shr    = avgHW > 0 ? avgSW / avgHW : 1;
   const shrAdj = shr >= SHR_LEADER_THRESHOLD
     ? (shr - SHR_LEADER_THRESHOLD) * 0.08        // 逆三角形 → +
@@ -1959,9 +1971,11 @@ export function usePoseEstimation(
                       }
                       if (sL && sR && (sL.visibility ?? 1) >= VIS_THRESHOLD && (sR.visibility ?? 1) >= VIS_THRESHOLD) {
                         slots[s].profile.totalShoulderWidth += Math.abs(sR.x - sL.x);
+                        slots[s].profile.shoulderSamples++;
                       }
-                      if (hL && hR) {
+                      if (hL && hR && (hL.visibility ?? 1) >= VIS_THRESHOLD && (hR.visibility ?? 1) >= VIS_THRESHOLD) {
                         slots[s].profile.totalHipWidth += Math.abs(hR.x - hL.x);
+                        slots[s].profile.hipSamples++;
                       }
                       // 耳幅（landmark 7=左耳, 8=右耳）: 顔幅の代理指標
                       const eL = lm[7], eR = lm[8];
@@ -2049,8 +2063,8 @@ export function usePoseEstimation(
 
                   // ── Cold Start: 3特徴量（SHR + Head Volume + PrepDynamics）による初期ロール確定
                   // プロファイル蓄積が完了したとき（PROFILE_FRAMES フレーム分の2人同時検出）に発火。
-                  // face-api.js は使用しない — MediaPipe 座標のみで判定する。
-                  if (!profileCompleteRef.current && !roleDetectedRef.current
+                  // !roleDetectedRef.current は不要: BPM ビート暫定判定があっても上書きする。
+                  if (!profileCompleteRef.current
                       && slots[0].profile.sampleCount >= PROFILE_FRAMES
                       && slots[1].profile.sampleCount >= PROFILE_FRAMES) {
                     profileCompleteRef.current = true;
@@ -2363,20 +2377,21 @@ export function usePoseEstimation(
                           }
                           frontalNow = isFrontalPose(lm2);
                         }
+                        // プロファイル平均: 正しい sample count で正規化
+                        const aSW = p.shoulderSamples > 0 ? p.totalShoulderWidth / p.shoulderSamples : 0;
+                        const aH  = p.sampleCount    > 0
+                          ? (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount : 0;
+                        const aHW = p.hipSamples > 0 ? p.totalHipWidth / p.hipSamples : 0;
                         // プロファイル平均 SW/H
                         let swhAvg = 0;
                         if (p.frontalSampleCount >= MIN_FRONTAL_SAMPLES) {
                           const fSW = p.frontalShoulderWidth / p.frontalSampleCount;
                           const fBH = p.frontalBodyHeight    / p.frontalSampleCount;
                           swhAvg = fBH > 0 ? fSW / fBH : 0;
-                        } else if (p.sampleCount > 0) {
-                          const aSW = p.totalShoulderWidth / p.sampleCount;
-                          const aH  = (p.totalNormHeight > 0 ? p.totalNormHeight : p.totalHeight) / p.sampleCount;
-                          swhAvg = aH > 0 ? aSW / aH : 0;
+                        } else {
+                          swhAvg = aH > 0 && aSW > 0 ? aSW / aH : 0;
                         }
                         // SHR
-                        const aSW = p.sampleCount > 0 ? p.totalShoulderWidth / p.sampleCount : 0;
-                        const aHW = p.sampleCount > 0 ? p.totalHipWidth / p.sampleCount : 0;
                         const shr = aHW > 0 ? aSW / aHW : 0;
                         return {
                           slotIdx: s,
@@ -2387,10 +2402,13 @@ export function usePoseEstimation(
                           isDetected: si >= 0,
                           swh,
                           swhAvg,
+                          avgSW: aSW,
+                          avgBH: aH,
                           shr,
                           frontalN: p.frontalSampleCount,
                           profileScore: p.sampleCount > 0 ? profileLeaderScore(p, w) : 0,
                           profileSamples: p.sampleCount,
+                          shoulderSamples: p.shoulderSamples,
                           isFrontal: frontalNow,
                         };
                       };

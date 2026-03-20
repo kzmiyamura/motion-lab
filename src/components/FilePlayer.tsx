@@ -1067,20 +1067,25 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                             {sl.isDetected ? 'det' : 'occ'}
                           </span>
                         </div>
-                        {/* Row 2: Cold Start 骨格スコア（SW/H・SHR・frontal・profileScore） */}
+                        {/* Row 2: 骨格スコア（SW・BH・SW/H・SHR） */}
                         <div className={styles.debugRow}>
                           <span className={styles.debugVal}
                             style={{ color: sl.isFrontal ? '#4f4' : '#888' }}>
                             {sl.isFrontal ? '▣' : '◧'}
                           </span>
                           <span className={styles.debugVal}
-                            title="SW/H このフレーム">
-                            sw/h:{sl.swh.toFixed(3)}
+                            title="プロファイル平均肩幅（shoulderSamples で正規化）"
+                            style={{ color: sl.shoulderSamples >= 10 ? '#4f4' : '#f84' }}>
+                            sw:{sl.avgSW.toFixed(3)}({sl.shoulderSamples})
+                          </span>
+                          <span className={styles.debugVal}
+                            title="プロファイル平均身長">
+                            bh:{sl.avgBH.toFixed(3)}
                           </span>
                           <span className={styles.debugVal}
                             style={{ color: sl.frontalN >= 3 ? '#4f4' : '#fa4' }}
-                            title="プロファイル平均SW/H (正面フレーム優先)">
-                            avg:{sl.swhAvg.toFixed(3)}({sl.frontalN}f)
+                            title="SW/H 構造比率（大きい=男性的）">
+                            r:{sl.swhAvg.toFixed(3)}({sl.frontalN}f)
                           </span>
                           <span className={styles.debugVal}
                             title="SHR 肩幅/腰幅比">

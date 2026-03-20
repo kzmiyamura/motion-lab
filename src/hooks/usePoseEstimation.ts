@@ -91,7 +91,7 @@ type Centroid    = { x: number; y: number };
 type VelocityVec = { vx: number; vy: number };
 type AnkleFrame  = { lx: number; ly: number; rx: number; ry: number };
 type DrawColors  = { line: string; joint: string; lw: number; jr: number };
-type RoleSlot    = { hip: Centroid | null; hipZ: number; role: PersonRole; xHistory: number[] };
+type RoleSlot    = { hip: Centroid | null; hipZ: number; role: PersonRole; xHistory: number[]; staleness: number };
 
 // ── ロール描画カラー ──────────────────────────────────────────────────────
 const COLOR_LEADER:   DrawColors = { line: '#0066ff', joint: '#66aaff', lw: 3,   jr: 5 };
@@ -101,7 +101,8 @@ const COLOR_OTHER:    DrawColors = { line: 'rgba(255,255,255,0.45)', joint: 'rgb
 
 // ── ロール検出定数 ────────────────────────────────────────────────────────
 const ROLE_MATCH_DIST   = 0.35;  // スロットマッチング距離閾値
-const PHASE_WINDOW      = 3;     // 位相モニタリングウィンドウ（サンプル数）
+const PHASE_WINDOW      = 6;     // 位相モニタリングウィンドウ（サンプル数）
+const SLOT_STALE_FRAMES = 20;   // この連続フレーム数トラッキングが途切れたらスロット位置をリセット
 const FRAME_BUFFER_SIZE = 90;    // フレームバッファサイズ（~3秒分）
 const POST_SCENE_FRAMES = 5;     // Swap後に収集するフレーム数
 
@@ -793,7 +794,7 @@ export function usePoseEstimation(
   const [sequence, setSequence] = useState<SequenceEvent[]>([]);
 
   // ── ロール判定（On1/On2）
-  const makeRoleSlot = (): RoleSlot => ({ hip: null, hipZ: 0, role: null, xHistory: [] });
+  const makeRoleSlot = (): RoleSlot => ({ hip: null, hipZ: 0, role: null, xHistory: [], staleness: 0 });
   const roleSlots          = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
   const roleDetectedRef    = useRef(false);
   const prevBeatNumRef     = useRef<number | undefined>(undefined);
@@ -1089,7 +1090,17 @@ export function usePoseEstimation(
 
                   for (let s = 0; s < 2; s++) {
                     const si = s === 0 ? si0 : si1;
-                    if (si < 0) continue;
+                    if (si < 0) {
+                      // トラッキング途切れ: xHistory をクリアして古い方向履歴による誤検知を防ぐ
+                      slots[s].xHistory = [];
+                      slots[s].staleness++;
+                      // N フレーム以上途切れたらスロット位置をリセット → 再検出時に正しく再割り当て
+                      if (slots[s].staleness >= SLOT_STALE_FRAMES) {
+                        slots[s].hip = null;
+                      }
+                      continue;
+                    }
+                    slots[s].staleness = 0;
                     const hip = computeMidHip(all[si]);
                     if (!hip) continue;
                     const newZ = ((all[si][23]?.z ?? 0) + (all[si][24]?.z ?? 0)) / 2;
@@ -1128,9 +1139,10 @@ export function usePoseEstimation(
 
                   // ── 位相モニタリング（同方向移動 = 解析エラー）
                   // ターン中・直後（2秒間）は抑制 — ターン時は両者が同方向に動くのが正常
+                  // 両者が同時にトラッキングされているフレームのみ実行（stale履歴による誤検知防止）
                   const TURN_SUPPRESS_SEC = 2.0;
                   const sinceLastTurn = video.currentTime - lastTurnTimeRef.current;
-                  if (roleDetectedRef.current && sinceLastTurn > TURN_SUPPRESS_SEC) {
+                  if (roleDetectedRef.current && sinceLastTurn > TURN_SUPPRESS_SEC && si0 >= 0 && si1 >= 0) {
                     const ls = slots.find(s => s.role === 'leader');
                     const fs = slots.find(s => s.role === 'follower');
                     if (ls && fs && ls.xHistory.length >= PHASE_WINDOW && fs.xHistory.length >= PHASE_WINDOW) {
@@ -1142,8 +1154,8 @@ export function usePoseEstimation(
                         setSyncError(allSame);
                       }
                     }
-                  } else if (sinceLastTurn <= TURN_SUPPRESS_SEC && syncErrorRef.current) {
-                    // ターン中に出ていたエラーを自動クリア
+                  } else if (syncErrorRef.current && (sinceLastTurn <= TURN_SUPPRESS_SEC || si0 < 0 || si1 < 0)) {
+                    // ターン中 or 片方がトラッキング不能な場合はエラーを自動クリア（stale状態での誤表示防止）
                     syncErrorRef.current = false;
                     setSyncError(false);
                   }

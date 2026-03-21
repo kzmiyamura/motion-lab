@@ -973,25 +973,8 @@ function profileLeaderScore(p: PersonProfile, _heightWeight: number): number {
   return p.maxShoulderX / p.maxHipX; // 最大2D SHR: Zノイズなし
 }
 
-/**
- * 体格プロファイル + dynamicsScore でロールを初期割り当てする。
- * Safety Guard: スコア差が CONFIDENCE_THRESHOLD 未満の場合は低確信度フラグを返す。
- * 低確信度時は初期判定を行うが、後続の dynamicsScore 蓄積による上書きを優先する。
- */
-const CONFIDENCE_THRESHOLD = 0.05; // SHR差がこれ未満 → 低確信度（5%以内は体型が近い）
-
-function assignRolesByProfile(
-  slots: [RoleSlot, RoleSlot],
-  _useHeight: boolean,
-): { confidenceLow: boolean } {
-  // 第0原則: 純粋な3D SHR（肩幅/腰幅）のみで判定
-  const s0 = profileLeaderScore(slots[0].profile, 1);
-  const s1 = profileLeaderScore(slots[1].profile, 1);
-  if (s0 >= s1) { slots[0].role = 'leader'; slots[1].role = 'follower'; }
-  else          { slots[0].role = 'follower'; slots[1].role = 'leader'; }
-  const confidenceLow = Math.abs(s0 - s1) < CONFIDENCE_THRESHOLD;
-  return { confidenceLow };
-}
+// SHR差がこれ未満 → 確信度不足（グレー維持）。これ以上で初回ロール確定。
+const CONFIDENCE_THRESHOLD = 0.05;
 
 // ── ロールスロットマッチング（顔アンカー優先 + Nearest Neighbor） ─────────
 
@@ -1991,59 +1974,15 @@ export function usePoseEstimation(
                   // ② psリアクティブチェック（毎フレーム: genderLocked中の矛盾を自動修正）
                   // ③ 手動Swap（manualRoleLocked: ユーザーの判断が最優先）
 
-                  // ── Cold Start: 3D SHR（肩幅/腰幅）による性別判定 → 初期ロール確定
-                  // 第0原則: 向き・遠近・BPM暫定判定を問わず、PROFILE_FRAMES 分の骨格が揃った
-                  // 瞬間に即時発火してロールを確定。一切のブロック条件なし。
+                  // ── プロファイリング完了フラグ（ロール確定は reactive check に一本化）────
+                  // 早まった確信（逆転0.5秒バグ）を防ぐため、ここでは断言しない。
+                  // データが十分に溜まり確信度が閾値を超えた瞬間に reactive check がロックする。
                   if (!profileCompleteRef.current
                       && slots[0].profile.shoulderSamples >= PROFILE_FRAMES
                       && slots[1].profile.shoulderSamples >= PROFILE_FRAMES
                       && slots[0].profile.hipSamples >= PROFILE_FRAMES
                       && slots[1].profile.hipSamples >= PROFILE_FRAMES) {
-                    profileCompleteRef.current  = true;
-                    const { confidenceLow } = assignRolesByProfile(slots, heightLeaderHintRef.current);
-                    setRoleConfidenceLow(confidenceLow);
-                    roleDetectedRef.current     = true;
-                    // 性別ハードロック: justSeparated/Self-Healing/FirstTurnを全封鎖
-                    genderLockedRef.current     = true;
-                    setRoleDetected(true);
-                    // ── slots.forEach で personRoles を強制同期（ガードなし・即時）
-                    // si0/si1 変数に頼らず、スロット自身の detectedIdx を使って確実に書き込む
-                    slots.forEach(slot => {
-                      if (slot.detectedIdx >= 0 && slot.role) {
-                        console.log(`[profileComplete] slot.detectedIdx=${slot.detectedIdx} role=${slot.role} ps=${profileLeaderScore(slot.profile, 1).toFixed(3)}`);
-                        personRoles.set(slot.detectedIdx, slot.role);
-                      }
-                    });
-                    // ── profileComplete発火フレームでdebugInfoを即時強制更新（スロットル待ちなし）
-                    // ps値とRole表示が同一フレームで確定することを保証する
-                    setDebugInfo({
-                      slots: [0, 1].map(s => {
-                        const sl = slots[s as 0 | 1];
-                        const p  = sl.profile;
-                        return {
-                          slotIdx: s as 0 | 1,
-                          role: sl.role,
-                          dynamicsScore: sl.dynamicsScore,
-                          omega: sl.omega,
-                          zFront: sl.zFront,
-                          isDetected: (s === 0 ? si0 : si1) >= 0,
-                          swh: 0, swhAvg: 0,
-                          avgSW: p.shoulderSamples > 0 ? p.totalShoulderWidth / p.shoulderSamples : 0,
-                          avgBH: 0,
-                          shr: p.maxHipX > 0 ? p.maxShoulderX / p.maxHipX : 0,
-                          frontalN: p.frontalSampleCount,
-                          profileScore: profileLeaderScore(p, 1),
-                          profileSamples: p.shoulderSamples,
-                          shoulderSamples: p.shoulderSamples,
-                          isFrontal: false,
-                        } as PoseDebugSlot;
-                      }) as [PoseDebugSlot, PoseDebugSlot],
-                      isOccluded: isOccludedRef.current,
-                      zOrderFront: slots[0].zFront ? 0 : slots[1].zFront ? 1 : -1,
-                      profileComplete: true,
-                      genderLocked: true,
-                      manualLocked: manualRoleLockedRef.current,
-                    });
+                    profileCompleteRef.current = true;
                   }
 
                   // ── ロール割り当ては ps（3D SHR）完了時のみ。BPM暫定・逆ロール伝播は廃止 ──
@@ -2073,25 +2012,44 @@ export function usePoseEstimation(
                     setSyncError(false);
                   }
 
-                  // ── ps リアクティブ整合チェック（第0原則の最終守護）────────────────
-                  // 性別判定確定後・手動Swap前の状態で毎フレーム実行。
-                  // ロールがps大小関係と逆転していれば即座に修正する。
-                  // これにより、いかなるコードパスがロールを汚染しても1フレームで自動復旧。
-                  if (genderLockedRef.current && !manualRoleLockedRef.current) {
+                  // ── ps 統一判定チェック（profileComplete後・毎フレーム実行）────────────
+                  // genderLocked 前: 確信度閾値を超えた瞬間に初回ロール確定（グレー→色）
+                  // genderLocked 後: 逆転があれば即時修正（整合維持）
+                  // manualLocked 中: ユーザー判断を最優先（変更しない）
+                  if (profileCompleteRef.current && !manualRoleLockedRef.current) {
                     const ps0 = profileLeaderScore(slots[0].profile, 1);
                     const ps1 = profileLeaderScore(slots[1].profile, 1);
                     if (ps0 > 0 && ps1 > 0) {
                       const exp0: PersonRole = ps0 >= ps1 ? 'leader' : 'follower';
                       const exp1: PersonRole = ps0 >= ps1 ? 'follower' : 'leader';
-                      if (slots[0].role !== exp0 || slots[1].role !== exp1) {
-                        slots[0].role = exp0;
-                        slots[1].role = exp1;
-                        // forEach で detectedIdx を使って確実に同期
-                        slots.forEach(slot => {
-                          if (slot.detectedIdx >= 0 && slot.role) {
-                            personRoles.set(slot.detectedIdx, slot.role);
-                          }
-                        });
+                      if (!genderLockedRef.current) {
+                        // 初回判定: 確信度が CONFIDENCE_THRESHOLD を超えたら確定
+                        // 閾値未満の間は null のままグレー表示を維持（早まった逆転を防ぐ）
+                        if (Math.abs(ps0 - ps1) >= CONFIDENCE_THRESHOLD) {
+                          slots[0].role = exp0;
+                          slots[1].role = exp1;
+                          genderLockedRef.current  = true;
+                          roleDetectedRef.current  = true;
+                          setRoleDetected(true);
+                          setRoleConfidenceLow(false);
+                          console.log(`[ROLE_LOCK] ps0=${ps0.toFixed(3)} ps1=${ps1.toFixed(3)} → slot0=${exp0} slot1=${exp1}`);
+                          slots.forEach(slot => {
+                            if (slot.detectedIdx >= 0 && slot.role) {
+                              personRoles.set(slot.detectedIdx, slot.role);
+                            }
+                          });
+                        }
+                      } else {
+                        // 整合維持: 逆転していれば即時修正
+                        if (slots[0].role !== exp0 || slots[1].role !== exp1) {
+                          slots[0].role = exp0;
+                          slots[1].role = exp1;
+                          slots.forEach(slot => {
+                            if (slot.detectedIdx >= 0 && slot.role) {
+                              personRoles.set(slot.detectedIdx, slot.role);
+                            }
+                          });
+                        }
                       }
                     }
                   }

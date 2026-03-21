@@ -194,6 +194,7 @@ type RoleSlot = {
   // ── Cold Start 準備動作検出 ──────────────────────────────
   coldFrameCount:   number;     // Cold Start 蓄積フレーム数
   prevAnkleMid:     Centroid | null; // 前フレームの足首中点（準備動作検出用）
+  detectedIdx:      number;     // 今フレームで対応する all[] のインデックス（-1 = 未検出）
 };
 
 // ── ロール描画カラー ──────────────────────────────────────────────────────
@@ -1426,7 +1427,7 @@ export function usePoseEstimation(
     zFront: false, omegaHist: [], omega: 0,
     angPhase: 0, angCenter: 0.5, angAmplitude: 0, phantomPos: null,
     dynamicsScore: 0, wristPrev: null, wristVel: 0, wasMoving: false, motionOnsetFrame: -1,
-    coldFrameCount: 0, prevAnkleMid: null,
+    coldFrameCount: 0, prevAnkleMid: null, detectedIdx: -1,
   });
   const roleSlots          = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
   const roleDetectedRef    = useRef(false);
@@ -1805,6 +1806,9 @@ export function usePoseEstimation(
                   const facePriority = justSeparated || noseSep >= NOSE_SEP_MIN;
 
                   const [si0, si1] = matchRoleSlots(all, slots, facePriority, justSeparated);
+                  // スロット自身に「今フレームで誰を指しているか」を記憶させる
+                  slots[0].detectedIdx = si0;
+                  slots[1].detectedIdx = si1;
                   const personRoles = new Map<number, PersonRole>();
 
                   // ビート番号（役割判定に使用）
@@ -2002,8 +2006,14 @@ export function usePoseEstimation(
                     // 性別ハードロック: justSeparated/Self-Healing/FirstTurnを全封鎖
                     genderLockedRef.current     = true;
                     setRoleDetected(true);
-                    if (si0 >= 0) personRoles.set(si0, slots[0].role);
-                    if (si1 >= 0) personRoles.set(si1, slots[1].role);
+                    // ── slots.forEach で personRoles を強制同期（ガードなし・即時）
+                    // si0/si1 変数に頼らず、スロット自身の detectedIdx を使って確実に書き込む
+                    slots.forEach(slot => {
+                      if (slot.detectedIdx >= 0 && slot.role) {
+                        console.log(`[profileComplete] slot.detectedIdx=${slot.detectedIdx} role=${slot.role} ps=${profileLeaderScore(slot.profile, 1).toFixed(3)}`);
+                        personRoles.set(slot.detectedIdx, slot.role);
+                      }
+                    });
                     // ── profileComplete発火フレームでdebugInfoを即時強制更新（スロットル待ちなし）
                     // ps値とRole表示が同一フレームで確定することを保証する
                     setDebugInfo({
@@ -2076,8 +2086,12 @@ export function usePoseEstimation(
                       if (slots[0].role !== exp0 || slots[1].role !== exp1) {
                         slots[0].role = exp0;
                         slots[1].role = exp1;
-                        if (si0 >= 0) personRoles.set(si0, exp0);
-                        if (si1 >= 0) personRoles.set(si1, exp1);
+                        // forEach で detectedIdx を使って確実に同期
+                        slots.forEach(slot => {
+                          if (slot.detectedIdx >= 0 && slot.role) {
+                            personRoles.set(slot.detectedIdx, slot.role);
+                          }
+                        });
                       }
                     }
                   }

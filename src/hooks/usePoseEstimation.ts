@@ -1874,7 +1874,7 @@ export function usePoseEstimation(
                     slots[s].phantomPos = null; // 検出済みなのでリセット
 
                     // ── 体格プロファイル蓄積（プロファイリング期間中・2人同時検出時）
-                    if (!profileCompleteRef.current && si0 >= 0 && si1 >= 0) {
+                    if (si0 >= 0 && si1 >= 0) {
                       const lm = all[si];
                       const nose = lm[0], sL = lm[11], sR = lm[12], hL = lm[23], hR = lm[24], aL = lm[27], aR = lm[28];
                       if (nose && aL && aR && (nose.visibility ?? 1) >= VIS_THRESHOLD) {

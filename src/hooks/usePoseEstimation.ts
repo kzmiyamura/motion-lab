@@ -151,8 +151,9 @@ interface PersonProfile {
   coldPrepFollower: number;       // 準備動作: 垂直ヒップ振動フレーム数
   // ── 正面向きフレームのみ蓄積（遠近法不変量）─────────────────────────────
   frontalShoulderWidth: number;  // 正面向き時の肩幅累積
+  frontalHipWidth: number;       // 正面向き時の腰幅累積（SHR計算に使用）
   frontalBodyHeight: number;     // 正面向き時の身長（鼻〜足首）累積
-  frontalSampleCount: number;    // 正面向きフレーム数
+  frontalSampleCount: number;    // 正面向きフレーム数（SW+HW+BH 全て有効なフレーム）
   sampleCount: number;           // 有効サンプル数（鼻+足首が見えたフレーム）
   ratioSamples: number;          // headBodyRatio の有効サンプル数
 }
@@ -163,7 +164,7 @@ const makeProfile = (): PersonProfile => ({
   maxShoulderX: 0, maxHipX: 0,
   totalEarWidth: 0,
   totalHeadTriangleArea: 0, coldPrepLeader: 0, coldPrepFollower: 0,
-  frontalShoulderWidth: 0, frontalBodyHeight: 0, frontalSampleCount: 0,
+  frontalShoulderWidth: 0, frontalHipWidth: 0, frontalBodyHeight: 0, frontalSampleCount: 0,
   sampleCount: 0, ratioSamples: 0,
 });
 
@@ -959,22 +960,31 @@ function isFrontalPose(lm: NormalizedLandmark[]): boolean {
 
 // ── 体格スコア（リーダーらしさ） ─────────────────────────────────────────
 /**
- * 第0原則: 最大2D X-diff SHR (肩幅 / 腰幅) のみで Leader スコアを算出。
+ * 第0原則: 正面向きフレームの平均SHR（肩幅/腰幅）でLeaderスコアを算出。
  *
- * max(|sR.x - sL.x|) / max(|hR.x - hL.x|) を使用。
- * - Zノイズの影響ゼロ（2D X座標のみ）
- * - 最大値を取るので正面向き時のベストフレームが自動選択される
- * - 男性は肩幅 >> 腰幅 → SHR高い。女性は腰幅 ≈ 肩幅 → SHR低い。
+ * 優先順位:
+ * 1. frontalSampleCount >= 1 の場合: 正面向き平均（最も信頼性が高い）
+ * 2. フォールバック: 最大2D X幅（横向きのみの場合の保険）
  *
  * 典型値: 男性（Leader）SHR > 1.10, 女性（Follower）SHR < 1.05
  */
 function profileLeaderScore(p: PersonProfile, _heightWeight: number): number {
+  // 正面データが1フレームでも揃っていればそちらを優先（Zノイズなし・高信頼）
+  if (p.frontalSampleCount >= 1 && p.frontalHipWidth > 0) {
+    const avgSW = p.frontalShoulderWidth / p.frontalSampleCount;
+    const avgHW = p.frontalHipWidth      / p.frontalSampleCount;
+    if (avgSW > 0 && avgHW > 0) return avgSW / avgHW;
+  }
+  // フォールバック: 最大2D X幅
   if (p.maxShoulderX === 0 || p.maxHipX === 0) return 0;
-  return p.maxShoulderX / p.maxHipX; // 最大2D SHR: Zノイズなし
+  return p.maxShoulderX / p.maxHipX;
 }
 
-// SHR差がこれ未満 → 確信度不足（グレー維持）。これ以上で初回ロール確定。
+// ロック条件の物理的制約
+// SHR差がこれ未満 → 確信度不足（グレー維持）
 const CONFIDENCE_THRESHOLD = 0.05;
+// 正面向きでなければ達成できない最小肩幅 → 横向きノイズによる早期誤ロックを防ぐ
+const MIN_FRONTAL_SHOULDER_WIDTH = 0.12;
 
 // ── ロールスロットマッチング（顔アンカー優先 + Nearest Neighbor） ─────────
 
@@ -1911,16 +1921,24 @@ export function usePoseEstimation(
                         slots[s].profile.totalHeadTriangleArea += triArea;
                       }
 
-                      // ── 正面向きフレームのみ蓄積（遠近法不変の SW/H 比率用）
+                      // ── 正面向きフレームのみ蓄積（遠近法不変の SHR 計算用）
                       if (isFrontalPose(lm)) {
-                        // 正面向き時は Z 差が小さいため 2D でも可だが 3D に統一
-                        const fSW = sL && sR ? Math.hypot(sR.x - sL.x, (sR.z ?? 0) - (sL.z ?? 0)) : 0;
+                        const fSW = sL && sR
+                          && (sL.visibility ?? 1) >= VIS_THRESHOLD
+                          && (sR.visibility ?? 1) >= VIS_THRESHOLD
+                          ? Math.abs(sR.x - sL.x) : 0;  // 正面なので 2D Xで十分
+                        const fHW = hL && hR
+                          && (hL.visibility ?? 1) >= VIS_THRESHOLD
+                          && (hR.visibility ?? 1) >= VIS_THRESHOLD
+                          ? Math.abs(hR.x - hL.x) : 0;
                         const fNose = lm[0], fAnkL = lm[27], fAnkR = lm[28];
                         const fBH = fNose && fAnkL && fAnkR
                           && (fNose.visibility ?? 1) >= VIS_THRESHOLD
                           ? Math.abs(fNose.y - (fAnkL.y + fAnkR.y) / 2) : 0;
-                        if (fSW > 0 && fBH > 0) {
+                        // 肩幅・腰幅・身長が全て取れたフレームのみ蓄積（揃ったデータで SHR を計算）
+                        if (fSW > 0 && fHW > 0 && fBH > 0) {
                           slots[s].profile.frontalShoulderWidth += fSW;
+                          slots[s].profile.frontalHipWidth      += fHW;
                           slots[s].profile.frontalBodyHeight    += fBH;
                           slots[s].profile.frontalSampleCount++;
                         }
@@ -2023,9 +2041,14 @@ export function usePoseEstimation(
                       const exp0: PersonRole = ps0 >= ps1 ? 'leader' : 'follower';
                       const exp1: PersonRole = ps0 >= ps1 ? 'follower' : 'leader';
                       if (!genderLockedRef.current) {
-                        // 初回判定: 確信度が CONFIDENCE_THRESHOLD を超えたら確定
-                        // 閾値未満の間は null のままグレー表示を維持（早まった逆転を防ぐ）
-                        if (Math.abs(ps0 - ps1) >= CONFIDENCE_THRESHOLD) {
+                        // 初回判定: 以下の3条件を全て満たしたらロック確定
+                        // 1. SHR差が確信度閾値以上（ノイズと区別できる差）
+                        // 2. 両者の肩幅が最小値以上（正面を向いているフレームが含まれている証拠）
+                        // 3. 正面サンプルが1以上（または maxShoulderX が最小値以上）
+                        const hasReliableData =
+                          slots[0].profile.maxShoulderX >= MIN_FRONTAL_SHOULDER_WIDTH &&
+                          slots[1].profile.maxShoulderX >= MIN_FRONTAL_SHOULDER_WIDTH;
+                        if (Math.abs(ps0 - ps1) >= CONFIDENCE_THRESHOLD && hasReliableData) {
                           slots[0].role = exp0;
                           slots[1].role = exp1;
                           genderLockedRef.current  = true;

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import * as faceapi from 'face-api.js';
 
 // @mediapipe/tasks-vision の exports 形式が非標準のため型を自前定義
 interface NormalizedLandmark { x: number; y: number; z: number; visibility?: number; }
@@ -1451,6 +1450,8 @@ export function usePoseEstimation(
   // face-api.js 顔性別判定ロック（SHRより優先度高、Swapより低）
   const faceLockedRef                  = useRef(false);
   const faceModelsLoadedRef            = useRef(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const faceapiRef                     = useRef<any>(null);  // face-api.js モジュール（動的ロード）
   const faceScanResultsRef             = useRef<FaceScanResult[]>([]);
   const faceScanningRef                = useRef(false);
   const lastFaceScanRef                = useRef(0);
@@ -1627,12 +1628,21 @@ export function usePoseEstimation(
       if (cancelled) { landmarker.close(); return; }
       landmarkerRef.current = landmarker;
 
-      // ── face-api.js モデルロード（非ブロッキング — 骨格検出の邪魔をしない）
+      // ── face-api.js 動的ロード（MediaPipe と同様 — 型宣言なしでも動作）
       if (!faceModelsLoadedRef.current) {
-        faceapi.nets.tinyFaceDetector.loadFromUri('/models')
-          .then(() => faceapi.nets.ageGenderNet.loadFromUri('/models'))
-          .then(() => { faceModelsLoadedRef.current = true; console.log('[FACE] models loaded'); })
-          .catch(e => console.warn('[FACE] model load failed', e));
+        void (async () => {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const fa = await import('face-api.js' as any) as any;
+            await fa.nets.tinyFaceDetector.loadFromUri('/models');
+            await fa.nets.ageGenderNet.loadFromUri('/models');
+            faceapiRef.current = fa;
+            faceModelsLoadedRef.current = true;
+            console.log('[FACE] models loaded');
+          } catch (e: unknown) {
+            console.warn('[FACE] model load failed', e);
+          }
+        })();
       }
 
       function loop() {
@@ -1836,6 +1846,7 @@ export function usePoseEstimation(
 
                   // ── 顔性別判定スキャン（非同期 fire-and-forget、500msごと）────────────
                   if (faceModelsLoadedRef.current
+                      && faceapiRef.current
                       && !faceLockedRef.current
                       && !faceScanningRef.current
                       && now - lastFaceScanRef.current >= FACE_SCAN_INTERVAL_MS
@@ -1844,13 +1855,15 @@ export function usePoseEstimation(
                     lastFaceScanRef.current = now;
                     const vw = video.videoWidth  || 1;
                     const vh = video.videoHeight || 1;
+                    const fa = faceapiRef.current;
                     void (async () => {
                       try {
-                        const dets = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+                        const dets = await fa.detectAllFaces(video, new fa.TinyFaceDetectorOptions())
                           .withAgeAndGender();
-                        faceScanResultsRef.current = dets
-                          .filter(d => d.genderProbability >= FACE_GENDER_CONFIDENCE)
-                          .map(d => ({
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        faceScanResultsRef.current = (dets as any[])
+                          .filter((d: any) => d.genderProbability >= FACE_GENDER_CONFIDENCE)
+                          .map((d: any) => ({
                             normX: (d.detection.box.x + d.detection.box.width  * 0.5) / vw,
                             normY: (d.detection.box.y + d.detection.box.height * 0.5) / vh,
                             gender: d.gender as 'male' | 'female',

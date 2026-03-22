@@ -129,7 +129,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     roleDetected, swapRoles,
     annotations, exportDebugLog,
     debugInfo,
-    roleConfidenceLow,
   } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle, heightLeaderHint,
@@ -1052,76 +1051,51 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                 />
                 {debugInfo && vizMode !== 'off' && (
                   <div className={styles.debugPanel}>
+                    {/* ── スロット状態（シンプル表示）── */}
                     {debugInfo.slots.map(sl => (
-                      <div key={sl.slotIdx}>
-                        {/* Row 1: role / dynamics / omega / z-order / detection */}
-                        <div className={styles.debugRow}>
-                          <span className={styles.debugSlot}
-                            style={{ color: sl.role === 'leader' ? '#4af' : sl.role === 'follower' ? '#f4a' : '#aaa' }}>
-                            [{sl.slotIdx}]{sl.role ? sl.role[0].toUpperCase() : '?'}
-                          </span>
-                          <span className={styles.debugVal}>dyn:{sl.dynamicsScore.toFixed(2)}</span>
-                          <span className={styles.debugVal}>ω:{sl.omega.toFixed(3)}</span>
-                          <span className={styles.debugVal}>{sl.zFront ? 'front' : 'back'}</span>
-                          <span className={styles.debugVal} style={{ color: sl.isDetected ? '#4f4' : '#f44' }}>
-                            {sl.isDetected ? 'det' : 'occ'}
-                          </span>
-                        </div>
-                        {/* Row 2: 骨格スコア（SW・BH・SW/H・SHR） */}
-                        <div className={styles.debugRow}>
-                          <span className={styles.debugVal}
-                            style={{ color: sl.isFrontal ? '#4f4' : '#888' }}>
-                            {sl.isFrontal ? '▣' : '◧'}
-                          </span>
-                          <span className={styles.debugVal}
-                            title="プロファイル平均肩幅（shoulderSamples で正規化）"
-                            style={{ color: sl.shoulderSamples >= 10 ? '#4f4' : '#f84' }}>
-                            sw:{sl.avgSW.toFixed(3)}({sl.shoulderSamples})
-                          </span>
-                          <span className={styles.debugVal}
-                            title="プロファイル平均身長">
-                            bh:{sl.avgBH.toFixed(3)}
-                          </span>
-                          <span className={styles.debugVal}
-                            style={{ color: sl.frontalN >= 3 ? '#4f4' : '#fa4' }}
-                            title="SW/H 構造比率（大きい=男性的）">
-                            r:{sl.swhAvg.toFixed(3)}({sl.frontalN}f)
-                          </span>
-                          <span className={styles.debugVal}
-                            title="SHR 肩幅/腰幅比">
-                            shr:{sl.shr.toFixed(2)}
-                          </span>
-                          <span className={styles.debugVal}
-                            style={{ color: '#ff8' }}
-                            title="profileScore (大きい方がLeader)">
-                            ps:{sl.profileScore.toFixed(3)}
-                          </span>
-                          <span className={styles.debugVal}
-                            style={{ color: sl.profileSamples >= 30 ? '#4f4' : '#888' }}>
-                            n:{sl.profileSamples}
-                          </span>
-                        </div>
+                      <div key={sl.slotIdx} className={styles.debugRow}>
+                        <span className={styles.debugSlot}
+                          style={{ color: sl.role === 'leader' ? '#4af' : sl.role === 'follower' ? '#f4a' : '#aaa' }}>
+                          S{sl.slotIdx}:{sl.role ? sl.role[0].toUpperCase() : '?'}
+                        </span>
+                        <span className={styles.debugVal}
+                          style={{ color: sl.lockSource === 'face' ? '#0f0' : sl.lockSource === 'shr' ? '#4af' : '#888' }}>
+                          [{sl.lockSource ?? '-'}]
+                        </span>
+                        <span className={styles.debugVal}
+                          style={{ color: '#ff8' }}>
+                          ps:{sl.profileScore.toFixed(3)}
+                        </span>
+                        <span className={styles.debugVal}
+                          style={{ color: sl.isDetected ? '#4f4' : '#f44' }}>
+                          {sl.isDetected ? 'det' : 'occ'}
+                        </span>
+                        <span className={styles.debugVal}>{sl.frontalN}f</span>
                       </div>
                     ))}
+                    {/* ── グローバル状態 ── */}
                     <div className={styles.debugRow}>
                       <span className={styles.debugVal}
-                        style={{ color: debugInfo.isOccluded ? '#fa4' : '#aaa' }}>
-                        {debugInfo.isOccluded ? 'OCCLUDED' : 'clear'}
+                        style={{ color: debugInfo.faceReady ? '#0f0' : '#fa4' }}>
+                        face:{debugInfo.faceReady ? 'READY' : 'loading'}
                       </span>
-                      {!debugInfo.profileComplete && (
-                        <span className={styles.debugVal} style={{ color: '#fa4' }}>PROFILING…</span>
-                      )}
-                      {debugInfo.profileComplete && roleConfidenceLow && (
-                        <span className={styles.debugVal} style={{ color: '#fa4' }}>LOW-CONF</span>
+                      {debugInfo.faceSuspending && (
+                        <span className={styles.debugVal} style={{ color: '#fa4' }}>SHR-WAIT</span>
                       )}
                       {debugInfo.faceLocked && (
                         <span className={styles.debugVal} style={{ color: '#0f0' }}>FACE-LOCK</span>
                       )}
                       {debugInfo.genderLocked && !debugInfo.faceLocked && (
-                        <span className={styles.debugVal} style={{ color: '#4af' }}>ps-LOCK</span>
+                        <span className={styles.debugVal} style={{ color: '#4af' }}>SHR-LOCK</span>
                       )}
                       {debugInfo.manualLocked && (
                         <span className={styles.debugVal} style={{ color: '#f44' }}>MANUAL-LOCK</span>
+                      )}
+                      {!debugInfo.profileComplete && (
+                        <span className={styles.debugVal} style={{ color: '#888' }}>profiling…</span>
+                      )}
+                      {debugInfo.isOccluded && (
+                        <span className={styles.debugVal} style={{ color: '#fa4' }}>OCC</span>
                       )}
                     </div>
                   </div>

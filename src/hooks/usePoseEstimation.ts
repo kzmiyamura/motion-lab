@@ -57,6 +57,7 @@ export interface AnnotationEntry {
 export interface PoseDebugSlot {
   slotIdx: 0 | 1;
   role: PersonRole;
+  lockSource: 'face' | 'shr' | null;  // ロール確定の根拠
   dynamicsScore: number;
   omega: number;
   zFront: boolean;
@@ -82,6 +83,8 @@ export interface PoseDebugInfo {
   genderLocked: boolean;     // ps性別判定ハードロック中か
   manualLocked: boolean;     // 手動 Swap による永続ハードロック中か
   faceLocked: boolean;       // face-api.js 顔性別判定ロック中か
+  faceReady: boolean;        // face-api.js モデル読み込み完了か
+  faceSuspending: boolean;   // SHR ロックを face 待機でサスペンド中か
 }
 
 export interface UsePoseEstimationResult {
@@ -197,6 +200,7 @@ type RoleSlot = {
   coldFrameCount:   number;     // Cold Start 蓄積フレーム数
   prevAnkleMid:     Centroid | null; // 前フレームの足首中点（準備動作検出用）
   detectedIdx:      number;     // 今フレームで対応する all[] のインデックス（-1 = 未検出）
+  lockSource:       'face' | 'shr' | null; // ロール確定の根拠
 };
 
 // ── ロール描画カラー ──────────────────────────────────────────────────────
@@ -250,6 +254,7 @@ const CACHE_TIME_TOL      = 0.5;  // キャッシュ検索の時間許容幅（�
 // ── face-api.js 顔性別判定 ──────────────────────────────────────────────────
 const FACE_GENDER_CONFIDENCE = 0.90; // 顔性別判定の確信度閾値（これ以上でロール確定）
 const FACE_SCAN_INTERVAL_MS  = 500;  // 顔スキャン間隔（ms）— 重い処理なので2fps
+const FACE_SCAN_SUSPEND_MS   = 6000; // profileComplete 後この時間は SHR ロックを待機（face 優先）
 
 // MediaPipe Pose の33点接続（PC Worker モードで PoseLandmarker import を省略するため定数化）
 const POSE_CONNECTIONS: Connection[] = [
@@ -290,6 +295,14 @@ type FaceScanResult = {
   normY: number;   // 正規化顔中心 Y
   gender: 'male' | 'female';
   genderProb: number;
+};
+
+/** face-api.js 顔バウンディングボックス（可視化用・信頼度問わず全検出） */
+type FaceVisualization = {
+  normX: number; normY: number;   // bbox 左上（正規化）
+  normW: number; normH: number;   // bbox サイズ（正規化）
+  gender: string;
+  prob: number;
 };
 
 interface PatternDetectionState {
@@ -1448,7 +1461,7 @@ export function usePoseEstimation(
     zFront: false, omegaHist: [], omega: 0,
     angPhase: 0, angCenter: 0.5, angAmplitude: 0, phantomPos: null,
     dynamicsScore: 0, wristPrev: null, wristVel: 0, wasMoving: false, motionOnsetFrame: -1,
-    coldFrameCount: 0, prevAnkleMid: null, detectedIdx: -1,
+    coldFrameCount: 0, prevAnkleMid: null, detectedIdx: -1, lockSource: null,
   });
   const roleSlots          = useRef<[RoleSlot, RoleSlot]>([makeRoleSlot(), makeRoleSlot()]);
   const roleDetectedRef    = useRef(false);
@@ -1468,8 +1481,10 @@ export function usePoseEstimation(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const faceapiRef                     = useRef<any>(null);  // face-api.js モジュール（動的ロード）
   const faceScanResultsRef             = useRef<FaceScanResult[]>([]);
+  const faceVisualizationRef           = useRef<FaceVisualization[]>([]);  // 全検出（可視化用）
   const faceScanningRef                = useRef(false);
   const lastFaceScanRef                = useRef(0);
+  const profileCompleteTimeRef         = useRef(0);  // profileComplete が最初に true になった時刻
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
@@ -1502,8 +1517,10 @@ export function usePoseEstimation(
     isOccludedRef.current       = false;
     genderLockedRef.current     = false;
     manualRoleLockedRef.current = false;
-    faceLockedRef.current       = false;
-    faceScanResultsRef.current  = [];
+    faceLockedRef.current        = false;
+    faceScanResultsRef.current   = [];
+    faceVisualizationRef.current = [];
+    profileCompleteTimeRef.current = 0;
     analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
     syncErrorRef.current     = false;
@@ -1900,6 +1917,17 @@ export function usePoseEstimation(
                       try {
                         const dets = await fa.detectAllFaces(video, new fa.TinyFaceDetectorOptions())
                           .withAgeAndGender();
+                        // 全検出を可視化用 ref に保存（信頼度問わず）
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        faceVisualizationRef.current = (dets as any[]).map((d: any) => ({
+                          normX: d.detection.box.x / vw,
+                          normY: d.detection.box.y / vh,
+                          normW: d.detection.box.width  / vw,
+                          normH: d.detection.box.height / vh,
+                          gender: d.gender,
+                          prob: d.genderProbability,
+                        }));
+                        // 高信頼度のみロール判定用に保存
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         faceScanResultsRef.current = (dets as any[])
                           .filter((d: any) => d.genderProbability >= FACE_GENDER_CONFIDENCE)
@@ -1909,6 +1937,7 @@ export function usePoseEstimation(
                             gender: d.gender as 'male' | 'female',
                             genderProb: d.genderProbability,
                           }));
+                        console.log(`[FACE_SCAN] ${(dets as any[]).length} faces detected, ${faceScanResultsRef.current.length} high-conf`);
                       } finally {
                         faceScanningRef.current = false;
                       }
@@ -1933,6 +1962,8 @@ export function usePoseEstimation(
                       if (maleSlot !== femaleSlot) {
                         slots[maleSlot].role   = 'leader';
                         slots[femaleSlot].role = 'follower';
+                        slots[maleSlot].lockSource   = 'face';
+                        slots[femaleSlot].lockSource = 'face';
                         faceLockedRef.current   = true;
                         genderLockedRef.current = true;
                         roleDetectedRef.current = true;
@@ -2143,6 +2174,8 @@ export function usePoseEstimation(
                       && slots[0].profile.hipSamples >= PROFILE_FRAMES
                       && slots[1].profile.hipSamples >= PROFILE_FRAMES) {
                     profileCompleteRef.current = true;
+                    profileCompleteTimeRef.current = now;  // SHR サスペンドの起点
+                    console.log('[PROFILE_COMPLETE] SHR suspend started, waiting for face scan...');
                   }
 
                   // ── ロール割り当ては ps（3D SHR）完了時のみ。BPM暫定・逆ロール伝播は廃止 ──
@@ -2176,7 +2209,12 @@ export function usePoseEstimation(
                   // genderLocked 前: 確信度閾値を超えた瞬間に初回ロール確定（グレー→色）
                   // genderLocked 後: 逆転があれば即時修正（整合維持）
                   // manualLocked 中: ユーザー判断を最優先（変更しない）
-                  if (profileCompleteRef.current && !manualRoleLockedRef.current && !faceLockedRef.current) {
+                  // SHR サスペンド: profileComplete 後 FACE_SCAN_SUSPEND_MS 以内は face 優先
+                  // face モデルが未ロードの間はタイムアウトまで待機（CDN 遅延・失敗対応）
+                  const faceSuspending = !faceModelsLoadedRef.current
+                    && profileCompleteTimeRef.current > 0
+                    && now - profileCompleteTimeRef.current < FACE_SCAN_SUSPEND_MS;
+                  if (profileCompleteRef.current && !manualRoleLockedRef.current && !faceLockedRef.current && !faceSuspending) {
                     const ps0 = profileLeaderScore(slots[0].profile, 1);
                     const ps1 = profileLeaderScore(slots[1].profile, 1);
                     if (ps0 > 0 && ps1 > 0) {
@@ -2193,11 +2231,13 @@ export function usePoseEstimation(
                         if (Math.abs(ps0 - ps1) >= CONFIDENCE_THRESHOLD && hasReliableData) {
                           slots[0].role = exp0;
                           slots[1].role = exp1;
+                          slots[0].lockSource = 'shr';
+                          slots[1].lockSource = 'shr';
                           genderLockedRef.current  = true;
                           roleDetectedRef.current  = true;
                           setRoleDetected(true);
                           setRoleConfidenceLow(false);
-                          console.log(`[ROLE_LOCK] ps0=${ps0.toFixed(3)} ps1=${ps1.toFixed(3)} → slot0=${exp0} slot1=${exp1}`);
+                          console.log(`[SHR_LOCK] ps0=${ps0.toFixed(3)} ps1=${ps1.toFixed(3)} → slot0=${exp0} slot1=${exp1}`);
                           slots.forEach(slot => {
                             if (slot.detectedIdx >= 0 && slot.role) {
                               personRoles.set(slot.detectedIdx, slot.role);
@@ -2332,6 +2372,7 @@ export function usePoseEstimation(
                         return {
                           slotIdx: s,
                           role: slot.role,
+                          lockSource: slot.lockSource,
                           dynamicsScore: slot.dynamicsScore,
                           omega: slot.omega,
                           zFront: slot.zFront,
@@ -2348,6 +2389,9 @@ export function usePoseEstimation(
                           isFrontal: frontalNow,
                         };
                       };
+                      const faceSuspNow = !faceModelsLoadedRef.current
+                        && profileCompleteTimeRef.current > 0
+                        && now - profileCompleteTimeRef.current < FACE_SCAN_SUSPEND_MS;
                       setDebugInfo({
                         slots: [makeDebugSlot(0), makeDebugSlot(1)],
                         isOccluded: isOccludedRef.current,
@@ -2356,6 +2400,8 @@ export function usePoseEstimation(
                         genderLocked: genderLockedRef.current,
                         manualLocked: manualRoleLockedRef.current,
                         faceLocked: faceLockedRef.current,
+                        faceReady: faceModelsLoadedRef.current,
+                        faceSuspending: faceSuspNow,
                       });
                     }
                   }
@@ -2411,6 +2457,68 @@ export function usePoseEstimation(
                       all.length,
                       lb, cw, mirrored,
                     );
+                  }
+
+                  // ── 顔認識 bbox 描画（face-api.js 可視化）──────────────────────────
+                  if (faceVisualizationRef.current.length > 0) {
+                    ctx.save();
+                    for (const fv of faceVisualizationRef.current) {
+                      const nx = mirrored ? 1 - fv.normX - fv.normW : fv.normX;
+                      const bx = lb.offsetX + nx * lb.renderW;
+                      const by = lb.offsetY + fv.normY * lb.renderH;
+                      const bw = fv.normW * lb.renderW;
+                      const bh = fv.normH * lb.renderH;
+                      const isMale = fv.gender === 'male';
+                      const col = isMale ? '#00aaff' : '#ff44cc';
+                      const hiConf = fv.prob >= FACE_GENDER_CONFIDENCE;
+                      ctx.strokeStyle = col;
+                      ctx.lineWidth   = hiConf ? 3 : 1.5;
+                      ctx.globalAlpha = hiConf ? 0.95 : 0.55;
+                      ctx.setLineDash(hiConf ? [] : [4, 4]);
+                      ctx.strokeRect(bx, by, bw, bh);
+                      ctx.setLineDash([]);
+                      ctx.globalAlpha = 1;
+                      ctx.fillStyle = col;
+                      ctx.font = 'bold 13px monospace';
+                      const label = `${isMale ? 'M' : 'F'} ${(fv.prob * 100).toFixed(0)}%`;
+                      const lx = mirrored ? bx + bw : bx;
+                      ctx.fillText(label, lx, by > 16 ? by - 4 : by + bh + 14);
+                    }
+                    ctx.restore();
+                  }
+
+                  // ── スロット状態オーバーレイ（右下コーナー）──────────────────────
+                  {
+                    ctx.save();
+                    ctx.font = 'bold 11px monospace';
+                    const lines = [
+                      `face: ${faceModelsLoadedRef.current ? 'READY' : 'loading...'}`,
+                      `faceLock: ${faceLockedRef.current ? 'YES' : 'no'}`,
+                      ...slots.map((sl, i) => {
+                        const r = sl.role ?? 'gray';
+                        const src = sl.lockSource ?? '-';
+                        return `S${i}: ${r} [${src}]`;
+                      }),
+                    ];
+                    const lineH = 15;
+                    const boxW  = 150;
+                    const boxH  = lines.length * lineH + 8;
+                    const bx2   = cw - boxW - 8;
+                    const by2   = ch - boxH - 8;
+                    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                    ctx.fillRect(bx2, by2, boxW, boxH);
+                    lines.forEach((ln, idx) => {
+                      const isSlot = idx >= 2;
+                      if (isSlot) {
+                        const sl = slots[idx - 2];
+                        ctx.fillStyle = sl.role === 'leader' ? '#66aaff'
+                          : sl.role === 'follower' ? '#ff66ee' : '#aaa';
+                      } else {
+                        ctx.fillStyle = '#fff';
+                      }
+                      ctx.fillText(ln, bx2 + 6, by2 + 6 + (idx + 1) * lineH);
+                    });
+                    ctx.restore();
                   }
 
                   // ビートフェーズインジケーター（BPM設定時）

@@ -1874,32 +1874,64 @@ export function usePoseEstimation(
                   // eslint-disable-next-line prefer-const
                   let [si0, si1] = matchRoleSlots(all, slots, facePriority, justSeparated);
 
-                  // ── CBL後 顔アンカーベース逆転検知（slot.nose はまだ旧値）────────────
-                  // justSeparated 直後: phantom外挿が CBL方向転換に対応できず
-                  // matchRoleSlots が si0/si1 を逆に割り当てるケースを顔ランドマーク距離で検出・修正
+                  // ── CBL後 解剖学的自己修復（肩幅クロス照合 → nose フォールバック）────
+                  // justSeparated 直後: matchRoleSlots の距離ベースマッチングが CBL方向転換で
+                  // si0/si1 を逆に割り当てるケースを解剖学的証拠（肩幅）で検出・修正する。
+                  // genderLocked 確定済みのプロファイル肩幅（期待値）と現フレームの実測3D肩幅を
+                  // クロス照合し、direct割り当てより swapped割り当ての誤差合計が 20%以上小さければ
+                  // 強制 Swap。肩幅が取れない場合のみ旧 nose アンカー法にフォールバック。
                   if (justSeparated && genderLockedRef.current && !manualRoleLockedRef.current
                       && si0 >= 0 && si1 >= 0) {
-                    const n0Old = slots[0].nose;   // オクルージョン前の slot[0] 顔位置
-                    const n1Old = slots[1].nose;   // オクルージョン前の slot[1] 顔位置
-                    const n0New = all[si0][0];     // matchRoleSlots が slot[0] に割り当てた人の顔
-                    const n1New = all[si1][0];     // matchRoleSlots が slot[1] に割り当てた人の顔
-                    if (n0Old && n1Old
-                        && n0New && (n0New.visibility ?? 1) >= VIS_THRESHOLD
-                        && n1New && (n1New.visibility ?? 1) >= VIS_THRESHOLD) {
-                      const distDirect  = Math.hypot(n0New.x - n0Old.x, n0New.y - n0Old.y)
-                                        + Math.hypot(n1New.x - n1Old.x, n1New.y - n1Old.y);
-                      const distSwapped = Math.hypot(n0New.x - n1Old.x, n0New.y - n1Old.y)
-                                        + Math.hypot(n1New.x - n0Old.x, n1New.y - n0Old.y);
-                      if (distSwapped < distDirect * 0.80) {
-                        // スワップ割り当ての方が明らかに近い → si0/si1 を入れ替えて修正
+                    // ── 現フレームの3D肩幅を取得するヘルパー（XZ平面距離 — 横向き時も有効）
+                    const get3DSW = (lm: NormalizedLandmark[]): number => {
+                      const sL = lm[11], sR = lm[12];
+                      if (!sL || !sR
+                          || (sL.visibility ?? 1) < VIS_THRESHOLD
+                          || (sR.visibility ?? 1) < VIS_THRESHOLD) return -1;
+                      return Math.hypot(sR.x - sL.x, (sR.z ?? 0) - (sL.z ?? 0));
+                    };
+                    const sw0 = get3DSW(all[si0]);   // si0 人物の現3D肩幅
+                    const sw1 = get3DSW(all[si1]);   // si1 人物の現3D肩幅
+                    // プロファイル平均3D肩幅（genderLocked後は蓄積停止済みの確定値）
+                    const psw0 = slots[0].profile.shoulderSamples > 0
+                      ? slots[0].profile.totalShoulderWidth / slots[0].profile.shoulderSamples : -1;
+                    const psw1 = slots[1].profile.shoulderSamples > 0
+                      ? slots[1].profile.totalShoulderWidth / slots[1].profile.shoulderSamples : -1;
+
+                    if (sw0 > 0.04 && sw1 > 0.04 && psw0 > 0 && psw1 > 0) {
+                      // ── 一次判定: 肩幅クロス照合 ─────────────────────────────────────
+                      // direct  = si0→slot0 の誤差 + si1→slot1 の誤差
+                      // swapped = si0→slot1 の誤差 + si1→slot0 の誤差
+                      const errDirect  = Math.abs(sw0 - psw0) + Math.abs(sw1 - psw1);
+                      const errSwapped = Math.abs(sw0 - psw1) + Math.abs(sw1 - psw0);
+                      if (errSwapped < errDirect * 0.80) {
                         [si0, si1] = [si1, si0];
-                        console.log(`[CBL_FIX] face-anchor reversal corrected direct=${distDirect.toFixed(3)} swapped=${distSwapped.toFixed(3)}`);
+                        console.log(`[CBL_FIX_SW] shoulder swap: errDirect=${errDirect.toFixed(3)} errSwapped=${errSwapped.toFixed(3)} ratio=${(errSwapped/errDirect).toFixed(3)} sw0=${sw0.toFixed(3)} sw1=${sw1.toFixed(3)} psw0=${psw0.toFixed(3)} psw1=${psw1.toFixed(3)}`);
                       } else {
-                        console.log(`[CBL_FIX_SKIP] ratio=${(distSwapped/distDirect).toFixed(3)} direct=${distDirect.toFixed(3)} swapped=${distSwapped.toFixed(3)} (threshold=0.80)`);
+                        console.log(`[CBL_FIX_SW_SKIP] ratio=${(errSwapped/errDirect).toFixed(3)} sw0=${sw0.toFixed(3)} sw1=${sw1.toFixed(3)} psw0=${psw0.toFixed(3)} psw1=${psw1.toFixed(3)}`);
                       }
                     } else {
-                      // 顔ランドマーク不足でスキップ
-                      console.log(`[CBL_FIX_SKIP] missing nose: n0Old=${!!n0Old} n1Old=${!!n1Old} n0New=${!!n0New} n1New=${!!n1New}`);
+                      // ── フォールバック: nose アンカーベース（肩幅が取れない場合）─────
+                      const n0Old = slots[0].nose;
+                      const n1Old = slots[1].nose;
+                      const n0New = all[si0][0];
+                      const n1New = all[si1][0];
+                      if (n0Old && n1Old
+                          && n0New && (n0New.visibility ?? 1) >= VIS_THRESHOLD
+                          && n1New && (n1New.visibility ?? 1) >= VIS_THRESHOLD) {
+                        const distDirect  = Math.hypot(n0New.x - n0Old.x, n0New.y - n0Old.y)
+                                          + Math.hypot(n1New.x - n1Old.x, n1New.y - n1Old.y);
+                        const distSwapped = Math.hypot(n0New.x - n1Old.x, n0New.y - n1Old.y)
+                                          + Math.hypot(n1New.x - n0Old.x, n1New.y - n0Old.y);
+                        if (distSwapped < distDirect * 0.80) {
+                          [si0, si1] = [si1, si0];
+                          console.log(`[CBL_FIX_NOSE] nose-anchor fallback swap: direct=${distDirect.toFixed(3)} swapped=${distSwapped.toFixed(3)}`);
+                        } else {
+                          console.log(`[CBL_FIX_NOSE_SKIP] ratio=${(distSwapped/distDirect).toFixed(3)} sw0=${sw0.toFixed(3)} sw1=${sw1.toFixed(3)} psw0=${psw0.toFixed(3)} psw1=${psw1.toFixed(3)}`);
+                        }
+                      } else {
+                        console.log(`[CBL_FIX_SKIP] no shoulder (sw0=${sw0.toFixed(3)} sw1=${sw1.toFixed(3)}) and missing nose: n0Old=${!!slots[0].nose} n1Old=${!!slots[1].nose} n0New=${!!(all[si0]?.[0])} n1New=${!!(all[si1]?.[0])}`);
+                      }
                     }
                   }
 

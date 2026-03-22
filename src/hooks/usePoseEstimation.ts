@@ -266,6 +266,21 @@ const POSE_CONNECTIONS: Connection[] = [
   { start: 29, end: 31 }, { start: 30, end: 32 }, { start: 27, end: 31 }, { start: 28, end: 32 },
 ];
 
+/** face-api.js を CDN <script> タグで動的ロード（Rollup バンドル対象外）*/
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function loadFaceApiFromCDN(): Promise<any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((window as any).faceapi) return Promise.resolve((window as any).faceapi);
+  return new Promise<unknown>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    script.onload = () => resolve((window as any).faceapi);
+    script.onerror = (e) => reject(e);
+    document.head.appendChild(script);
+  });
+}
+
 /** analysisCache: スロー再生中の検出結果を保存し通常速度で再生する */
 type CachedResult = { time: number; landmarks: NormalizedLandmark[][] };
 
@@ -1628,12 +1643,11 @@ export function usePoseEstimation(
       if (cancelled) { landmarker.close(); return; }
       landmarkerRef.current = landmarker;
 
-      // ── face-api.js 動的ロード（MediaPipe と同様 — 型宣言なしでも動作）
+      // ── face-api.js CDN ロード（npm 非使用 — Rollup 解決不要）
       if (!faceModelsLoadedRef.current) {
         void (async () => {
           try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const fa = await import('face-api.js' as any) as any;
+            const fa = await loadFaceApiFromCDN();
             await fa.nets.tinyFaceDetector.loadFromUri('/models');
             await fa.nets.ageGenderNet.loadFromUri('/models');
             faceapiRef.current = fa;

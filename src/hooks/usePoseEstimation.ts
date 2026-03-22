@@ -1852,7 +1852,33 @@ export function usePoseEstimation(
                     : 0;
                   const facePriority = justSeparated || noseSep >= NOSE_SEP_MIN;
 
-                  const [si0, si1] = matchRoleSlots(all, slots, facePriority, justSeparated);
+                  // eslint-disable-next-line prefer-const
+                  let [si0, si1] = matchRoleSlots(all, slots, facePriority, justSeparated);
+
+                  // ── CBL後 顔アンカーベース逆転検知（slot.nose はまだ旧値）────────────
+                  // justSeparated 直後: phantom外挿が CBL方向転換に対応できず
+                  // matchRoleSlots が si0/si1 を逆に割り当てるケースを顔ランドマーク距離で検出・修正
+                  if (justSeparated && genderLockedRef.current && !manualRoleLockedRef.current
+                      && si0 >= 0 && si1 >= 0) {
+                    const n0Old = slots[0].nose;   // オクルージョン前の slot[0] 顔位置
+                    const n1Old = slots[1].nose;   // オクルージョン前の slot[1] 顔位置
+                    const n0New = all[si0][0];     // matchRoleSlots が slot[0] に割り当てた人の顔
+                    const n1New = all[si1][0];     // matchRoleSlots が slot[1] に割り当てた人の顔
+                    if (n0Old && n1Old
+                        && n0New && (n0New.visibility ?? 1) >= VIS_THRESHOLD
+                        && n1New && (n1New.visibility ?? 1) >= VIS_THRESHOLD) {
+                      const distDirect  = Math.hypot(n0New.x - n0Old.x, n0New.y - n0Old.y)
+                                        + Math.hypot(n1New.x - n1Old.x, n1New.y - n1Old.y);
+                      const distSwapped = Math.hypot(n0New.x - n1Old.x, n0New.y - n1Old.y)
+                                        + Math.hypot(n1New.x - n0Old.x, n1New.y - n0Old.y);
+                      if (distSwapped < distDirect * 0.80) {
+                        // スワップ割り当ての方が明らかに近い → si0/si1 を入れ替えて修正
+                        [si0, si1] = [si1, si0];
+                        console.log(`[CBL_FIX] face-anchor reversal corrected direct=${distDirect.toFixed(3)} swapped=${distSwapped.toFixed(3)}`);
+                      }
+                    }
+                  }
+
                   // スロット自身に「今フレームで誰を指しているか」を記憶させる
                   slots[0].detectedIdx = si0;
                   slots[1].detectedIdx = si1;

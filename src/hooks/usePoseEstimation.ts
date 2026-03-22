@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import * as faceapi from 'face-api.js';
 
 // @mediapipe/tasks-vision の exports 形式が非標準のため型を自前定義
 interface NormalizedLandmark { x: number; y: number; z: number; visibility?: number; }
@@ -81,6 +82,7 @@ export interface PoseDebugInfo {
   profileComplete: boolean;  // 初期骨格判定が完了したか
   genderLocked: boolean;     // ps性別判定ハードロック中か
   manualLocked: boolean;     // 手動 Swap による永続ハードロック中か
+  faceLocked: boolean;       // face-api.js 顔性別判定ロック中か
 }
 
 export interface UsePoseEstimationResult {
@@ -246,6 +248,10 @@ const SLOW_RATE_THRESHOLD = 0.5;  // この再生速度以下で2パスカスケ
 const CACHE_MAX_FRAMES    = 600;  // analysisCache 最大フレーム数（~20秒 @ 30fps）
 const CACHE_TIME_TOL      = 0.5;  // キャッシュ検索の時間許容幅（秒）
 
+// ── face-api.js 顔性別判定 ──────────────────────────────────────────────────
+const FACE_GENDER_CONFIDENCE = 0.90; // 顔性別判定の確信度閾値（これ以上でロール確定）
+const FACE_SCAN_INTERVAL_MS  = 500;  // 顔スキャン間隔（ms）— 重い処理なので2fps
+
 // MediaPipe Pose の33点接続（PC Worker モードで PoseLandmarker import を省略するため定数化）
 const POSE_CONNECTIONS: Connection[] = [
   { start: 0, end: 1 }, { start: 1, end: 2 }, { start: 2, end: 3 }, { start: 3, end: 7 },
@@ -263,6 +269,14 @@ const POSE_CONNECTIONS: Connection[] = [
 
 /** analysisCache: スロー再生中の検出結果を保存し通常速度で再生する */
 type CachedResult = { time: number; landmarks: NormalizedLandmark[][] };
+
+/** face-api.js 顔性別スキャン結果（1フレーム分） */
+type FaceScanResult = {
+  normX: number;   // 正規化顔中心 X
+  normY: number;   // 正規化顔中心 Y
+  gender: 'male' | 'female';
+  genderProb: number;
+};
 
 interface PatternDetectionState {
   turnFrames: number;
@@ -1434,6 +1448,12 @@ export function usePoseEstimation(
   const genderLockedRef                = useRef(false); // true = ps性別判定完了済み
   // 手動 Swap 後の永続ハードロック（Swap is Truth）— psリアクティブチェックもブロック
   const manualRoleLockedRef            = useRef(false); // true = ユーザーの判断を最優先
+  // face-api.js 顔性別判定ロック（SHRより優先度高、Swapより低）
+  const faceLockedRef                  = useRef(false);
+  const faceModelsLoadedRef            = useRef(false);
+  const faceScanResultsRef             = useRef<FaceScanResult[]>([]);
+  const faceScanningRef                = useRef(false);
+  const lastFaceScanRef                = useRef(0);
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
@@ -1466,6 +1486,8 @@ export function usePoseEstimation(
     isOccludedRef.current       = false;
     genderLockedRef.current     = false;
     manualRoleLockedRef.current = false;
+    faceLockedRef.current       = false;
+    faceScanResultsRef.current  = [];
     analysisCacheRef.current = [];
     prevBeatNumRef.current   = undefined;
     syncErrorRef.current     = false;
@@ -1604,6 +1626,14 @@ export function usePoseEstimation(
 
       if (cancelled) { landmarker.close(); return; }
       landmarkerRef.current = landmarker;
+
+      // ── face-api.js モデルロード（非ブロッキング — 骨格検出の邪魔をしない）
+      if (!faceModelsLoadedRef.current) {
+        faceapi.nets.tinyFaceDetector.loadFromUri('/models')
+          .then(() => faceapi.nets.ageGenderNet.loadFromUri('/models'))
+          .then(() => { faceModelsLoadedRef.current = true; console.log('[FACE] models loaded'); })
+          .catch(e => console.warn('[FACE] model load failed', e));
+      }
 
       function loop() {
         if (!activeRef.current || cancelled) return;
@@ -1762,7 +1792,7 @@ export function usePoseEstimation(
                   // ── [Frame Top] ps リアクティブ整合チェック（第0原則の先頭守護）──────
                   // per-personループより先に実行することで、ループ内の personRoles.set が
                   // 必ず ps確定済みの正しいロールを読む。genderLocked確定後は毎フレーム最優先。
-                  if (genderLockedRef.current && !manualRoleLockedRef.current) {
+                  if (genderLockedRef.current && !manualRoleLockedRef.current && !faceLockedRef.current) {
                     const ps0t = profileLeaderScore(slots[0].profile, 1);
                     const ps1t = profileLeaderScore(slots[1].profile, 1);
                     if (ps0t > 0 && ps1t > 0) {
@@ -1803,6 +1833,65 @@ export function usePoseEstimation(
                   slots[0].detectedIdx = si0;
                   slots[1].detectedIdx = si1;
                   const personRoles = new Map<number, PersonRole>();
+
+                  // ── 顔性別判定スキャン（非同期 fire-and-forget、500msごと）────────────
+                  if (faceModelsLoadedRef.current
+                      && !faceLockedRef.current
+                      && !faceScanningRef.current
+                      && now - lastFaceScanRef.current >= FACE_SCAN_INTERVAL_MS
+                      && all.length >= 2) {
+                    faceScanningRef.current = true;
+                    lastFaceScanRef.current = now;
+                    const vw = video.videoWidth  || 1;
+                    const vh = video.videoHeight || 1;
+                    void (async () => {
+                      try {
+                        const dets = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+                          .withAgeAndGender();
+                        faceScanResultsRef.current = dets
+                          .filter(d => d.genderProbability >= FACE_GENDER_CONFIDENCE)
+                          .map(d => ({
+                            normX: (d.detection.box.x + d.detection.box.width  * 0.5) / vw,
+                            normY: (d.detection.box.y + d.detection.box.height * 0.5) / vh,
+                            gender: d.gender as 'male' | 'female',
+                            genderProb: d.genderProbability,
+                          }));
+                      } finally {
+                        faceScanningRef.current = false;
+                      }
+                    })();
+                  }
+
+                  // ── face-api 結果をスロットに適用してロール確定 ──────────────────────
+                  if (!faceLockedRef.current && !manualRoleLockedRef.current
+                      && faceScanResultsRef.current.length >= 2) {
+                    const males   = faceScanResultsRef.current.filter(r => r.gender === 'male');
+                    const females = faceScanResultsRef.current.filter(r => r.gender === 'female');
+                    if (males.length > 0 && females.length > 0) {
+                      const male   = males.reduce((b, r) => r.genderProb > b.genderProb ? r : b);
+                      const female = females.reduce((b, r) => r.genderProb > b.genderProb ? r : b);
+                      // 鼻ランドマーク距離でどちらのスロットに対応するか決定
+                      const distMS0 = slots[0].nose ? Math.hypot(male.normX   - slots[0].nose.x, male.normY   - slots[0].nose.y) : Infinity;
+                      const distMS1 = slots[1].nose ? Math.hypot(male.normX   - slots[1].nose.x, male.normY   - slots[1].nose.y) : Infinity;
+                      const distFS0 = slots[0].nose ? Math.hypot(female.normX - slots[0].nose.x, female.normY - slots[0].nose.y) : Infinity;
+                      const distFS1 = slots[1].nose ? Math.hypot(female.normX - slots[1].nose.x, female.normY - slots[1].nose.y) : Infinity;
+                      const maleSlot:   0 | 1 = distMS0 <= distMS1 ? 0 : 1;
+                      const femaleSlot: 0 | 1 = distFS0 <= distFS1 ? 0 : 1;
+                      if (maleSlot !== femaleSlot) {
+                        slots[maleSlot].role   = 'leader';
+                        slots[femaleSlot].role = 'follower';
+                        faceLockedRef.current   = true;
+                        genderLockedRef.current = true;
+                        roleDetectedRef.current = true;
+                        setRoleDetected(true);
+                        setRoleConfidenceLow(false);
+                        console.log(`[FACE_LOCK] male→slot${maleSlot}(leader) female→slot${femaleSlot}(follower)`);
+                        slots.forEach(slot => {
+                          if (slot.detectedIdx >= 0 && slot.role) personRoles.set(slot.detectedIdx, slot.role);
+                        });
+                      }
+                    }
+                  }
 
                   // ビート番号（役割判定に使用）
                   const currentBeatNum = bpmRef.current > 0
@@ -2034,7 +2123,7 @@ export function usePoseEstimation(
                   // genderLocked 前: 確信度閾値を超えた瞬間に初回ロール確定（グレー→色）
                   // genderLocked 後: 逆転があれば即時修正（整合維持）
                   // manualLocked 中: ユーザー判断を最優先（変更しない）
-                  if (profileCompleteRef.current && !manualRoleLockedRef.current) {
+                  if (profileCompleteRef.current && !manualRoleLockedRef.current && !faceLockedRef.current) {
                     const ps0 = profileLeaderScore(slots[0].profile, 1);
                     const ps1 = profileLeaderScore(slots[1].profile, 1);
                     if (ps0 > 0 && ps1 > 0) {
@@ -2213,6 +2302,7 @@ export function usePoseEstimation(
                         profileComplete: profileCompleteRef.current,
                         genderLocked: genderLockedRef.current,
                         manualLocked: manualRoleLockedRef.current,
+                        faceLocked: faceLockedRef.current,
                       });
                     }
                   }

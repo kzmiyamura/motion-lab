@@ -1146,29 +1146,48 @@ function matchRoleSlots(
 
 // ── 2パスカスケード用ヘルパー ─────────────────────────────────────────────
 
+/** 顔中心の楕円マスク（正規化座標）— デバッグ可視化にも使用 */
+type EllipseMask = {
+  cx: number; cy: number;   // 楕円中心（正規化）— nose 座標
+  rx: number; ry: number;   // 楕円半径（正規化）
+};
+
 /**
- * 頭部＋胴体のランドマークのみでバウンディングボックスを返す（正規化座標）。
- * 手足を含めないことで、密着時に隣の人物を誤ってマスクするのを防ぐ。
- * 使用インデックス: 0-12（鼻・目・耳・肩）+ 23-24（腰）
+ * 1人分のランドマークから head-only 楕円マスクを計算する。
+ * 優先順位:
+ *   1. 肩幅 (lm[11]〜lm[12]) が取れる → rx = sw*0.35, ry = sw*0.45
+ *   2. 耳幅 (lm[7]〜lm[8])   が取れる → rx = ew*2.0,  ry = ew*2.5
+ *   3. フォールバック             → rx=0.08, ry=0.10（画像幅の 8%）
  */
-function getBoundingBox(
-  lm: NormalizedLandmark[], padding = 0.08,
-): { x: number; y: number; w: number; h: number } {
-  // 頭部(0-8)・肩(11-12)・腰(23-24) のみ使用。肘〜手首・膝〜足首は除外
-  const TORSO_IDX = [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 23, 24];
-  const vis = TORSO_IDX.map(i => lm[i]).filter(l => l && (l.visibility ?? 1) >= 0.2) as NormalizedLandmark[];
-  if (!vis.length) return { x: 0, y: 0, w: 0, h: 0 };
-  const xs = vis.map(l => l.x), ys = vis.map(l => l.y);
-  const x  = Math.max(0, Math.min(...xs) - padding);
-  const y  = Math.max(0, Math.min(...ys) - padding);
-  const x2 = Math.min(1, Math.max(...xs) + padding);
-  const y2 = Math.min(1, Math.max(...ys) + padding);
-  return { x, y, w: x2 - x, h: y2 - y };
+function computeHeadEllipse(lm: NormalizedLandmark[]): EllipseMask {
+  const nose = lm[0];
+  const cx = nose ? nose.x : 0.5;
+  const cy = nose ? nose.y : 0.15;
+
+  const sL = lm[11], sR = lm[12];
+  if (sL && sR && (sL.visibility ?? 1) >= 0.2 && (sR.visibility ?? 1) >= 0.2) {
+    const sw = Math.abs(sR.x - sL.x);
+    if (sw > 0.04) return { cx, cy, rx: sw * 0.35, ry: sw * 0.45 };
+  }
+  const eL = lm[7], eR = lm[8];
+  if (eL && eR && (eL.visibility ?? 1) >= 0.2 && (eR.visibility ?? 1) >= 0.2) {
+    const ew = Math.abs(eR.x - eL.x);
+    if (ew > 0.01) return { cx, cy, rx: ew * 2.0, ry: ew * 2.5 };
+  }
+  return { cx, cy, rx: 0.08, ry: 0.10 };
 }
 
 /**
- * 2パスカスケード検出（iOS メインスレッド専用）
- * Pass1: 通常検出 → Pass2: 検出済みをグレーマスクで隠して再検出 → マージ
+ * 2パスカスケード検出
+ * Pass1: 通常検出
+ * Pass2: 検出済み人物の「顔周辺のみ」を楕円グレーマスクで隠して再検出 → マージ
+ *
+ * 旧実装（胴体全体 fillRect）から変更:
+ *   胴体・肩・下半身をマスクしないことで、手前を通過中の人物の骨格を
+ *   Pass2 で検出できるようにする。
+ *
+ * @returns { landmarks, masks } — landmarks はマージ済み全人物、
+ *          masks は Pass2 で使用した楕円（デバッグ描画用）
  */
 function runTwoPassDetect(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1176,25 +1195,29 @@ function runTwoPassDetect(
   video: HTMLVideoElement,
   now: number,
   offCanvas: HTMLCanvasElement,
-): NormalizedLandmark[][] {
+): { landmarks: NormalizedLandmark[][]; masks: EllipseMask[] } {
   const r1 = landmarker.detectForVideo(video, now);
   const p1 = r1.landmarks as NormalizedLandmark[][];
-  if (p1.length >= 2) return p1;
+  if (p1.length >= 2) return { landmarks: p1, masks: [] };
 
   const vw = video.videoWidth, vh = video.videoHeight;
-  if (vw <= 0 || vh <= 0 || !p1.length) return p1;
+  if (vw <= 0 || vh <= 0 || !p1.length) return { landmarks: p1, masks: [] };
 
   if (offCanvas.width !== vw || offCanvas.height !== vh) {
     offCanvas.width = vw; offCanvas.height = vh;
   }
   const ctx2 = offCanvas.getContext('2d');
-  if (!ctx2) return p1;
+  if (!ctx2) return { landmarks: p1, masks: [] };
 
   ctx2.drawImage(video, 0, 0);
   ctx2.fillStyle = '#808080';
+  const masks: EllipseMask[] = [];
   for (const lm of p1) {
-    const b = getBoundingBox(lm);
-    ctx2.fillRect(b.x * vw, b.y * vh, b.w * vw, b.h * vh);
+    const m = computeHeadEllipse(lm);
+    masks.push(m);
+    ctx2.beginPath();
+    ctx2.ellipse(m.cx * vw, m.cy * vh, m.rx * vw, m.ry * vh, 0, 0, Math.PI * 2);
+    ctx2.fill();
   }
 
   const r2 = landmarker.detectForVideo(offCanvas, now + 1);
@@ -1210,7 +1233,7 @@ function runTwoPassDetect(
     });
     if (!dup) merged.push(lm2);
   }
-  return merged;
+  return { landmarks: merged, masks };
 }
 
 /** analysisCache から video.currentTime に最も近い結果を返す */
@@ -1490,6 +1513,7 @@ export function usePoseEstimation(
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
   const analysisCacheRef    = useRef<CachedResult[]>([]);                 // iOS キャッシュ
+  const ellipseMasksRef     = useRef<EllipseMask[]>([]);                  // Pass2 楕円マスク（デバッグ描画用）
 
   // 体格プロファイル & オクルージョン管理
   const profileCompleteRef  = useRef(false);
@@ -1522,8 +1546,9 @@ export function usePoseEstimation(
     faceScanResultsRef.current   = [];
     faceVisualizationRef.current = [];
     profileCompleteTimeRef.current = 0;
-    analysisCacheRef.current = [];
-    prevBeatNumRef.current   = undefined;
+    analysisCacheRef.current  = [];
+    ellipseMasksRef.current   = [];
+    prevBeatNumRef.current    = undefined;
     syncErrorRef.current     = false;
     setSyncError(false);
     setRoleDetected(false);
@@ -1725,9 +1750,10 @@ export function usePoseEstimation(
                     all = (r.landmarks as NormalizedLandmark[][]).filter(isPoseCoherent);
                   }
                 } else {
-                  // PC（常時）/ iOS スロー再生時: 2パスカスケード
-                  const raw = runTwoPassDetect(lm, video, now, offscreenCanvasRef.current!);
-                  all = raw.filter(isPoseCoherent);
+                  // PC（常時）/ iOS スロー再生時: 2パスカスケード（楕円マスク）
+                  const { landmarks: rawLm, masks: rawMasks } = runTwoPassDetect(lm, video, now, offscreenCanvasRef.current!);
+                  all = rawLm.filter(isPoseCoherent);
+                  ellipseMasksRef.current = rawMasks;  // デバッグ描画用に保存
                   // iOS スロー時はキャッシュに保存（通常速度で再生する際に再利用）
                   if (IS_IOS) {
                     analysisCacheRef.current.push({ time: video.currentTime, landmarks: all });
@@ -2498,6 +2524,26 @@ export function usePoseEstimation(
                       all.length,
                       lb, cw, mirrored,
                     );
+                  }
+
+                  // ── Pass2 楕円マスク境界線（デバッグ可視化）────────────────────────
+                  // 骨格 ON 中のみ表示。ゴールド破線で「Pass1 で隠した顔エリア」を示す。
+                  if (modeRef.current !== 'off' && ellipseMasksRef.current.length > 0) {
+                    ctx.save();
+                    ctx.strokeStyle = 'rgba(255, 210, 0, 0.80)';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([5, 3]);
+                    for (const m of ellipseMasksRef.current) {
+                      const ex  = lb.offsetX + m.cx * lb.renderW;
+                      const ey  = lb.offsetY + m.cy * lb.renderH;
+                      const erx = m.rx * lb.renderW;
+                      const ery = m.ry * lb.renderH;
+                      ctx.beginPath();
+                      ctx.ellipse(ex, ey, erx, ery, 0, 0, Math.PI * 2);
+                      ctx.stroke();
+                    }
+                    ctx.setLineDash([]);
+                    ctx.restore();
                   }
 
                   // ── 顔認識 bbox 描画（face-api.js 可視化）──────────────────────────

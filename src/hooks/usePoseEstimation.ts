@@ -947,13 +947,21 @@ function getHeadBodyRatio(lm: NormalizedLandmark[]): number {
  *  2. 体長が MAX_BODY_HEIGHT を超えたら無効（合成人体は異常に長い）
  *  3. 上半身/下半身比が正常範囲外なら無効（腰の位置が偏っている）
  */
-function isPoseCoherent(lm: NormalizedLandmark[]): boolean {
+function isPoseCoherent(lm: NormalizedLandmark[], relaxed = false): boolean {
   const nose = lm[0];
   const lSh = lm[11], rSh = lm[12];
   const lHip = lm[23], rHip = lm[24];
   const lAnk = lm[27], rAnk = lm[28];
 
   if (!lSh || !rSh || !lHip || !rHip) return true; // 必須点なし → 判定スキップ
+
+  // genderLocked 済み（relaxed=true）: 肩・腰が両方見えていれば無条件に通す。
+  // 手や腕が顔に触れてもスロットが消えない「粘り腰」モード。
+  if (relaxed
+      && (lSh.visibility ?? 1) >= VIS_THRESHOLD && (rSh.visibility ?? 1) >= VIS_THRESHOLD
+      && (lHip.visibility ?? 1) >= VIS_THRESHOLD && (rHip.visibility ?? 1) >= VIS_THRESHOLD) {
+    return true;
+  }
 
   const shoulderY = (lSh.y + rSh.y) / 2;
   const hipY      = (lHip.y + rHip.y) / 2;
@@ -1159,6 +1167,15 @@ type EllipseMask = {
  *   2. 耳幅 (lm[7]〜lm[8])   が取れる → rx = ew*2.0,  ry = ew*2.5
  *   3. フォールバック             → rx=0.08, ry=0.10（画像幅の 8%）
  */
+/** 両肩の3D距離（XZ平面 hypot）を返す。不可視なら -1 */
+function compute3DSW(lm: NormalizedLandmark[]): number {
+  const sL = lm[11], sR = lm[12];
+  if (!sL || !sR
+      || (sL.visibility ?? 1) < VIS_THRESHOLD
+      || (sR.visibility ?? 1) < VIS_THRESHOLD) return -1;
+  return Math.hypot(sR.x - sL.x, (sR.z ?? 0) - (sL.z ?? 0));
+}
+
 function computeHeadEllipse(lm: NormalizedLandmark[]): EllipseMask {
   const nose = lm[0];
   const cx = nose ? nose.x : 0.5;
@@ -1509,6 +1526,7 @@ export function usePoseEstimation(
   const lastFaceScanRef                = useRef(0);
   const profileCompleteTimeRef         = useRef(0);  // profileComplete が最初に true になった時刻
   const initTimeRef                    = useRef(0);  // init() 開始時刻（face サスペンド起点）
+  const lockedShoulderWidthRef         = useRef<[number, number]>([-1, -1]); // ロック時の肩幅定数（常時クロス照合用）
 
   // ── ハイブリッドアーキテクチャ用 Ref ────────────────────────────────────
   const offscreenCanvasRef  = useRef<HTMLCanvasElement | null>(null);     // 2パスカスケード用
@@ -1546,9 +1564,10 @@ export function usePoseEstimation(
     faceScanResultsRef.current   = [];
     faceVisualizationRef.current = [];
     profileCompleteTimeRef.current = 0;
-    analysisCacheRef.current  = [];
-    ellipseMasksRef.current   = [];
-    prevBeatNumRef.current    = undefined;
+    analysisCacheRef.current         = [];
+    ellipseMasksRef.current          = [];
+    lockedShoulderWidthRef.current   = [-1, -1];
+    prevBeatNumRef.current           = undefined;
     syncErrorRef.current     = false;
     setSyncError(false);
     setRoleDetected(false);
@@ -1747,12 +1766,12 @@ export function usePoseEstimation(
                     all = cached;
                   } else {
                     const r = lm.detectForVideo(video, now);
-                    all = (r.landmarks as NormalizedLandmark[][]).filter(isPoseCoherent);
+                    all = (r.landmarks as NormalizedLandmark[][]).filter(lm2 => isPoseCoherent(lm2, genderLockedRef.current));
                   }
                 } else {
                   // PC（常時）/ iOS スロー再生時: 2パスカスケード（楕円マスク）
                   const { landmarks: rawLm, masks: rawMasks } = runTwoPassDetect(lm, video, now, offscreenCanvasRef.current!);
-                  all = rawLm.filter(isPoseCoherent);
+                  all = rawLm.filter(lm2 => isPoseCoherent(lm2, genderLockedRef.current));
                   ellipseMasksRef.current = rawMasks;  // デバッグ描画用に保存
                   // iOS スロー時はキャッシュに保存（通常速度で再生する際に再利用）
                   if (IS_IOS) {
@@ -1908,16 +1927,8 @@ export function usePoseEstimation(
                   // 強制 Swap。肩幅が取れない場合のみ旧 nose アンカー法にフォールバック。
                   if (justSeparated && genderLockedRef.current && !manualRoleLockedRef.current
                       && si0 >= 0 && si1 >= 0) {
-                    // ── 現フレームの3D肩幅を取得するヘルパー（XZ平面距離 — 横向き時も有効）
-                    const get3DSW = (lm: NormalizedLandmark[]): number => {
-                      const sL = lm[11], sR = lm[12];
-                      if (!sL || !sR
-                          || (sL.visibility ?? 1) < VIS_THRESHOLD
-                          || (sR.visibility ?? 1) < VIS_THRESHOLD) return -1;
-                      return Math.hypot(sR.x - sL.x, (sR.z ?? 0) - (sL.z ?? 0));
-                    };
-                    const sw0 = get3DSW(all[si0]);   // si0 人物の現3D肩幅
-                    const sw1 = get3DSW(all[si1]);   // si1 人物の現3D肩幅
+                    const sw0 = compute3DSW(all[si0]);   // si0 人物の現3D肩幅
+                    const sw1 = compute3DSW(all[si1]);   // si1 人物の現3D肩幅
                     // プロファイル平均3D肩幅（genderLocked後は蓄積停止済みの確定値）
                     const psw0 = slots[0].profile.shoulderSamples > 0
                       ? slots[0].profile.totalShoulderWidth / slots[0].profile.shoulderSamples : -1;
@@ -1957,6 +1968,28 @@ export function usePoseEstimation(
                         }
                       } else {
                         console.log(`[CBL_FIX_SKIP] no shoulder (sw0=${sw0.toFixed(3)} sw1=${sw1.toFixed(3)}) and missing nose: n0Old=${!!slots[0].nose} n1Old=${!!slots[1].nose} n0New=${!!(all[si0]?.[0])} n1New=${!!(all[si1]?.[0])}`);
+                      }
+                    }
+                  }
+
+                  // ── 常時クロス照合（SW_HEAL）— genderLocked 後・毎フレーム ─────────────
+                  // justSeparated を待たず、ロック時の肩幅定数と現フレームの xspan を比較。
+                  // 「じわじわ逆転」「分離後しばらく経ってからの入れ替わり」に即応する。
+                  if (genderLockedRef.current && !manualRoleLockedRef.current
+                      && si0 >= 0 && si1 >= 0
+                      && lockedShoulderWidthRef.current[0] > 0 && lockedShoulderWidthRef.current[1] > 0) {
+                    const healSW0 = compute3DSW(all[si0]);
+                    const healSW1 = compute3DSW(all[si1]);
+                    const lsw0 = lockedShoulderWidthRef.current[0];
+                    const lsw1 = lockedShoulderWidthRef.current[1];
+                    const minLocked = Math.min(lsw0, lsw1);
+                    // 横向きガード: 両者とも最小ロック幅の 60% 以上のときのみ判定
+                    if (healSW0 >= minLocked * 0.60 && healSW1 >= minLocked * 0.60) {
+                      const errDirect  = Math.abs(healSW0 - lsw0) + Math.abs(healSW1 - lsw1);
+                      const errSwapped = Math.abs(healSW0 - lsw1) + Math.abs(healSW1 - lsw0);
+                      if (errSwapped < errDirect * 0.80) {
+                        [si0, si1] = [si1, si0];
+                        console.log(`[SW_HEAL] continuous swap: direct=${errDirect.toFixed(3)} swapped=${errSwapped.toFixed(3)} ratio=${(errSwapped/errDirect).toFixed(3)} sw0=${healSW0.toFixed(3)} sw1=${healSW1.toFixed(3)} lsw=[${lsw0.toFixed(3)},${lsw1.toFixed(3)}]`);
                       }
                     }
                   }
@@ -2034,7 +2067,12 @@ export function usePoseEstimation(
                         roleDetectedRef.current = true;
                         setRoleDetected(true);
                         setRoleConfidenceLow(false);
-                        console.log(`[FACE_LOCK] male→slot${maleSlot}(leader) female→slot${femaleSlot}(follower)`);
+                        // ロック時の肩幅を定数として保存（常時クロス照合の基準値）
+                        lockedShoulderWidthRef.current = [
+                          slots[0].profile.shoulderSamples > 0 ? slots[0].profile.totalShoulderWidth / slots[0].profile.shoulderSamples : -1,
+                          slots[1].profile.shoulderSamples > 0 ? slots[1].profile.totalShoulderWidth / slots[1].profile.shoulderSamples : -1,
+                        ];
+                        console.log(`[FACE_LOCK] male→slot${maleSlot}(leader) female→slot${femaleSlot}(follower) lsw=[${lockedShoulderWidthRef.current.map(v=>v.toFixed(3)).join(',')}]`);
                         slots.forEach(slot => {
                           if (slot.detectedIdx >= 0 && slot.role) personRoles.set(slot.detectedIdx, slot.role);
                         });
@@ -2304,7 +2342,12 @@ export function usePoseEstimation(
                           roleDetectedRef.current  = true;
                           setRoleDetected(true);
                           setRoleConfidenceLow(false);
-                          console.log(`[SHR_LOCK] ps0=${ps0.toFixed(3)} ps1=${ps1.toFixed(3)} → slot0=${exp0} slot1=${exp1}`);
+                          // ロック時の肩幅を定数として保存（常時クロス照合の基準値）
+                          lockedShoulderWidthRef.current = [
+                            slots[0].profile.shoulderSamples > 0 ? slots[0].profile.totalShoulderWidth / slots[0].profile.shoulderSamples : -1,
+                            slots[1].profile.shoulderSamples > 0 ? slots[1].profile.totalShoulderWidth / slots[1].profile.shoulderSamples : -1,
+                          ];
+                          console.log(`[SHR_LOCK] ps0=${ps0.toFixed(3)} ps1=${ps1.toFixed(3)} → slot0=${exp0} slot1=${exp1} lsw=[${lockedShoulderWidthRef.current.map(v=>v.toFixed(3)).join(',')}]`);
                           slots.forEach(slot => {
                             if (slot.detectedIdx >= 0 && slot.role) {
                               personRoles.set(slot.detectedIdx, slot.role);

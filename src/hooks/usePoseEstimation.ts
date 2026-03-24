@@ -1608,6 +1608,7 @@ export function usePoseEstimation(
   const slotFaceLastConfRef            = useRef<[number, number]>([-1, -1]);  // スロットごとの最終信頼度
   const slotFaceGenderRef              = useRef<['male'|'female'|null, 'male'|'female'|null]>([null, null]); // face-api 確定性別
   const faceRoiCanvasRef               = useRef<HTMLCanvasElement | null>(null); // ROIスキャン用キャンバス（再利用）
+  const faceRoiPreviewsRef             = useRef<[HTMLCanvasElement | null, HTMLCanvasElement | null]>([null, null]); // ROIデバッグプレビュー（スロットごと）
   const profileCompleteTimeRef         = useRef(0);  // profileComplete が最初に true になった時刻
   const initTimeRef                    = useRef(0);  // init() 開始時刻（face サスペンド起点）
   const lockedShoulderWidthRef         = useRef<[number, number]>([-1, -1]); // ロック時の肩幅定数（常時クロス照合用）
@@ -2107,7 +2108,9 @@ export function usePoseEstimation(
                         faceRoiCanvasRef.current = roiCanvas;
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const roiDets: any[] = [];
+                        let roiSlotIdx = 0;
                         for (const slot of slots) {
+                          const curRoiIdx = roiSlotIdx++;
                           if (!slot.nose) continue;
                           const slotLm = slot.detectedIdx >= 0 ? all[slot.detectedIdx] : null;
                           const roi = computeFaceROI(slot.nose, slotLm, vw, vh, FACE_ROI_EAR_MULT);
@@ -2117,6 +2120,11 @@ export function usePoseEstimation(
                           const rc = roiCanvas.getContext('2d');
                           if (!rc) continue;
                           rc.drawImage(video, roi.sx, roi.sy, roi.sw, roi.sh, 0, 0, roi.sw, roi.sh);
+                          // ROIプレビュー用キャンバスにコピー（RAFループで左下に描画）
+                          let pv = faceRoiPreviewsRef.current[curRoiIdx as 0|1];
+                          if (!pv) { pv = document.createElement('canvas'); faceRoiPreviewsRef.current[curRoiIdx as 0|1] = pv; }
+                          pv.width = roi.sw; pv.height = roi.sh;
+                          pv.getContext('2d')?.drawImage(roiCanvas, 0, 0);
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           const det = await (fa.detectSingleFace(roiCanvas, roiOpts) as any).withAgeAndGender();
                           if (det) {
@@ -2461,7 +2469,9 @@ export function usePoseEstimation(
                   // manualLocked 中: ユーザー判断を最優先（変更しない）
                   // SHR サスペンド: profileComplete 後 FACE_SCAN_SUSPEND_MS 以内は face 優先
                   // face モデルが未ロードの間はタイムアウトまで待機（CDN 遅延・失敗対応）
-                  const faceSuspending = !faceModelsLoadedRef.current
+                  // face が確定するまで（またはタイムアウトまで）SHR を凍結
+                  // 旧: モデル未ロード時のみ待機 → 新: face未確定かつ15s以内は常に凍結
+                  const faceSuspending = !faceLockedRef.current
                     && initTimeRef.current > 0
                     && now - initTimeRef.current < FACE_SCAN_SUSPEND_MS;
                   if (profileCompleteRef.current && !manualRoleLockedRef.current && !faceLockedRef.current && !faceSuspending) {
@@ -2817,6 +2827,27 @@ export function usePoseEstimation(
                       }
                       ctx.fillText(ln, bx2 + 6, by2 + 6 + (idx + 1) * lineH);
                     });
+                    ctx.restore();
+                  }
+
+                  // ── face-api ROIプレビュー（デバッグ: 左下に小さく表示）────────────────
+                  if (faceModelsLoadedRef.current && !faceLockedRef.current) {
+                    const PW = 90; // プレビュー幅 (px)
+                    const PAD = 4;
+                    ctx.save();
+                    let previewY = ch - PAD;
+                    for (let s = 1; s >= 0; s--) {
+                      const pv = faceRoiPreviewsRef.current[s];
+                      if (!pv || pv.width === 0 || pv.height === 0) continue;
+                      const ph = Math.round(pv.height * PW / pv.width);
+                      previewY -= ph;
+                      ctx.drawImage(pv, PAD, previewY, PW, ph);
+                      ctx.strokeStyle = '#ffcc00'; ctx.lineWidth = 1.5;
+                      ctx.strokeRect(PAD, previewY, PW, ph);
+                      ctx.fillStyle = '#ffcc00'; ctx.font = 'bold 9px monospace';
+                      ctx.fillText(`ROI S${s}`, PAD + 2, previewY + ph - 3);
+                      previewY -= PAD;
+                    }
                     ctx.restore();
                   }
 

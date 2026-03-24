@@ -900,6 +900,46 @@ function drawRoleBadge(
   ctx.restore();
 }
 
+// ── Draw: face-api ステータスバッジ ──────────────────────────────────────
+
+function drawFaceStatusBadge(
+  ctx: CanvasRenderingContext2D,
+  landmarks: NormalizedLandmark[],
+  lb: Letterbox,
+  cw: number,
+  mirrored: boolean,
+  faceStatus: 'loading' | 'scanning' | 'locked',
+  lastConf: number,       // -1 = 未取得
+  lastMatchMsAgo: number, // -1 = 一度も見ていない
+  syncOk: boolean | null, // null = 不明
+) {
+  const nose = landmarks[0];
+  if (!nose || (nose.visibility ?? 1) < VIS_THRESHOLD) return;
+  const px = lb.offsetX + nose.x * lb.renderW;
+  const py = lb.offsetY + nose.y * lb.renderH - 56; // LEADER ラベルより上
+
+  const statusColor = faceStatus === 'locked' ? '#00ee88'
+    : faceStatus === 'scanning'               ? '#ffcc00'
+    : '#888888';
+  const confStr = lastConf >= 0 ? ` ${(lastConf * 100).toFixed(0)}%` : '';
+
+  const timeStr = lastMatchMsAgo < 0   ? 'never'
+    : lastMatchMsAgo < 1000 ? `${Math.round(lastMatchMsAgo)}ms ago`
+    : `${(lastMatchMsAgo / 1000).toFixed(1)}s ago`;
+  const syncSuffix = syncOk === true ? ' ✓' : syncOk === false ? ' ✗' : '';
+  const line2Color = syncOk === true ? '#00ee88' : syncOk === false ? '#ff4444' : '#999999';
+
+  ctx.save();
+  ctx.font = '10px monospace';
+  ctx.shadowColor = '#000';
+  ctx.shadowBlur = 3;
+  ctx.fillStyle = statusColor;
+  fillTextMirrorSafe(ctx, `face:${faceStatus.toUpperCase()}${confStr}`, px, py, cw, mirrored);
+  ctx.fillStyle = line2Color;
+  fillTextMirrorSafe(ctx, `${timeStr}${syncSuffix}`, px, py + 13, cw, mirrored);
+  ctx.restore();
+}
+
 // ── パース補正身長 ────────────────────────────────────────────────────────
 /**
  * 足首Y座標を基準に遠近補正した見かけ上の身長を返す。
@@ -1524,6 +1564,9 @@ export function usePoseEstimation(
   const faceVisualizationRef           = useRef<FaceVisualization[]>([]);  // 全検出（可視化用）
   const faceScanningRef                = useRef(false);
   const lastFaceScanRef                = useRef(0);
+  const slotFaceLastMatchTimeRef       = useRef<[number, number]>([-1, -1]);  // スロットごとの最終顔マッチ時刻（performance.now）
+  const slotFaceLastConfRef            = useRef<[number, number]>([-1, -1]);  // スロットごとの最終信頼度
+  const slotFaceGenderRef              = useRef<['male'|'female'|null, 'male'|'female'|null]>([null, null]); // face-api 確定性別
   const profileCompleteTimeRef         = useRef(0);  // profileComplete が最初に true になった時刻
   const initTimeRef                    = useRef(0);  // init() 開始時刻（face サスペンド起点）
   const lockedShoulderWidthRef         = useRef<[number, number]>([-1, -1]); // ロック時の肩幅定数（常時クロス照合用）
@@ -1567,6 +1610,9 @@ export function usePoseEstimation(
     analysisCacheRef.current         = [];
     ellipseMasksRef.current          = [];
     lockedShoulderWidthRef.current   = [-1, -1];
+    slotFaceLastMatchTimeRef.current = [-1, -1];
+    slotFaceLastConfRef.current      = [-1, -1];
+    slotFaceGenderRef.current        = [null, null];
     prevBeatNumRef.current           = undefined;
     syncErrorRef.current     = false;
     setSyncError(false);
@@ -2036,6 +2082,25 @@ export function usePoseEstimation(
                             genderProb: d.genderProbability,
                           }));
                         console.log(`[FACE_SCAN] ${(dets as any[]).length} faces detected, ${faceScanResultsRef.current.length} high-conf`);
+                        // 全検出をスロットに照合してタイムスタンプ・信頼度を記録（ロック前後・信頼度問わず）
+                        const scanNow = performance.now();
+                        (dets as any[]).forEach((d: any) => {
+                          const fcx = (d.detection.box.x + d.detection.box.width  * 0.5) / vw;
+                          const fcy = (d.detection.box.y + d.detection.box.height * 0.5) / vh;
+                          let bestSlot = -1, bestDist = 0.35;
+                          slots.forEach((sl, si) => {
+                            if (!sl.nose) return;
+                            const dist = Math.hypot(fcx - sl.nose.x, fcy - sl.nose.y);
+                            if (dist < bestDist) { bestDist = dist; bestSlot = si; }
+                          });
+                          if (bestSlot >= 0) {
+                            slotFaceLastMatchTimeRef.current[bestSlot] = scanNow;
+                            if (d.genderProbability > (slotFaceLastConfRef.current[bestSlot] ?? 0)) {
+                              slotFaceLastConfRef.current[bestSlot] = d.genderProbability;
+                            }
+                            slotFaceGenderRef.current[bestSlot as 0|1] = d.gender as 'male'|'female';
+                          }
+                        });
                       } finally {
                         faceScanningRef.current = false;
                       }
@@ -2527,6 +2592,14 @@ export function usePoseEstimation(
                     drawStepTrail(ctx, ankleHistoryRef.current, lb, true);
                     for (let i = 0; i < all.length; i++) {
                       drawRoleBadge(ctx, all[i], lb, personRoles.get(i) ?? null, cw, mirrored);
+                      { const _si = slots.findIndex(sl => sl.detectedIdx === i);
+                        drawFaceStatusBadge(ctx, all[i], lb, cw, mirrored,
+                          !faceModelsLoadedRef.current ? 'loading' : faceLockedRef.current ? 'locked' : 'scanning',
+                          _si >= 0 ? slotFaceLastConfRef.current[_si] : -1,
+                          _si >= 0 && slotFaceLastMatchTimeRef.current[_si] >= 0 ? now - slotFaceLastMatchTimeRef.current[_si] : -1,
+                          _si < 0 || !slotFaceGenderRef.current[_si] ? null
+                            : (slotFaceGenderRef.current[_si] === 'male') === (personRoles.get(i) === 'leader'),
+                        ); }
                     }
 
                   } else if (currentMode === 'full') {
@@ -2539,6 +2612,14 @@ export function usePoseEstimation(
                     }
                     for (let i = 0; i < all.length; i++) {
                       drawRoleBadge(ctx, all[i], lb, personRoles.get(i) ?? null, cw, mirrored);
+                      { const _si = slots.findIndex(sl => sl.detectedIdx === i);
+                        drawFaceStatusBadge(ctx, all[i], lb, cw, mirrored,
+                          !faceModelsLoadedRef.current ? 'loading' : faceLockedRef.current ? 'locked' : 'scanning',
+                          _si >= 0 ? slotFaceLastConfRef.current[_si] : -1,
+                          _si >= 0 && slotFaceLastMatchTimeRef.current[_si] >= 0 ? now - slotFaceLastMatchTimeRef.current[_si] : -1,
+                          _si < 0 || !slotFaceGenderRef.current[_si] ? null
+                            : (slotFaceGenderRef.current[_si] === 'male') === (personRoles.get(i) === 'leader'),
+                        ); }
                     }
 
                   } else {
@@ -2552,6 +2633,14 @@ export function usePoseEstimation(
                     }
                     for (let i = 0; i < all.length; i++) {
                       drawRoleBadge(ctx, all[i], lb, personRoles.get(i) ?? null, cw, mirrored);
+                      { const _si = slots.findIndex(sl => sl.detectedIdx === i);
+                        drawFaceStatusBadge(ctx, all[i], lb, cw, mirrored,
+                          !faceModelsLoadedRef.current ? 'loading' : faceLockedRef.current ? 'locked' : 'scanning',
+                          _si >= 0 ? slotFaceLastConfRef.current[_si] : -1,
+                          _si >= 0 && slotFaceLastMatchTimeRef.current[_si] >= 0 ? now - slotFaceLastMatchTimeRef.current[_si] : -1,
+                          _si < 0 || !slotFaceGenderRef.current[_si] ? null
+                            : (slotFaceGenderRef.current[_si] === 'male') === (personRoles.get(i) === 'leader'),
+                        ); }
                     }
                   }
 

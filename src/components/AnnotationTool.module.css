@@ -58,6 +58,8 @@
   font-family: inherit;
 }
 .loadBtn:hover { background: #223a6a; }
+.loadBtnActive { background: #1a3a1a; border-color: #363; color: #44ee88; }
+.loadBtnActive:hover { background: #224a33; }
 
 .exportBtn {
   background: #1a3a2a;

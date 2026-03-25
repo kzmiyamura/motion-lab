@@ -6,6 +6,29 @@ import type {
 import { POSE_CONNECTIONS } from '../types/pose';
 import styles from './AnnotationTool.module.css';
 
+// ── ビデオフレームをキャンバスに描画（seekedイベント待ち）────────────────
+function drawVideoFrame(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  targetTime: number,
+  onDrawn: () => void,
+) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const onSeeked = () => {
+    video.removeEventListener('seeked', onSeeked);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    onDrawn();
+  };
+  if (Math.abs(video.currentTime - targetTime) < 0.01) {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    onDrawn();
+  } else {
+    video.addEventListener('seeked', onSeeked);
+    video.currentTime = targetTime;
+  }
+}
+
 // ── 描画カラー ────────────────────────────────────────────────────────────
 const COLORS = ['#4488ff', '#ff44cc', '#44ffaa', '#ffaa00'] as const;
 
@@ -69,8 +92,24 @@ export function AnnotationTool() {
   const [idx, setIdx]             = useState(0);
   const [overlapModal, setOverlapModal] = useState(false);
 
+  // ── Video overlay ────────────────────────────────────────────────────────
+  const [videoUrl, setVideoUrl]     = useState<string | null>(null);
+  const [videoName, setVideoName]   = useState('');
+  const videoRef        = useRef<HTMLVideoElement>(null);
+  const videoInputRef   = useRef<HTMLInputElement>(null);
+
   // ── Canvas ───────────────────────────────────────────────────────────────
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // ── 動画読み込み ────────────────────────────────────────────────────────
+  const handleVideoLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setVideoUrl(URL.createObjectURL(file));
+    setVideoName(file.name);
+    e.target.value = '';
+  }, [videoUrl]);
 
   // ── ファイル読み込み ────────────────────────────────────────────────────
   const handleFileLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -106,25 +145,31 @@ export function AnnotationTool() {
 
     const cw = canvas.width;
     const ch = canvas.height;
-    ctx.clearRect(0, 0, cw, ch);
 
-    // 背景
-    ctx.fillStyle = '#111';
-    ctx.fillRect(0, 0, cw, ch);
+    const drawOverlays = () => {
+      // 骨格描画
+      frame.poses.forEach((pose, pi) => {
+        drawSkeleton(ctx, pose.landmarks, cw, ch, COLORS[pi % COLORS.length]);
+      });
+      // 現フレームのラベルを左上に表示
+      const lbl = frame.label;
+      if (lbl !== 'skip') {
+        ctx.font = 'bold 14px monospace';
+        ctx.fillStyle = LABEL_COLOR[lbl];
+        ctx.fillText(LABEL_DISPLAY[lbl], 8, 20);
+      }
+    };
 
-    // 骨格描画
-    frame.poses.forEach((pose, pi) => {
-      drawSkeleton(ctx, pose.landmarks, cw, ch, COLORS[pi % COLORS.length]);
-    });
-
-    // 現フレームのラベルを左上に表示
-    const lbl = frame.label;
-    if (lbl !== 'skip') {
-      ctx.font = 'bold 14px monospace';
-      ctx.fillStyle = LABEL_COLOR[lbl];
-      ctx.fillText(LABEL_DISPLAY[lbl], 8, 20);
+    const video = videoRef.current;
+    if (video && videoUrl) {
+      drawVideoFrame(video, canvas, frame.t, drawOverlays);
+    } else {
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, cw, ch);
+      drawOverlays();
     }
-  }, [frames, idx]);
+  }, [frames, idx, videoUrl]);
 
   // ── ラベル付け ──────────────────────────────────────────────────────────
   const applyLabel = useCallback((label: AnnotationLabel) => {
@@ -212,6 +257,20 @@ export function AnnotationTool() {
             <input type="file" accept=".json" onChange={handleFileLoad} hidden />
           </label>
           <button
+            className={`${styles.loadBtn} ${videoUrl ? styles.loadBtnActive : ''}`}
+            onClick={() => videoInputRef.current?.click()}
+            title={videoName || '動画を読み込む'}
+          >
+            {videoUrl ? 'Video ✓' : 'Load Video'}
+          </button>
+          <input
+            ref={videoInputRef}
+            type="file"
+            accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v"
+            onChange={handleVideoLoad}
+            style={{ display: 'none' }}
+          />
+          <button
             className={styles.exportBtn}
             onClick={handleExport}
             disabled={labeled === 0}
@@ -224,6 +283,18 @@ export function AnnotationTool() {
 
       {/* ── ソースファイル名 ── */}
       {fileName && <div className={styles.fileInfo}>📂 {fileName} — {frames.length} frames ({log?.samplingMs}ms)</div>}
+
+      {/* ── 隠し動画要素 ── */}
+      {videoUrl && (
+        <video
+          ref={videoRef}
+          src={videoUrl}
+          style={{ display: 'none' }}
+          preload="auto"
+          playsInline
+          muted
+        />
+      )}
 
       {/* ── キャンバス ── */}
       <div className={styles.canvasWrap}>

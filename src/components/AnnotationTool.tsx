@@ -119,7 +119,8 @@ export function AnnotationTool() {
   const videoInputRef   = useRef<HTMLInputElement>(null);
 
   // ── Canvas ───────────────────────────────────────────────────────────────
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef    = useRef<HTMLCanvasElement>(null);
+  const touchStartX  = useRef<number | null>(null);
 
   // ── 動画読み込み ────────────────────────────────────────────────────────
   const handleVideoLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -206,6 +207,18 @@ export function AnnotationTool() {
   const goTo = useCallback((delta: number) => {
     setIdx(i => Math.max(0, Math.min(i + delta, frames.length - 1)));
   }, [frames.length]);
+
+  // ── スワイプナビ（スマホ用）───────────────────────────────────────────────
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (touchStartX.current === null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    touchStartX.current = null;
+    if (Math.abs(dx) > 48) dx < 0 ? goTo(1) : goTo(-1);
+  }, [goTo]);
 
   // ── キーボード操作 ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -315,8 +328,12 @@ export function AnnotationTool() {
         />
       )}
 
-      {/* ── キャンバス ── */}
-      <div className={styles.canvasWrap}>
+      {/* ── キャンバス（スワイプ: 左=次 右=前）── */}
+      <div
+        className={styles.canvasWrap}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+      >
         <canvas
           ref={canvasRef}
           width={480}
@@ -374,7 +391,7 @@ export function AnnotationTool() {
       {/* ── ナビゲーション ── */}
       <div className={styles.navRow}>
         <button className={styles.navBtn} onClick={() => goTo(-1)} disabled={idx === 0}>← Prev</button>
-        <button className={styles.navBtn} onClick={() => goTo(1)}>Skip →</button>
+        <span className={styles.navCount}>{frames.length > 0 ? `${idx + 1} / ${frames.length}` : '—'}</span>
         <button className={styles.navBtn} onClick={() => goTo(1)} disabled={idx >= frames.length - 1}>Next →</button>
       </div>
 

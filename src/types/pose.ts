@@ -26,12 +26,16 @@ export interface RawPoseLog {
 
 /** アノテーションラベル */
 export type AnnotationLabel =
-  | 'ok'                    // 現判定が正しい
-  | 'swap'                  // スロット0/1が逆転している
-  | 'single'                // 1人のみ（もう1人は画外）
-  | 'overlap_leader_front'  // 重なり：Leaderが手前
-  | 'overlap_follower_front'// 重なり：Followerが手前
-  | 'skip';                 // このフレームはスキップ
+  | 'standard_pos'      // [1] 正常: L(0)/F(1) が正しく離れている
+  | 'swapped_pos'       // [2] 反転: ID逆転 → export時に座標swap→standard_pos変換
+  | 'single_leader'     // [3] 単体(L): リーダーのみ認識
+  | 'single_follower'   // [4] 単体(F): フォロワーのみ認識
+  | 'overlap_L_front'   // [5] 重なり: リーダー手前
+  | 'overlap_F_front'   // [6] 重なり: フォロワー手前
+  | 'side_by_side'      // [7] 横並び: 肩が触れるほど近い
+  | 'complex_turn'      // [8] 回転中: スピン等で手足が交差
+  | 'ignore_trash'      // [0] 破棄: ノイズ・画面外など学習に有害
+  | 'skip';             // 未レビュー（内部状態）
 
 /** アノテーション済みフレーム */
 export interface AnnotatedFrame extends RawPoseFrame {

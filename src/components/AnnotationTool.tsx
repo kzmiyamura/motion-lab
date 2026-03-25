@@ -63,23 +63,44 @@ function drawSkeleton(
   ctx.globalAlpha = 1;
 }
 
-// ── ラベル表示名 ──────────────────────────────────────────────────────────
+// ── ラベル定義 ────────────────────────────────────────────────────────────
 const LABEL_DISPLAY: Record<AnnotationLabel, string> = {
-  ok: 'OK',
-  swap: 'SWAP',
-  single: 'SINGLE',
-  overlap_leader_front: 'OVL:L-front',
-  overlap_follower_front: 'OVL:F-front',
-  skip: 'SKIP',
+  standard_pos:    'STANDARD',
+  swapped_pos:     'SWAPPED',
+  single_leader:   'SINGLE-L',
+  single_follower: 'SINGLE-F',
+  overlap_L_front: 'OVL:L▲',
+  overlap_F_front: 'OVL:F▲',
+  side_by_side:    'SIDE×SIDE',
+  complex_turn:    'TURN',
+  ignore_trash:    'TRASH',
+  skip:            'skip',
 };
 
 const LABEL_COLOR: Record<AnnotationLabel, string> = {
-  ok: '#44ff88',
-  swap: '#ffaa00',
-  single: '#88aaff',
-  overlap_leader_front: '#ff6688',
-  overlap_follower_front: '#ff6688',
-  skip: '#666',
+  standard_pos:    '#44ff88',
+  swapped_pos:     '#ffaa00',
+  single_leader:   '#4488ff',
+  single_follower: '#ff44cc',
+  overlap_L_front: '#ff4466',
+  overlap_F_front: '#ff7744',
+  side_by_side:    '#44ffee',
+  complex_turn:    '#ffee44',
+  ignore_trash:    '#555',
+  skip:            '#333',
+};
+
+// キー→ラベルのマッピング
+const KEY_LABEL: Record<string, AnnotationLabel> = {
+  '1': 'standard_pos',
+  '2': 'swapped_pos',
+  '3': 'single_leader',
+  '4': 'single_follower',
+  '5': 'overlap_L_front',
+  '6': 'overlap_F_front',
+  '7': 'side_by_side',
+  '8': 'complex_turn',
+  '0': 'ignore_trash',
 };
 
 export function AnnotationTool() {
@@ -90,7 +111,6 @@ export function AnnotationTool() {
   const [fileName, setFileName]   = useState('');
   const [frames, setFrames]       = useState<AnnotatedFrame[]>([]);
   const [idx, setIdx]             = useState(0);
-  const [overlapModal, setOverlapModal] = useState(false);
 
   // ── Video overlay ────────────────────────────────────────────────────────
   const [videoUrl, setVideoUrl]     = useState<string | null>(null);
@@ -192,18 +212,10 @@ export function AnnotationTool() {
     const handler = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
 
-      if (overlapModal) {
-        if (e.key === 'l' || e.key === 'L') { applyLabel('overlap_leader_front'); setOverlapModal(false); }
-        if (e.key === 'f' || e.key === 'F') { applyLabel('overlap_follower_front'); setOverlapModal(false); }
-        if (e.key === 'Escape') setOverlapModal(false);
-        return;
-      }
+      const label = KEY_LABEL[e.key];
+      if (label) { applyLabel(label); return; }
 
       switch (e.key) {
-        case '1': applyLabel('ok');     break;
-        case '2': applyLabel('swap');   break;
-        case '3': applyLabel('single'); break;
-        case '4': setOverlapModal(true); break;
         case ' ': case 'ArrowRight': goTo(1);  e.preventDefault(); break;
         case 'ArrowLeft':            goTo(-1); break;
         case 'Backspace':            goTo(-1); break;
@@ -211,19 +223,26 @@ export function AnnotationTool() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [overlapModal, applyLabel, goTo]);
+  }, [applyLabel, goTo]);
 
   // ── エクスポート ─────────────────────────────────────────────────────────
   const handleExport = useCallback(() => {
     if (!log || frames.length === 0) return;
-    const labeled = frames.filter(f => f.label !== 'skip');
+    // swapped_pos → poses を入れ替えて standard_pos に変換
+    const exportFrames = frames.map(f => {
+      if (f.label === 'swapped_pos' && f.poses.length >= 2) {
+        return { ...f, label: 'standard_pos' as AnnotationLabel, poses: [f.poses[1], f.poses[0]] };
+      }
+      return f;
+    });
+    const labeled = exportFrames.filter(f => f.label !== 'skip');
     const output: AnnotatedPoseLog = {
       version: 'salsa_annotated_v1',
       sourceFile: fileName,
       annotatedAt: new Date().toISOString(),
       totalFrames: frames.length,
       labeledFrames: labeled.length,
-      frames,
+      frames: exportFrames,
     };
     const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
@@ -310,28 +329,6 @@ export function AnnotationTool() {
             <p className={styles.placeholderSub}>salsa_raw_v2_*.json</p>
           </div>
         )}
-        {overlapModal && (
-          <div className={styles.overlapModal}>
-            <div className={styles.overlapBox}>
-              <p className={styles.overlapTitle}>Who is in FRONT?</p>
-              <div className={styles.overlapBtns}>
-                <button
-                  className={`${styles.overlapBtn} ${styles.overlapBtnLeader}`}
-                  onClick={() => { applyLabel('overlap_leader_front'); setOverlapModal(false); }}
-                >
-                  L — Leader
-                </button>
-                <button
-                  className={`${styles.overlapBtn} ${styles.overlapBtnFollower}`}
-                  onClick={() => { applyLabel('overlap_follower_front'); setOverlapModal(false); }}
-                >
-                  F — Follower
-                </button>
-              </div>
-              <p className={styles.overlapHint}>Esc でキャンセル</p>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ── フレーム情報 ── */}
@@ -355,24 +352,29 @@ export function AnnotationTool() {
 
       {/* ── アクションボタン ── */}
       <div className={styles.actionRow}>
-        <button className={`${styles.actionBtn} ${styles.ok}`}       onClick={() => applyLabel('ok')}>
-          <span className={styles.key}>1</span> OK
-        </button>
-        <button className={`${styles.actionBtn} ${styles.swap}`}     onClick={() => applyLabel('swap')}>
-          <span className={styles.key}>2</span> SWAP
-        </button>
-        <button className={`${styles.actionBtn} ${styles.single}`}   onClick={() => applyLabel('single')}>
-          <span className={styles.key}>3</span> SINGLE
-        </button>
-        <button className={`${styles.actionBtn} ${styles.overlap}`}  onClick={() => setOverlapModal(true)}>
-          <span className={styles.key}>4</span> OVERLAP
-        </button>
+        {(Object.entries(KEY_LABEL) as [string, AnnotationLabel][])
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, label]) => (
+            <button
+              key={label}
+              className={`${styles.actionBtn} ${styles[`lbl_${label}`]}`}
+              onClick={() => applyLabel(label)}
+              style={{
+                borderColor: LABEL_COLOR[label],
+                color: LABEL_COLOR[label],
+                background: `${LABEL_COLOR[label]}18`,
+              }}
+            >
+              <span className={styles.key}>{key}</span>
+              {LABEL_DISPLAY[label]}
+            </button>
+          ))}
       </div>
 
       {/* ── ナビゲーション ── */}
       <div className={styles.navRow}>
         <button className={styles.navBtn} onClick={() => goTo(-1)} disabled={idx === 0}>← Prev</button>
-        <button className={styles.navBtn} onClick={() => applyLabel('skip')}>Skip →</button>
+        <button className={styles.navBtn} onClick={() => goTo(1)}>Skip →</button>
         <button className={styles.navBtn} onClick={() => goTo(1)} disabled={idx >= frames.length - 1}>Next →</button>
       </div>
 
@@ -392,8 +394,12 @@ export function AnnotationTool() {
 
       {/* ── キーボードヘルプ ── */}
       <div className={styles.keyHelp}>
-        <span>1:OK</span><span>2:SWAP</span><span>3:SINGLE</span><span>4:OVERLAP</span>
-        <span>←→:移動</span><span>Space:次へ</span><span>Esc:キャンセル</span>
+        {(Object.entries(KEY_LABEL) as [string, AnnotationLabel][])
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, lbl]) => (
+            <span key={k} style={{ color: LABEL_COLOR[lbl] }}>{k}:{LABEL_DISPLAY[lbl]}</span>
+          ))}
+        <span>←→/Space:移動</span>
       </div>
     </div>
   );

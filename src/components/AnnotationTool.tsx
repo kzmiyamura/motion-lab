@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import type {
   RawPoseLog, AnnotatedFrame, AnnotatedPoseLog, AnnotationLabel,
 } from '../types/pose';
@@ -104,7 +104,8 @@ const KEY_LABEL: Record<string, AnnotationLabel> = {
 };
 
 export function AnnotationTool() {
-  const navigate = useNavigate();
+  const navigate  = useNavigate();
+  const location  = useLocation();
 
   // ── ファイル・フレーム状態 ───────────────────────────────────────────────
   const [log, setLog]             = useState<RawPoseLog | null>(null);
@@ -154,6 +155,25 @@ export function AnnotationTool() {
     };
     reader.readAsText(file);
     e.target.value = '';
+  }, []);
+
+  // ── FilePlayer からの引き継ぎ（navigation state）─────────────────────────
+  useEffect(() => {
+    const state = location.state as { rawLog?: RawPoseLog; videoUrl?: string; videoName?: string } | null;
+    if (!state?.rawLog) return;
+    const parsed = state.rawLog;
+    if (parsed.version !== 'salsa_raw_v2') return;
+    setLog(parsed);
+    setFileName(parsed.videoName);
+    setFrames(parsed.frames.map(f => ({ ...f, label: 'skip' as AnnotationLabel })));
+    setIdx(0);
+    if (state.videoUrl) {
+      setVideoUrl(state.videoUrl);
+      setVideoName(state.videoName ?? parsed.videoName);
+    }
+    // state を消費してリロード時に再適用されないようにする
+    window.history.replaceState({}, '');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Canvas 描画 ─────────────────────────────────────────────────────────

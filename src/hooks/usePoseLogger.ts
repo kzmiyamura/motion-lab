@@ -9,6 +9,8 @@ export interface UsePoseLoggerResult {
   startRecording: () => void;
   stopRecording: () => void;
   exportJson: (videoName: string) => void;
+  /** 記録済みデータを RawPoseLog として返す（navigate 用） */
+  getLog: (videoName: string) => RawPoseLog | null;
   /** usePoseEstimation の onRawPoses に渡すコールバック */
   onRawPoses: (poses: Array<{ landmarks: RawLandmark[] }>, videoTime: number) => void;
 }
@@ -36,16 +38,22 @@ export function usePoseLogger(): UsePoseLoggerResult {
     setIsRecording(false);
   }, []);
 
-  const exportJson = useCallback((videoName: string) => {
-    const log: RawPoseLog = {
+  const getLog = useCallback((videoName: string): RawPoseLog | null => {
+    if (framesRef.current.length === 0) return null;
+    return {
       version: 'salsa_raw_v2',
       datetime: new Date().toISOString(),
       videoName,
       samplingMs: SAMPLING_MS,
       frames: framesRef.current,
     };
+  }, []);
+
+  const exportJson = useCallback((videoName: string) => {
+    const log = getLog(videoName);
+    if (!log) return;
     const blob = new Blob([JSON.stringify(log, null, 2)], { type: 'application/json' });
-    const url  = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     const ts   = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     a.href     = url;
@@ -72,5 +80,5 @@ export function usePoseLogger(): UsePoseLoggerResult {
     setFrameCount(framesRef.current.length);
   }, []);
 
-  return { isRecording, frameCount, startRecording, stopRecording, exportJson, onRawPoses };
+  return { isRecording, frameCount, startRecording, stopRecording, exportJson, getLog, onRawPoses };
 }

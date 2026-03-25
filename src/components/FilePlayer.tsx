@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { requestDriveToken, revokeDriveToken } from '../engine/googleAuth';
 import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, createPublicPermission, type DriveFile, type UploadStats } from '../engine/googleDrive';
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
@@ -51,6 +52,7 @@ function fmtEta(sec: number): string {
 }
 
 export function FilePlayer({ bpm, onBpmChange }: Props) {
+  const navigate = useNavigate();
   const [subTab, setSubTab] = useState<'local' | 'drive'>('local');
   const [source, setSource] = useState<FileSource | null>(null);
   const [baseBpm, setBaseBpm] = useState<number | null>(null);
@@ -124,7 +126,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const lastDistRef = useRef<number | null>(null);
 
   // ── ポーズロガー
-  const { isRecording, frameCount, startRecording, stopRecording, exportJson, onRawPoses } = usePoseLogger();
+  const { isRecording, frameCount, startRecording, stopRecording, exportJson, getLog, onRawPoses } = usePoseLogger();
 
   const {
     lockAt, unlock, isLocked,
@@ -709,13 +711,30 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               {isRecording ? `■ ${frameCount}f` : '● REC'}
             </button>
             {frameCount > 0 && !isRecording && (
-              <button
-                className={styles.vizModeBtn}
-                onClick={() => exportJson(source.name)}
-                title="salsa_raw_v2_*.json として書き出し"
-              >
-                ⬇ Raw
-              </button>
+              <>
+                <button
+                  className={styles.vizModeBtn}
+                  onClick={() => exportJson(source.name)}
+                  title="salsa_raw_v2_*.json として書き出し"
+                >
+                  ⬇ Raw
+                </button>
+                <button
+                  className={styles.vizModeBtn}
+                  style={{ color: '#bb88ff', borderColor: '#bb88ff' }}
+                  onClick={() => {
+                    const rawLog = getLog(source.name);
+                    if (!rawLog) return;
+                    // FilePlayer のアンマウント前に新しい blob URL を作成して渡す
+                    const videoFile = sourceFileRef.current;
+                    const newVideoUrl = videoFile ? URL.createObjectURL(videoFile) : null;
+                    navigate('/annotate', { state: { rawLog, videoUrl: newVideoUrl, videoName: source.name } });
+                  }}
+                  title="アノテーションツールへ移動（データ・動画を引き継ぎ）"
+                >
+                  → Annotate
+                </button>
+              </>
             )}
           </>
         )}

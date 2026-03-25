@@ -1,0 +1,287 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100dvh;
+  background: #0a0a12;
+  color: #e0e0f0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace, sans-serif;
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+}
+
+/* ── ヘッダー ── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px;
+  background: #111122;
+  border-bottom: 1px solid #2a2a44;
+  flex-wrap: wrap;
+}
+
+.backBtn {
+  background: none;
+  border: 1px solid #334;
+  color: #aab;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.backBtn:hover { background: #1a1a2e; color: #fff; }
+
+.title {
+  font-size: 15px;
+  font-weight: bold;
+  color: #ccd;
+  flex: 1;
+  margin: 0;
+}
+
+.headerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.loadBtn {
+  display: inline-flex;
+  align-items: center;
+  background: #1a2a4a;
+  border: 1px solid #336;
+  color: #88aaff;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+}
+.loadBtn:hover { background: #223a6a; }
+
+.exportBtn {
+  background: #1a3a2a;
+  border: 1px solid #363;
+  color: #44ee88;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+}
+.exportBtn:hover:not(:disabled) { background: #224a33; }
+.exportBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── ファイル情報 ── */
+.fileInfo {
+  font-size: 11px;
+  color: #667;
+  padding: 4px 14px;
+  width: 100%;
+  background: #0d0d1a;
+}
+
+/* ── キャンバス ── */
+.canvasWrap {
+  position: relative;
+  width: min(480px, 100vw);
+  aspect-ratio: 3 / 4;
+  background: #111;
+  margin: 8px 0;
+}
+
+.canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #445;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.placeholderSub {
+  font-size: 11px;
+  color: #333;
+  margin-top: 4px;
+}
+
+/* ── OVERLAP モーダル ── */
+.overlapModal {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.overlapBox {
+  background: #111a2a;
+  border: 2px solid #ff4477;
+  border-radius: 12px;
+  padding: 24px 32px;
+  text-align: center;
+  min-width: 240px;
+}
+
+.overlapTitle {
+  font-size: 16px;
+  font-weight: bold;
+  color: #ff9aaa;
+  margin: 0 0 16px;
+}
+
+.overlapBtns {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.overlapBtn {
+  flex: 1;
+  padding: 12px 8px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: bold;
+  cursor: pointer;
+  font-family: inherit;
+  border: 2px solid transparent;
+}
+
+.overlapBtnLeader {
+  background: #0033aa;
+  color: #88aaff;
+  border-color: #4488ff;
+}
+.overlapBtnLeader:hover { background: #0044dd; }
+
+.overlapBtnFollower {
+  background: #660033;
+  color: #ff88cc;
+  border-color: #ff44cc;
+}
+.overlapBtnFollower:hover { background: #880044; }
+
+.overlapHint {
+  font-size: 10px;
+  color: #556;
+  margin: 12px 0 0;
+}
+
+/* ── フレーム情報 ── */
+.frameInfo {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: #889;
+  padding: 4px 0;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ── プログレスバー ── */
+.progressWrap {
+  width: min(480px, 100vw);
+  height: 4px;
+  background: #1a1a2a;
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+
+.progressBar {
+  height: 100%;
+  background: linear-gradient(90deg, #4488ff, #ff44cc);
+  transition: width 0.1s;
+}
+
+/* ── アクションボタン ── */
+.actionRow {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.actionBtn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: bold;
+  cursor: pointer;
+  font-family: inherit;
+  border: 2px solid transparent;
+  min-width: 70px;
+  transition: filter 0.1s;
+}
+.actionBtn:hover { filter: brightness(1.2); }
+.actionBtn:active { transform: scale(0.97); }
+
+.key {
+  font-size: 10px;
+  opacity: 0.6;
+  font-weight: normal;
+}
+
+.ok       { background: #1a3a1a; color: #44ff88;  border-color: #44ff88; }
+.swap     { background: #3a2a1a; color: #ffaa44;  border-color: #ffaa44; }
+.single   { background: #1a2a3a; color: #88aaff;  border-color: #88aaff; }
+.overlap  { background: #3a1a2a; color: #ff6688;  border-color: #ff6688; }
+
+/* ── ナビゲーション ── */
+.navRow {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0 8px;
+}
+
+.navBtn {
+  background: #1a1a2a;
+  border: 1px solid #334;
+  color: #889;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+}
+.navBtn:hover:not(:disabled) { background: #222238; color: #ccd; }
+.navBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ── 統計 ── */
+.stats {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 4px 0;
+}
+
+.statsSkip { color: #444; }
+
+/* ── キーボードヘルプ ── */
+.keyHelp {
+  display: flex;
+  gap: 10px;
+  font-size: 10px;
+  color: #445;
+  padding: 8px 0 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}

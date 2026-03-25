@@ -1528,6 +1528,7 @@ export function usePoseEstimation(
   isMirrored = false,
   salsaStyle: SalsaStyle = 'on1',
   heightLeaderHint = false,   // true = 背が高い方をリーダーとして重み付け
+  onRawPoses?: (poses: Array<{ landmarks: NormalizedLandmark[] }>, videoTime: number) => void,
 ): UsePoseEstimationResult {
   const modeRef      = useRef<VizMode>(mode);
   modeRef.current    = mode;
@@ -1609,6 +1610,8 @@ export function usePoseEstimation(
   const slotFaceGenderRef              = useRef<['male'|'female'|null, 'male'|'female'|null]>([null, null]); // face-api 確定性別
   const faceRoiCanvasRef               = useRef<HTMLCanvasElement | null>(null); // ROIスキャン用キャンバス（再利用）
   const faceRoiPreviewsRef             = useRef<[HTMLCanvasElement | null, HTMLCanvasElement | null]>([null, null]); // ROIデバッグプレビュー（スロットごと）
+  const onRawPosesRef                  = useRef(onRawPoses);
+  onRawPosesRef.current                = onRawPoses; // レンダーごとに最新を保持（再 effect 不要）
   const profileCompleteTimeRef         = useRef(0);  // profileComplete が最初に true になった時刻
   const initTimeRef                    = useRef(0);  // init() 開始時刻（face サスペンド起点）
   const lockedShoulderWidthRef         = useRef<[number, number]>([-1, -1]); // ロック時の肩幅定数（常時クロス照合用）
@@ -1866,6 +1869,14 @@ export function usePoseEstimation(
                     analysisCacheRef.current.push({ time: video.currentTime, landmarks: all });
                     if (analysisCacheRef.current.length > CACHE_MAX_FRAMES) analysisCacheRef.current.shift();
                   }
+                }
+
+                // ── ロガーへ生ランドマークを渡す（計算処理なし・生座標のみ）
+                if (onRawPosesRef.current && all.length > 0) {
+                  onRawPosesRef.current(
+                    all.map(lm => ({ landmarks: lm })),
+                    video.currentTime,
+                  );
                 }
 
                 ctx.clearRect(0, 0, canvas.width, canvas.height);

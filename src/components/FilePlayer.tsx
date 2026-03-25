@@ -5,6 +5,7 @@ import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/loca
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import { useWakeLock } from '../hooks/useWakeLock';
 import { usePoseEstimation, type VizMode, type SalsaStyle } from '../hooks/usePoseEstimation';
+import { usePoseLogger } from '../hooks/usePoseLogger';
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SequenceView } from './SequenceView';
@@ -122,6 +123,9 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
 
+  // ── ポーズロガー
+  const { isRecording, frameCount, startRecording, stopRecording, exportJson, onRawPoses } = usePoseLogger();
+
   const {
     lockAt, unlock, isLocked,
     sequence, clearSequence,
@@ -132,6 +136,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle, heightLeaderHint,
+    vizMode !== 'off' ? onRawPoses : undefined,  // 骨格ON中のみロギング
   );
 
   // ── BPM 計測（音声モード）
@@ -692,6 +697,29 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             ⬇ Log
           </button>
         )}
+        {/* ── ポーズロガー Rec / Export ── */}
+        {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (
+          <>
+            <button
+              className={styles.vizModeBtn}
+              style={{ color: isRecording ? '#ff4444' : undefined, fontWeight: isRecording ? 'bold' : undefined }}
+              onClick={() => isRecording ? stopRecording() : startRecording()}
+              title={isRecording ? `録画中 ${frameCount}f — クリックで停止` : 'ポーズデータ録画開始'}
+            >
+              {isRecording ? `■ ${frameCount}f` : '● REC'}
+            </button>
+            {frameCount > 0 && !isRecording && (
+              <button
+                className={styles.vizModeBtn}
+                onClick={() => exportJson(source.name)}
+                title="salsa_raw_v2_*.json として書き出し"
+              >
+                ⬇ Raw
+              </button>
+            )}
+          </>
+        )}
+
         {source.isVideo && fileViewMode === 'video' && (
           <div className={styles.vizModeGroup} role="group" aria-label="骨格表示モード">
             {(['off', 'full', 'salsa', 'trail'] as const).map(m => (

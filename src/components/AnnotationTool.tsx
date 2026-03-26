@@ -43,15 +43,15 @@ function drawSkeleton(
 
 // ── ラベル定義 ────────────────────────────────────────────────────────────
 const LABEL_DISPLAY: Record<AnnotationLabel, string> = {
-  standard_pos:    'STANDARD',
-  swapped_pos:     'SWAPPED',
-  single_leader:   'SINGLE-L',
-  single_follower: 'SINGLE-F',
-  overlap_L_front: 'OVL:L▲',
-  overlap_F_front: 'OVL:F▲',
-  side_by_side:    'SIDE×SIDE',
-  complex_turn:    'TURN',
-  ignore_trash:    'TRASH',
+  standard_pos:    '正常',
+  swapped_pos:     'ID反転',
+  single_leader:   'L単体',
+  single_follower: 'F単体',
+  overlap_L_front: 'L手前',
+  overlap_F_front: 'F手前',
+  side_by_side:    '横並び',
+  complex_turn:    '回転中',
+  ignore_trash:    '破棄',
   skip:            'skip',
 };
 

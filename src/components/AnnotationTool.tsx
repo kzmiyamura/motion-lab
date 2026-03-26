@@ -385,96 +385,96 @@ export function AnnotationTool() {
         />
       )}
 
-      {/* ── キャンバス（スワイプ: 左=次 右=前）── */}
-      <div
-        className={styles.canvasWrap}
-        style={{ aspectRatio: `${canvasDims.w} / ${canvasDims.h}` }}
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-      >
-        <canvas
-          ref={canvasRef}
-          width={canvasDims.w}
-          height={canvasDims.h}
-          className={styles.canvas}
-        />
-        {!log && (
-          <div className={styles.placeholder}>
-            <p>JSON を読み込んでください</p>
-            <p className={styles.placeholderSub}>salsa_raw_v2_*.json</p>
-          </div>
-        )}
-      </div>
-
-      {/* ── フレーム情報 ── */}
-      {currentFrame && (
-        <div className={styles.frameInfo}>
-          <span>Frame {idx + 1} / {frames.length}</span>
-          <span>t = {currentFrame.t.toFixed(2)}s</span>
-          <span>{currentFrame.poses.length} pose{currentFrame.poses.length !== 1 ? 's' : ''}</span>
-          {currentFrame.label !== 'skip' && (
-            <span style={{ color: LABEL_COLOR[currentFrame.label] }}>
-              {LABEL_DISPLAY[currentFrame.label]}
-            </span>
+      {/* ── キャンバスエリア（flex:1 で残り全高を使う）── */}
+      <div className={styles.canvasArea}>
+        <div
+          className={styles.canvasWrap}
+          style={{ aspectRatio: `${canvasDims.w} / ${canvasDims.h}` }}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
+          <canvas
+            ref={canvasRef}
+            width={canvasDims.w}
+            height={canvasDims.h}
+            className={styles.canvas}
+          />
+          {!log && (
+            <div className={styles.placeholder}>
+              <p>JSON を読み込んでください</p>
+              <p className={styles.placeholderSub}>salsa_raw_v2_*.json</p>
+            </div>
+          )}
+          {/* フレーム情報オーバーレイ */}
+          {currentFrame && (
+            <div className={styles.frameOverlay}>
+              <span>{idx + 1}/{frames.length}</span>
+              <span>t={currentFrame.t.toFixed(2)}s</span>
+              {currentFrame.label !== 'skip' && (
+                <span style={{ color: LABEL_COLOR[currentFrame.label] }}>
+                  {LABEL_DISPLAY[currentFrame.label]}
+                </span>
+              )}
+            </div>
           )}
         </div>
-      )}
-
-      {/* ── プログレスバー ── */}
-      <div className={styles.progressWrap}>
-        <div className={styles.progressBar} style={{ width: `${progress}%` }} />
       </div>
 
-      {/* ── アクションボタン ── */}
-      <div className={styles.actionRow}>
-        {(Object.entries(KEY_LABEL) as [string, AnnotationLabel][])
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([key, label]) => (
-            <button
-              key={label}
-              className={`${styles.actionBtn} ${styles[`lbl_${label}`]}`}
-              onClick={() => applyLabel(label)}
-              style={{
-                borderColor: LABEL_COLOR[label],
-                color: LABEL_COLOR[label],
-                background: `${LABEL_COLOR[label]}18`,
-              }}
-            >
-              <span className={styles.key}>{key}</span>
-              {LABEL_DISPLAY[label]}
-            </button>
-          ))}
-      </div>
-
-      {/* ── ナビゲーション ── */}
-      <div className={styles.navRow}>
-        <button className={styles.navBtn} onClick={() => goTo(-1)} disabled={idx === 0}>← Prev</button>
-        <span className={styles.navCount}>{frames.length > 0 ? `${idx + 1} / ${frames.length}` : '—'}</span>
-        <button className={styles.navBtn} onClick={() => goTo(1)} disabled={idx >= frames.length - 1}>Next →</button>
-      </div>
-
-      {/* ── 統計 ── */}
-      {frames.length > 0 && (
-        <div className={styles.stats}>
-          {(Object.keys(LABEL_DISPLAY) as AnnotationLabel[])
-            .filter(k => k !== 'skip' && (stats[k] ?? 0) > 0)
-            .map(k => (
-              <span key={k} style={{ color: LABEL_COLOR[k] }}>
-                {LABEL_DISPLAY[k]}: {stats[k] ?? 0}
-              </span>
-            ))}
-          <span className={styles.statsSkip}>skip: {stats['skip'] ?? frames.length}</span>
+      {/* ── コントロール（画面下部に固定）── */}
+      <div className={styles.controls}>
+        {/* プログレスバー */}
+        <div className={styles.progressWrap}>
+          <div className={styles.progressBar} style={{ width: `${progress}%` }} />
         </div>
-      )}
 
-      {/* ── キーボードヘルプ ── */}
-      <div className={styles.keyHelp}>
-        {(Object.entries(KEY_LABEL) as [string, AnnotationLabel][])
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([k, lbl]) => (
-            <span key={k} style={{ color: LABEL_COLOR[lbl] }}>{k}:{LABEL_DISPLAY[lbl]}</span>
-          ))}
-        <span>←→/Space:移動</span>
+        {/* アクションボタン */}
+        <div className={styles.actionRow}>
+          {(Object.entries(KEY_LABEL) as [string, AnnotationLabel][])
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, label]) => (
+              <button
+                key={label}
+                className={styles.actionBtn}
+                onClick={() => applyLabel(label)}
+                style={{
+                  borderColor: LABEL_COLOR[label],
+                  color: LABEL_COLOR[label],
+                  background: `${LABEL_COLOR[label]}18`,
+                }}
+              >
+                <span className={styles.key}>{key}</span>
+                {LABEL_DISPLAY[label]}
+              </button>
+            ))}
+        </div>
+
+        {/* ナビゲーション + 統計 */}
+        <div className={styles.navRow}>
+          <button className={styles.navBtn} onClick={() => goTo(-1)} disabled={idx === 0}>← Prev</button>
+          <span className={styles.navCount}>
+            {frames.length > 0 ? `${idx + 1}/${frames.length}` : '—'}
+            {frames.length > 0 && (
+              <span className={styles.navStats}>
+                {(Object.keys(LABEL_DISPLAY) as AnnotationLabel[])
+                  .filter(k => k !== 'skip' && (stats[k] ?? 0) > 0)
+                  .map(k => (
+                    <span key={k} style={{ color: LABEL_COLOR[k] }}> {LABEL_DISPLAY[k]}:{stats[k]}</span>
+                  ))}
+              </span>
+            )}
+          </span>
+          <button className={styles.navBtn} onClick={() => goTo(1)} disabled={idx >= frames.length - 1}>Next →</button>
+        </div>
+
+        {/* キーボードヘルプ（PCのみ）*/}
+        <div className={styles.keyHelp}>
+          {(Object.entries(KEY_LABEL) as [string, AnnotationLabel][])
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([k, lbl]) => (
+              <span key={k} style={{ color: LABEL_COLOR[lbl] }}>{k}:{LABEL_DISPLAY[lbl]}</span>
+            ))}
+          <span>←→/Space:移動</span>
+        </div>
       </div>
     </div>
   );

@@ -6,7 +6,7 @@ const SAMPLING_MS = 100; // 10fps サンプリング
 export interface UsePoseLoggerResult {
   isRecording: boolean;
   frameCount: number;
-  startRecording: () => void;
+  startRecording: (videoWidth?: number, videoHeight?: number) => void;
   stopRecording: () => void;
   exportJson: (videoName: string) => void;
   /** 記録済みデータを RawPoseLog として返す（navigate 用） */
@@ -23,12 +23,16 @@ export function usePoseLogger(): UsePoseLoggerResult {
   const framesRef      = useRef<RawPoseFrame[]>([]);
   const lastSampleRef  = useRef(-Infinity);
   const frameIdxRef    = useRef(0);
+  const videoDimsRef   = useRef<{ w: number; h: number } | null>(null);
 
-  const startRecording = useCallback(() => {
+  const startRecording = useCallback((videoWidth?: number, videoHeight?: number) => {
     framesRef.current    = [];
     lastSampleRef.current = -Infinity;
     frameIdxRef.current  = 0;
     recordingRef.current = true;
+    videoDimsRef.current = (videoWidth && videoHeight)
+      ? { w: videoWidth, h: videoHeight }
+      : null;
     setIsRecording(true);
     setFrameCount(0);
   }, []);
@@ -45,6 +49,9 @@ export function usePoseLogger(): UsePoseLoggerResult {
       datetime: new Date().toISOString(),
       videoName,
       samplingMs: SAMPLING_MS,
+      ...(videoDimsRef.current
+        ? { videoWidth: videoDimsRef.current.w, videoHeight: videoDimsRef.current.h }
+        : {}),
       frames: framesRef.current,
     };
   }, []);
@@ -60,7 +67,7 @@ export function usePoseLogger(): UsePoseLoggerResult {
     a.download = `salsa_raw_v2_${ts}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, []);
+  }, [getLog]);
 
   const onRawPoses = useCallback((
     poses: Array<{ landmarks: RawLandmark[] }>,
@@ -72,7 +79,7 @@ export function usePoseLogger(): UsePoseLoggerResult {
     lastSampleRef.current = now;
 
     const frame: RawPoseFrame = {
-      t: Math.round(videoTime * 1000) / 1000, // ms 精度で切り捨て
+      t: Math.round(videoTime * 1000) / 1000,
       frameIdx: frameIdxRef.current++,
       poses,
     };

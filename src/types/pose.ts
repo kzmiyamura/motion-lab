@@ -21,6 +21,8 @@ export interface RawPoseLog {
   datetime: string;
   videoName: string;
   samplingMs: number;
+  videoWidth?: number;   // 録画元動画の解像度（アノテーション側のアスペクト比補正用）
+  videoHeight?: number;
   frames: RawPoseFrame[];
 }
 

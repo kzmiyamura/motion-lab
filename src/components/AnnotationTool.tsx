@@ -103,8 +103,9 @@ export function AnnotationTool() {
   // ── Canvas ───────────────────────────────────────────────────────────────
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const touchStartX  = useRef<number | null>(null);
-  // 前のシークをキャンセルするためのクリーンアップ関数
   const seekCleanup  = useRef<(() => void) | null>(null);
+  // 動画のネイティブ解像度（アスペクト比補正用）
+  const [canvasDims, setCanvasDims] = useState<{ w: number; h: number }>({ w: 480, h: 640 });
 
   // ── 動画読み込み ────────────────────────────────────────────────────────
   const handleVideoLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -116,11 +117,24 @@ export function AnnotationTool() {
     e.target.value = '';
   }, [videoUrl]);
 
+  // ── ログ適用ヘルパー ────────────────────────────────────────────────────
+  const applyLog = useCallback((parsed: RawPoseLog) => {
+    setLog(parsed);
+    setFileName(parsed.videoName);
+    setFrames(parsed.frames.map(f => ({ ...f, label: 'skip' as AnnotationLabel })));
+    setIdx(0);
+    // videoWidth/videoHeight が記録されていればキャンバスサイズを合わせる
+    if (parsed.videoWidth && parsed.videoHeight) {
+      const W = 480;
+      const H = Math.round(W * parsed.videoHeight / parsed.videoWidth);
+      setCanvasDims({ w: W, h: H });
+    }
+  }, []);
+
   // ── ファイル読み込み ────────────────────────────────────────────────────
   const handleFileLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setFileName(file.name);
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -129,16 +143,14 @@ export function AnnotationTool() {
           alert('salsa_raw_v2 形式のファイルを選択してください');
           return;
         }
-        setLog(parsed);
-        setFrames(parsed.frames.map(f => ({ ...f, label: 'skip' as AnnotationLabel })));
-        setIdx(0);
+        applyLog(parsed);
       } catch {
         alert('JSONの解析に失敗しました');
       }
     };
     reader.readAsText(file);
     e.target.value = '';
-  }, []);
+  }, [applyLog]);
 
   // ── FilePlayer からの引き継ぎ（navigation state）─────────────────────────
   useEffect(() => {
@@ -146,15 +158,11 @@ export function AnnotationTool() {
     if (!state?.rawLog) return;
     const parsed = state.rawLog;
     if (parsed.version !== 'salsa_raw_v2') return;
-    setLog(parsed);
-    setFileName(parsed.videoName);
-    setFrames(parsed.frames.map(f => ({ ...f, label: 'skip' as AnnotationLabel })));
-    setIdx(0);
+    applyLog(parsed);
     if (state.videoUrl) {
       setVideoUrl(state.videoUrl);
       setVideoName(state.videoName ?? parsed.videoName);
     }
-    // state を消費してリロード時に再適用されないようにする
     window.history.replaceState({}, '');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -380,13 +388,14 @@ export function AnnotationTool() {
       {/* ── キャンバス（スワイプ: 左=次 右=前）── */}
       <div
         className={styles.canvasWrap}
+        style={{ aspectRatio: `${canvasDims.w} / ${canvasDims.h}` }}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
         <canvas
           ref={canvasRef}
-          width={480}
-          height={640}
+          width={canvasDims.w}
+          height={canvasDims.h}
           className={styles.canvas}
         />
         {!log && (

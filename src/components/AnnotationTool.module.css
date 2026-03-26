@@ -101,7 +101,7 @@
 .canvasWrap {
   position: relative;
   width: min(480px, 100vw);
-  aspect-ratio: 3 / 4;
+  aspect-ratio: 3 / 4; /* fallback: JSON に解像度情報がない場合 */
   background: #111;
   margin: 6px 0;
   touch-action: pan-y;

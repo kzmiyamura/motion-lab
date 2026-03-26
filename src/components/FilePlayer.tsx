@@ -705,7 +705,10 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             <button
               className={styles.vizModeBtn}
               style={{ color: isRecording ? '#ff4444' : undefined, fontWeight: isRecording ? 'bold' : undefined }}
-              onClick={() => isRecording ? stopRecording() : startRecording()}
+              onClick={() => isRecording ? stopRecording() : startRecording(
+                mediaRef.current?.videoWidth,
+                mediaRef.current?.videoHeight,
+              )}
               title={isRecording ? `録画中 ${frameCount}f — クリックで停止` : 'ポーズデータ録画開始'}
             >
               {isRecording ? `■ ${frameCount}f` : '● REC'}

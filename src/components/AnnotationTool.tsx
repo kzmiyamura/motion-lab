@@ -334,7 +334,17 @@ export function AnnotationTool() {
     <div className={styles.root}>
       {/* ── ヘッダー ── */}
       <header className={styles.header}>
-        <button className={styles.backBtn} onClick={() => navigate('/')}>← Back</button>
+        <button
+          className={styles.backBtn}
+          onClick={() => {
+            if (labeled === 0) { navigate('/'); return; }
+            const choice = window.confirm(
+              `ラベル済み ${labeled} フレームがあります。\n\nOK → エクスポートしてから戻る\nキャンセル → 保存せずに戻る`
+            );
+            if (choice) { handleExport(); }
+            navigate('/');
+          }}
+        >← Back</button>
         <h1 className={styles.title}>Salsa Pose Annotator</h1>
         <div className={styles.headerActions}>
           <label className={styles.loadBtn}>

@@ -32,7 +32,8 @@ export type AnnotationLabel =
   | 'single_follower'   // [4] 単体(F): フォロワーのみ認識
   | 'overlap_L_front'   // [5] 重なり: リーダー手前
   | 'overlap_F_front'   // [6] 重なり: フォロワー手前
-  | 'side_by_side'      // [7] 横並び: 肩が触れるほど近い
+  | 'side_L_right'      // [7] 横並び: L右・F左
+  | 'side_L_left'       // [9] 横並び: L左・F右
   | 'complex_turn'      // [8] 回転中: スピン等で手足が交差
   | 'ignore_trash'      // [0] 破棄: ノイズ・画面外など学習に有害
   | 'skip';             // 未レビュー（内部状態）

@@ -85,6 +85,8 @@
 .exportBtn:hover:not(:disabled) { background: #224a33; }
 .exportBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.fileInfoDrive { color: #44aaff; margin-left: 4px; }
+
 /* ── ファイル情報 ── */
 .fileInfo {
   font-size: 10px;

@@ -4,7 +4,12 @@ import type {
   RawPoseLog, AnnotatedFrame, AnnotatedPoseLog, AnnotationLabel,
 } from '../types/pose';
 import { POSE_CONNECTIONS } from '../types/pose';
+import { requestDriveWriteToken } from '../engine/googleAuth';
+import { findOrCreateFolder, uploadJsonFile, DriveApiError } from '../engine/googleDrive';
 import styles from './AnnotationTool.module.css';
+
+const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
+const DRIVE_FOLDER = 'salsa_annotations';
 
 
 // ── 描画カラー ────────────────────────────────────────────────────────────
@@ -93,6 +98,20 @@ export function AnnotationTool() {
   const [fileName, setFileName]   = useState('');
   const [frames, setFrames]       = useState<AnnotatedFrame[]>([]);
   const [idx, setIdx]             = useState(0);
+
+  // ── Google Drive ────────────────────────────────────────────────────────
+  const [driveToken,    setDriveToken]    = useState<string | null>(null);
+  const [uploadStatus,  setUploadStatus]  = useState<'idle'|'uploading'|'done'|'error'>('idle');
+
+  const connectDrive = useCallback(async () => {
+    if (!CLIENT_ID) { alert('VITE_GOOGLE_CLIENT_ID が未設定です'); return; }
+    try {
+      const token = await requestDriveWriteToken(CLIENT_ID);
+      setDriveToken(token);
+    } catch {
+      alert('Google Drive の接続に失敗しました');
+    }
+  }, []);
 
   // ── Video overlay ────────────────────────────────────────────────────────
   const [videoUrl, setVideoUrl]     = useState<string | null>(null);
@@ -292,7 +311,7 @@ export function AnnotationTool() {
   }, [applyLabel, goTo]);
 
   // ── エクスポート ─────────────────────────────────────────────────────────
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
     if (!log || frames.length === 0) return;
     // swapped_pos → poses を入れ替えて standard_pos に変換
     const exportFrames = frames.map(f => {
@@ -310,15 +329,33 @@ export function AnnotationTool() {
       labeledFrames: labeled.length,
       frames: exportFrames,
     };
-    const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
+    const json = JSON.stringify(output, null, 2);
+    const ts   = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `salsa_annotated_v1_${ts}.json`;
+
+    // ローカルダウンロード
+    const blob = new Blob([json], { type: 'application/json' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
-    const ts   = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     a.href     = url;
-    a.download = `salsa_annotated_v1_${ts}.json`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
-  }, [log, frames, fileName]);
+
+    // Drive アップロード（連携済みの場合）
+    if (driveToken) {
+      setUploadStatus('uploading');
+      try {
+        const folderId = await findOrCreateFolder(driveToken, DRIVE_FOLDER);
+        await uploadJsonFile(driveToken, folderId, filename, json);
+        setUploadStatus('done');
+        setTimeout(() => setUploadStatus('idle'), 3000);
+      } catch (e) {
+        setUploadStatus('error');
+        if (e instanceof DriveApiError && e.status === 401) setDriveToken(null);
+      }
+    }
+  }, [log, frames, fileName, driveToken]);
 
   // ── 統計 ────────────────────────────────────────────────────────────────
   const stats = frames.reduce((acc, f) => {
@@ -336,12 +373,12 @@ export function AnnotationTool() {
       <header className={styles.header}>
         <button
           className={styles.backBtn}
-          onClick={() => {
+          onClick={async () => {
             if (labeled === 0) { navigate('/'); return; }
             const choice = window.confirm(
               `ラベル済み ${labeled} フレームがあります。\n\nOK → エクスポートしてから戻る\nキャンセル → 保存せずに戻る`
             );
-            if (choice) { handleExport(); }
+            if (choice) { await handleExport(); }
             navigate('/');
           }}
         >← Back</button>
@@ -365,19 +402,36 @@ export function AnnotationTool() {
             onChange={handleVideoLoad}
             style={{ display: 'none' }}
           />
+          {CLIENT_ID && (
+            <button
+              className={`${styles.loadBtn} ${driveToken ? styles.loadBtnActive : ''}`}
+              onClick={connectDrive}
+              title={driveToken ? `Drive 連携済み — ${DRIVE_FOLDER}/` : 'Google Drive に接続してエクスポートを自動保存'}
+            >
+              {driveToken ? 'Drive ✓' : 'Drive'}
+            </button>
+          )}
           <button
             className={styles.exportBtn}
             onClick={handleExport}
             disabled={labeled === 0}
-            title={`${labeled} フレームをエクスポート`}
+            title={`${labeled} フレームをエクスポート${driveToken ? ' + Drive へアップロード' : ''}`}
           >
-            Export ({labeled})
+            {uploadStatus === 'uploading' ? '↑ Drive...' :
+             uploadStatus === 'done'      ? '✓ Done'    :
+             uploadStatus === 'error'     ? '✗ Error'   :
+             `Export (${labeled})`}
           </button>
         </div>
       </header>
 
       {/* ── ソースファイル名 ── */}
-      {fileName && <div className={styles.fileInfo}>📂 {fileName} — {frames.length} frames ({log?.samplingMs}ms)</div>}
+      {fileName && (
+        <div className={styles.fileInfo}>
+          📂 {fileName} — {frames.length} frames ({log?.samplingMs}ms)
+          {driveToken && <span className={styles.fileInfoDrive}> ☁ Drive: {DRIVE_FOLDER}/</span>}
+        </div>
+      )}
 
       {/* ── 隠し動画要素 ── */}
       {videoUrl && (

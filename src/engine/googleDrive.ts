@@ -227,3 +227,43 @@ export async function uploadFileResumable(
     xhr.send(file);
   });
 }
+
+/**
+ * 小さい JSON ファイルを multipart アップロード（アノテーションデータ用）
+ * @returns 作成されたファイルの Drive ID
+ */
+export async function uploadJsonFile(
+  token: string,
+  folderId: string,
+  filename: string,
+  content: string,
+): Promise<string> {
+  const boundary = 'salsa_boundary_' + Math.random().toString(36).slice(2);
+  const metadata = JSON.stringify({ name: filename, parents: [folderId] });
+  const body = [
+    `--${boundary}`,
+    'Content-Type: application/json; charset=UTF-8',
+    '',
+    metadata,
+    `--${boundary}`,
+    'Content-Type: application/json',
+    '',
+    content,
+    `--${boundary}--`,
+  ].join('\r\n');
+
+  const res = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/related; boundary="${boundary}"`,
+      },
+      body,
+    },
+  );
+  if (!res.ok) throw new DriveApiError(`Upload failed: HTTP ${res.status}`, res.status);
+  const data = await res.json() as { id: string };
+  return data.id;
+}

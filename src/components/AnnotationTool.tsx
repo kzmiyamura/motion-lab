@@ -6,28 +6,6 @@ import type {
 import { POSE_CONNECTIONS } from '../types/pose';
 import styles from './AnnotationTool.module.css';
 
-// ── ビデオフレームをキャンバスに描画（seekedイベント待ち）────────────────
-function drawVideoFrame(
-  video: HTMLVideoElement,
-  canvas: HTMLCanvasElement,
-  targetTime: number,
-  onDrawn: () => void,
-) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  const onSeeked = () => {
-    video.removeEventListener('seeked', onSeeked);
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    onDrawn();
-  };
-  if (Math.abs(video.currentTime - targetTime) < 0.01) {
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    onDrawn();
-  } else {
-    video.addEventListener('seeked', onSeeked);
-    video.currentTime = targetTime;
-  }
-}
 
 // ── 描画カラー ────────────────────────────────────────────────────────────
 const COLORS = ['#4488ff', '#ff44cc', '#44ffaa', '#ffaa00'] as const;
@@ -122,6 +100,8 @@ export function AnnotationTool() {
   // ── Canvas ───────────────────────────────────────────────────────────────
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const touchStartX  = useRef<number | null>(null);
+  // 前のシークをキャンセルするためのクリーンアップ関数
+  const seekCleanup  = useRef<(() => void) | null>(null);
 
   // ── 動画読み込み ────────────────────────────────────────────────────────
   const handleVideoLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -176,23 +156,23 @@ export function AnnotationTool() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Canvas 描画 ─────────────────────────────────────────────────────────
+  // ── Canvas 描画（骨格 + 動画シーク）────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || frames.length === 0) return;
     const frame = frames[idx];
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    const cw = canvas.width, ch = canvas.height;
 
-    const cw = canvas.width;
-    const ch = canvas.height;
+    // 前のシークリスナーをキャンセル
+    seekCleanup.current?.();
+    seekCleanup.current = null;
 
     const drawOverlays = () => {
-      // 骨格描画
       frame.poses.forEach((pose, pi) => {
         drawSkeleton(ctx, pose.landmarks, cw, ch, COLORS[pi % COLORS.length]);
       });
-      // 現フレームのラベルを左上に表示
       const lbl = frame.label;
       if (lbl !== 'skip') {
         ctx.font = 'bold 14px monospace';
@@ -203,14 +183,56 @@ export function AnnotationTool() {
 
     const video = videoRef.current;
     if (video && videoUrl) {
-      drawVideoFrame(video, canvas, frame.t, drawOverlays);
+      let cancelled = false;
+
+      const paint = () => {
+        if (cancelled) return;
+        ctx.drawImage(video, 0, 0, cw, ch);
+        drawOverlays();
+      };
+
+      const onSeeked = () => {
+        video.removeEventListener('seeked', onSeeked);
+        paint();
+      };
+
+      seekCleanup.current = () => {
+        cancelled = true;
+        video.removeEventListener('seeked', onSeeked);
+      };
+
+      // 動画がメタデータを読み込んでいない場合はロード待ち
+      if (video.readyState === 0) {
+        const onLoaded = () => {
+          video.removeEventListener('loadedmetadata', onLoaded);
+          if (cancelled) return;
+          video.addEventListener('seeked', onSeeked);
+          video.currentTime = frame.t;
+        };
+        video.addEventListener('loadedmetadata', onLoaded);
+        seekCleanup.current = () => {
+          cancelled = true;
+          video.removeEventListener('loadedmetadata', onLoaded);
+          video.removeEventListener('seeked', onSeeked);
+        };
+      } else if (Math.abs(video.currentTime - frame.t) < 0.016) {
+        // すでに正しい位置にいる（1フレーム以内）
+        paint();
+      } else {
+        video.addEventListener('seeked', onSeeked);
+        video.currentTime = frame.t;
+      }
     } else {
-      ctx.clearRect(0, 0, cw, ch);
       ctx.fillStyle = '#111';
       ctx.fillRect(0, 0, cw, ch);
       drawOverlays();
     }
-  }, [frames, idx, videoUrl]);
+
+    return () => {
+      seekCleanup.current?.();
+      seekCleanup.current = null;
+    };
+  }, [idx, videoUrl, frames]);
 
   // ── ラベル付け ──────────────────────────────────────────────────────────
   const applyLabel = useCallback((label: AnnotationLabel) => {
@@ -345,6 +367,10 @@ export function AnnotationTool() {
           preload="auto"
           playsInline
           muted
+          onLoadedMetadata={() => {
+            // メタデータロード完了 → 現在の idx で描画を再トリガー
+            setIdx(i => i);
+          }}
         />
       )}
 

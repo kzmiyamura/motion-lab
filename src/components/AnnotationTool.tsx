@@ -136,6 +136,13 @@ export function AnnotationTool() {
     e.target.value = '';
   }, [videoUrl]);
 
+  // videoUrl 変更時に iOS でも確実にロードを開始させる
+  useEffect(() => {
+    if (videoRef.current && videoUrl) {
+      videoRef.current.load();
+    }
+  }, [videoUrl]);
+
   // ── ログ適用ヘルパー ────────────────────────────────────────────────────
   const applyLog = useCallback((parsed: RawPoseLog) => {
     setLog(parsed);
@@ -221,13 +228,25 @@ export function AnnotationTool() {
         drawOverlays();
       };
 
+      let seekTimer: ReturnType<typeof setTimeout> | null = null;
+
       const onSeeked = () => {
+        if (seekTimer !== null) clearTimeout(seekTimer);
         video.removeEventListener('seeked', onSeeked);
         paint();
       };
 
+      // iOS では seeked が発火しないことがあるため 2 秒後に強制描画
+      const scheduleFallback = () => {
+        seekTimer = setTimeout(() => {
+          video.removeEventListener('seeked', onSeeked);
+          paint();
+        }, 2000);
+      };
+
       seekCleanup.current = () => {
         cancelled = true;
+        if (seekTimer !== null) clearTimeout(seekTimer);
         video.removeEventListener('seeked', onSeeked);
       };
 
@@ -237,11 +256,13 @@ export function AnnotationTool() {
           video.removeEventListener('loadedmetadata', onLoaded);
           if (cancelled) return;
           video.addEventListener('seeked', onSeeked);
+          scheduleFallback();
           video.currentTime = frame.t;
         };
         video.addEventListener('loadedmetadata', onLoaded);
         seekCleanup.current = () => {
           cancelled = true;
+          if (seekTimer !== null) clearTimeout(seekTimer);
           video.removeEventListener('loadedmetadata', onLoaded);
           video.removeEventListener('seeked', onSeeked);
         };
@@ -250,6 +271,7 @@ export function AnnotationTool() {
         paint();
       } else {
         video.addEventListener('seeked', onSeeked);
+        scheduleFallback();
         video.currentTime = frame.t;
       }
     } else {
@@ -433,12 +455,20 @@ export function AnnotationTool() {
         </div>
       )}
 
-      {/* ── 隠し動画要素 ── */}
+      {/* ── 隠し動画要素（display:none は iOS で preload が効かないため visually-hidden にする）── */}
       {videoUrl && (
         <video
           ref={videoRef}
           src={videoUrl}
-          style={{ display: 'none' }}
+          style={{
+            position: 'absolute',
+            width: '1px',
+            height: '1px',
+            opacity: 0,
+            pointerEvents: 'none',
+            top: 0,
+            left: 0,
+          }}
           preload="auto"
           playsInline
           muted

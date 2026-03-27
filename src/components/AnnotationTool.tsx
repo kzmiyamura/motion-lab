@@ -6,6 +6,7 @@ import type {
 import { POSE_CONNECTIONS } from '../types/pose';
 import { requestDriveWriteToken } from '../engine/googleAuth';
 import { findOrCreateFolder, uploadJsonFile, DriveApiError } from '../engine/googleDrive';
+import { buildTrainingData, trainModel, saveModel } from '../engine/poseClassifier';
 import styles from './AnnotationTool.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -102,6 +103,13 @@ export function AnnotationTool() {
   const [driveToken,    setDriveToken]    = useState<string | null>(null);
   const [uploadStatus,  setUploadStatus]  = useState<'idle'|'uploading'|'done'|'error'>('idle');
 
+  // ── ML 学習 ──────────────────────────────────────────────────────────────
+  type TrainStatus = 'idle' | 'loading' | 'training' | 'done' | 'error';
+  const [trainStatus,   setTrainStatus]   = useState<TrainStatus>('idle');
+  const [trainProgress, setTrainProgress] = useState(0);   // 0–100
+  const [trainLog,      setTrainLog]      = useState('');
+  const trainInputRef = useRef<HTMLInputElement>(null);
+
   const connectDrive = useCallback(async () => {
     if (!CLIENT_ID) { alert('VITE_GOOGLE_CLIENT_ID が未設定です'); return; }
     try {
@@ -109,6 +117,45 @@ export function AnnotationTool() {
       setDriveToken(token);
     } catch {
       alert('Google Drive の接続に失敗しました');
+    }
+  }, []);
+
+  // ── ML 学習ハンドラ ──────────────────────────────────────────────────────
+  const handleTrain = useCallback(async (files: FileList) => {
+    setTrainStatus('loading');
+    setTrainLog('JSONを読み込み中…');
+    setTrainProgress(0);
+
+    try {
+      const logs: AnnotatedPoseLog[] = [];
+      for (const file of Array.from(files)) {
+        const text = await file.text();
+        const parsed = JSON.parse(text) as AnnotatedPoseLog;
+        if (parsed.version === 'salsa_annotated_v1') logs.push(parsed);
+      }
+
+      const { xs, ys, sampleCount } = buildTrainingData(logs);
+      if (sampleCount < 10) {
+        setTrainLog(`サンプルが少なすぎます（${sampleCount}件）。standard_pos ラベルのフレームが必要です。`);
+        setTrainStatus('error');
+        return;
+      }
+
+      setTrainStatus('training');
+      setTrainLog(`${sampleCount} サンプル検出 — 学習開始…`);
+
+      const model = await trainModel(xs, ys, (epoch, total, loss, acc) => {
+        const pct = Math.round((epoch / total) * 100);
+        setTrainProgress(pct);
+        setTrainLog(`Epoch ${epoch}/${total}  loss=${loss.toFixed(4)}  acc=${(acc * 100).toFixed(1)}%`);
+      });
+
+      await saveModel(model);
+      setTrainStatus('done');
+      setTrainLog(`完了！モデルを保存しました（${sampleCount} サンプル）`);
+    } catch (e) {
+      setTrainStatus('error');
+      setTrainLog(`エラー: ${e instanceof Error ? e.message : String(e)}`);
     }
   }, []);
 
@@ -443,6 +490,23 @@ export function AnnotationTool() {
              uploadStatus === 'error'     ? '✗ Error'   :
              `Export (${labeled})`}
           </button>
+          {/* Train ボタン */}
+          <button
+            className={styles.loadBtn}
+            style={{ color: '#cc88ff', borderColor: '#664488' }}
+            onClick={() => trainInputRef.current?.click()}
+            title="アノテーション済み JSON を選択して ML モデルを学習"
+          >
+            {trainStatus === 'done' ? 'Train ✓' : trainStatus === 'error' ? 'Train ✗' : 'Train'}
+          </button>
+          <input
+            ref={trainInputRef}
+            type="file"
+            accept=".json"
+            multiple
+            onChange={e => { if (e.target.files?.length) { handleTrain(e.target.files); e.target.value = ''; } }}
+            style={{ display: 'none' }}
+          />
         </div>
       </header>
 
@@ -569,6 +633,51 @@ export function AnnotationTool() {
           <span>←→/Space:移動</span>
         </div>
       </div>
+      {/* ── ML 学習モーダル ── */}
+      {trainStatus !== 'idle' && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 100,
+        }}>
+          <div style={{
+            background: '#111122', border: '1px solid #446', borderRadius: 12,
+            padding: '24px 28px', width: 320, maxWidth: '90vw',
+          }}>
+            <div style={{ fontWeight: 'bold', color: '#cc88ff', marginBottom: 12 }}>
+              {trainStatus === 'loading'  ? '📂 読み込み中'   :
+               trainStatus === 'training' ? '🤖 学習中'       :
+               trainStatus === 'done'     ? '✅ 学習完了'      :
+                                           '❌ エラー'}
+            </div>
+            {/* プログレスバー */}
+            {(trainStatus === 'training') && (
+              <div style={{ background: '#222', borderRadius: 4, height: 6, marginBottom: 10 }}>
+                <div style={{
+                  height: '100%', borderRadius: 4,
+                  background: 'linear-gradient(90deg,#8844ff,#cc44ff)',
+                  width: `${trainProgress}%`, transition: 'width 0.3s',
+                }} />
+              </div>
+            )}
+            <div style={{ fontSize: 12, color: '#aab', fontFamily: 'monospace', minHeight: 32 }}>
+              {trainLog}
+            </div>
+            {(trainStatus === 'done' || trainStatus === 'error') && (
+              <button
+                onClick={() => { setTrainStatus('idle'); setTrainProgress(0); setTrainLog(''); }}
+                style={{
+                  marginTop: 14, width: '100%', padding: '8px 0',
+                  background: '#222', border: '1px solid #446',
+                  color: '#aab', borderRadius: 6, cursor: 'pointer',
+                }}
+              >
+                閉じる
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

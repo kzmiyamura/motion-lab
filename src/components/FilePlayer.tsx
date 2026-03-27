@@ -7,6 +7,7 @@ import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hook
 import { useWakeLock } from '../hooks/useWakeLock';
 import { usePoseEstimation, type VizMode, type SalsaStyle } from '../hooks/usePoseEstimation';
 import { usePoseLogger } from '../hooks/usePoseLogger';
+import { loadModel, predictLeaderProbSync, type RoleModel } from '../engine/poseClassifier';
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SequenceView } from './SequenceView';
@@ -125,8 +126,40 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
 
+  // ── ML ロール推論
+  const [mlMode, setMlMode] = useState(false);
+  const [mlResult, setMlResult] = useState<{ leaderSlot: 0 | 1; prob: number } | null>(null);
+  const mlModelRef = useRef<RoleModel | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mlTfRef = useRef<any>(null);
+
+  // モデルを IndexedDB から読み込む
+  useEffect(() => {
+    loadModel().then(m => { mlModelRef.current = m; });
+    import('@tensorflow/tfjs').then(tf => { mlTfRef.current = tf; });
+  }, []);
+
   // ── ポーズロガー
   const { isRecording, frameCount, startRecording, stopRecording, exportJson, getLog, onRawPoses } = usePoseLogger();
+
+  // onRawPoses + ML 推論をまとめたコールバック
+  const combinedRawPoses = useCallback((
+    poses: Parameters<typeof onRawPoses>[0],
+    videoTime: Parameters<typeof onRawPoses>[1],
+  ) => {
+    onRawPoses(poses, videoTime);
+    // ML モードかつモデル読み込み済みのときのみ推論
+    if (mlMode && mlModelRef.current && mlTfRef.current && poses.length >= 2) {
+      const p0 = poses[0], p1 = poses[1];
+      if (p0.landmarks.length >= 25 && p1.landmarks.length >= 25) {
+        const prob = predictLeaderProbSync(mlModelRef.current, mlTfRef.current, p0, p1);
+        const leaderSlot: 0 | 1 = prob >= 0.5 ? 0 : 1;
+        setMlResult({ leaderSlot, prob: leaderSlot === 0 ? prob : 1 - prob });
+      }
+    } else if (!mlMode) {
+      setMlResult(null);
+    }
+  }, [onRawPoses, mlMode]);
 
   const {
     lockAt, unlock, isLocked,
@@ -138,7 +171,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle, heightLeaderHint,
-    vizMode !== 'off' ? onRawPoses : undefined,  // 骨格ON中のみロギング
+    vizMode !== 'off' ? combinedRawPoses : undefined,  // 骨格ON中のみロギング
   );
 
   // ── BPM 計測（音声モード）
@@ -767,6 +800,16 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         )}
         {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (
           <button
+            className={`${styles.vizModeBtn} ${mlMode ? styles.vizModeBtnActive : ''}`}
+            style={mlMode ? { color: '#cc88ff', borderColor: '#cc88ff' } : { color: '#887799' }}
+            onClick={() => { setMlMode(m => !m); setMlResult(null); }}
+            title={mlModelRef.current ? 'ML推論モード切替' : 'モデル未読み込み（Annotationで学習してください）'}
+          >
+            {mlModelRef.current ? (mlMode ? 'ML ON' : 'ML') : 'ML —'}
+          </button>
+        )}
+        {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (
+          <button
             className={
               `${styles.lockBtn} ` +
               (isLocked ? styles.lockBtnLocked : lockModeActive ? styles.lockBtnWaiting : '')
@@ -1090,6 +1133,19 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                     display: vizMode !== 'off' ? 'block' : 'none',
                   }}
                 />
+                {mlMode && mlResult && (
+                  <div style={{
+                    position: 'absolute', top: 6, right: 6,
+                    background: 'rgba(0,0,0,0.75)',
+                    border: `1px solid ${mlResult.leaderSlot === 0 ? '#4488ff' : '#ff44cc'}`,
+                    borderRadius: 6, padding: '3px 8px',
+                    fontSize: 11, fontFamily: 'monospace',
+                    color: mlResult.leaderSlot === 0 ? '#4488ff' : '#ff44cc',
+                    pointerEvents: 'none', zIndex: 10,
+                  }}>
+                    🤖 L=S{mlResult.leaderSlot} {Math.round(mlResult.prob * 100)}%
+                  </div>
+                )}
                 <div
                   className={styles.videoOverlay}
                   onPointerDown={onOverlayPointerDown}

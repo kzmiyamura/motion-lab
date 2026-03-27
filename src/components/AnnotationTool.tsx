@@ -77,7 +77,6 @@ const LABEL_COLOR: Record<AnnotationLabel, string> = {
 
 // キー→ラベルのマッピング
 const KEY_LABEL: Record<string, AnnotationLabel> = {
-  '1': 'standard_pos',
   '2': 'swapped_pos',
   '3': 'single_leader',
   '4': 'single_follower',

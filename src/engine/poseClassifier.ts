@@ -76,6 +76,7 @@ export async function trainModel(
   xs: number[][],
   ys: number[],
   onProgress: (epoch: number, total: number, loss: number, acc: number) => void,
+  shouldAbort?: () => boolean,
 ): Promise<LayersModel> {
   const tf = await import('@tensorflow/tfjs');
 
@@ -106,8 +107,13 @@ export async function trainModel(
     validationSplit: 0.1,
     yieldEvery: 'batch',
     callbacks: {
-      onEpochEnd: (epoch, logs) =>
-        onProgress(epoch + 1, epochs, logs?.loss ?? 0, (logs?.acc ?? 0) as number),
+      onEpochEnd: async (epoch, logs) => {
+        onProgress(epoch + 1, epochs, logs?.loss ?? 0, (logs?.acc ?? 0) as number);
+        if (shouldAbort?.()) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (model as any).stopTraining = true;
+        }
+      },
     },
   });
 

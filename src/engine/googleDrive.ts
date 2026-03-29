@@ -229,6 +229,31 @@ export async function uploadFileResumable(
 }
 
 /**
+ * 指定フォルダ内の JSON ファイル一覧を取得（最大200件、名前昇順）
+ */
+export async function listFilesInFolder(
+  token: string,
+  folderId: string,
+): Promise<DriveFile[]> {
+  const q = `'${folderId}' in parents and mimeType='application/json' and trashed=false`;
+  const params = new URLSearchParams({
+    q,
+    fields: 'files(id,name,mimeType,size)',
+    orderBy: 'name asc',
+    pageSize: '200',
+  });
+  const res = await fetch(`${DRIVE_API}/files?${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: { message?: string } };
+    throw new DriveApiError(body?.error?.message ?? `HTTP ${res.status}`, res.status);
+  }
+  const data = await res.json() as { files?: DriveFile[] };
+  return data.files ?? [];
+}
+
+/**
  * 小さい JSON ファイルを multipart アップロード（アノテーションデータ用）
  * @returns 作成されたファイルの Drive ID
  */

@@ -5,8 +5,8 @@ import type {
 } from '../types/pose';
 import { POSE_CONNECTIONS } from '../types/pose';
 import { requestDriveWriteToken } from '../engine/googleAuth';
-import { findOrCreateFolder, uploadJsonFile, DriveApiError } from '../engine/googleDrive';
-import { buildTrainingData, trainModel, saveModel } from '../engine/poseClassifier';
+import { findOrCreateFolder, uploadJsonFile, listFilesInFolder, fetchFileBlob, DriveApiError } from '../engine/googleDrive';
+import { buildTrainingData, trainModel, saveModel, loadModel } from '../engine/poseClassifier';
 import styles from './AnnotationTool.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -104,11 +104,14 @@ export function AnnotationTool() {
   const [uploadStatus,  setUploadStatus]  = useState<'idle'|'uploading'|'done'|'error'>('idle');
 
   // ── ML 学習 ──────────────────────────────────────────────────────────────
-  type TrainStatus = 'idle' | 'loading' | 'training' | 'done' | 'error';
-  const [trainStatus,   setTrainStatus]   = useState<TrainStatus>('idle');
-  const [trainProgress, setTrainProgress] = useState(0);   // 0–100
-  const [trainLog,      setTrainLog]      = useState('');
-  const trainInputRef = useRef<HTMLInputElement>(null);
+  type TrainPhase = 'idle' | 'fetching' | 'confirm' | 'training' | 'done' | 'aborted' | 'error';
+  const [trainPhase,      setTrainPhase]      = useState<TrainPhase>('idle');
+  const [trainableFiles,  setTrainableFiles]  = useState<{ id: string; name: string }[]>([]);
+  const [trainFileIdx,    setTrainFileIdx]    = useState(0);  // 処理中ファイル番号
+  const [trainEpochPct,   setTrainEpochPct]   = useState(0);  // 0–100
+  const [trainLog,        setTrainLog]        = useState('');
+  const [trainSummary,    setTrainSummary]    = useState('');
+  const abortRef = useRef(false);
 
   const connectDrive = useCallback(async () => {
     if (!CLIENT_ID) { alert('VITE_GOOGLE_CLIENT_ID が未設定です'); return; }
@@ -120,44 +123,107 @@ export function AnnotationTool() {
     }
   }, []);
 
-  // ── ML 学習ハンドラ ──────────────────────────────────────────────────────
-  const handleTrain = useCallback(async (files: FileList) => {
-    setTrainStatus('loading');
-    setTrainLog('JSONを読み込み中…');
-    setTrainProgress(0);
+  // 学習済みファイル名を localStorage で管理
+  const TRAINED_KEY = 'salsa_trained_files';
+  const getTrainedSet = (): Set<string> => {
+    try { return new Set(JSON.parse(localStorage.getItem(TRAINED_KEY) ?? '[]')); }
+    catch { return new Set(); }
+  };
+  const markTrained = (name: string) => {
+    const s = getTrainedSet(); s.add(name);
+    localStorage.setItem(TRAINED_KEY, JSON.stringify([...s]));
+  };
 
+  // ── Step1: Drive から未学習ファイルを取得してconfirmモーダルを表示
+  const handleTrainOpen = useCallback(async () => {
+    if (!driveToken) { alert('先に Google Drive を連携してください（ヘッダーの Drive ボタン）'); return; }
+    setTrainPhase('fetching');
+    setTrainLog('Drive からファイルを取得中…');
     try {
-      const logs: AnnotatedPoseLog[] = [];
-      for (const file of Array.from(files)) {
-        const text = await file.text();
-        const parsed = JSON.parse(text) as AnnotatedPoseLog;
-        if (parsed.version === 'salsa_annotated_v1') logs.push(parsed);
-      }
-
-      const { xs, ys, sampleCount } = buildTrainingData(logs);
-      if (sampleCount < 10) {
-        setTrainLog(`サンプルが少なすぎます（${sampleCount}件）。standard_pos ラベルのフレームが必要です。`);
-        setTrainStatus('error');
+      const folderId = await findOrCreateFolder(driveToken, DRIVE_FOLDER);
+      const files = await listFilesInFolder(driveToken, folderId);
+      const trained = getTrainedSet();
+      const untrained = files.filter(f =>
+        f.name.startsWith('salsa_annotated_v1') && !trained.has(f.name)
+      );
+      if (untrained.length === 0) {
+        setTrainLog('未学習のファイルはありません。すべて学習済みです。');
+        setTrainPhase('done');
+        setTrainSummary('新規ファイルなし');
         return;
       }
-
-      setTrainStatus('training');
-      setTrainLog(`${sampleCount} サンプル検出 — 学習開始…`);
-
-      const model = await trainModel(xs, ys, (epoch, total, loss, acc) => {
-        const pct = Math.round((epoch / total) * 100);
-        setTrainProgress(pct);
-        setTrainLog(`Epoch ${epoch}/${total}  loss=${loss.toFixed(4)}  acc=${(acc * 100).toFixed(1)}%`);
-      });
-
-      await saveModel(model);
-      setTrainStatus('done');
-      setTrainLog(`完了！モデルを保存しました（${sampleCount} サンプル）`);
+      setTrainableFiles(untrained);
+      setTrainPhase('confirm');
     } catch (e) {
-      setTrainStatus('error');
-      setTrainLog(`エラー: ${e instanceof Error ? e.message : String(e)}`);
+      setTrainLog(`取得失敗: ${e instanceof Error ? e.message : String(e)}`);
+      setTrainPhase('error');
     }
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveToken]);
+
+  // ── Step2: 学習実行（ファイルごとに逐次処理）
+  const handleTrainStart = useCallback(async () => {
+    if (!driveToken) return;
+    abortRef.current = false;
+    setTrainPhase('training');
+    setTrainEpochPct(0);
+
+    await loadModel(); // 将来の incremental learning 用に読み込んでおく（現状未使用）
+    let processedCount = 0;
+    let totalSamples = 0;
+
+    for (let i = 0; i < trainableFiles.length; i++) {
+      if (abortRef.current) break;
+      const file = trainableFiles[i];
+      setTrainFileIdx(i);
+      setTrainLog(`(${i + 1}/${trainableFiles.length}) ${file.name} を読み込み中…`);
+
+      try {
+        const blob = await fetchFileBlob(driveToken, file.id);
+        const text = await blob.text();
+        const parsed = JSON.parse(text) as AnnotatedPoseLog;
+        if (parsed.version !== 'salsa_annotated_v1') { markTrained(file.name); continue; }
+
+        const { xs, ys, sampleCount } = buildTrainingData([parsed]);
+        if (sampleCount < 6) {
+          setTrainLog(`(${i + 1}/${trainableFiles.length}) ${file.name} — サンプル不足(${sampleCount})、スキップ`);
+          markTrained(file.name);
+          await new Promise(r => setTimeout(r, 400));
+          continue;
+        }
+
+        setTrainLog(`(${i + 1}/${trainableFiles.length}) ${file.name} — ${sampleCount}サンプル 学習中…`);
+        setTrainEpochPct(0);
+
+        // TODO: 既存モデルの重みを引き継ぐ incremental learning は将来対応
+        // 現状は全サンプルを集約して再学習
+        const model = await trainModel(xs, ys, (epoch, total, loss, acc) => {
+          setTrainEpochPct(Math.round((epoch / total) * 100));
+          setTrainLog(
+            `(${i + 1}/${trainableFiles.length}) ${file.name}\n` +
+            `Epoch ${epoch}/${total}  loss=${loss.toFixed(4)}  acc=${(acc * 100).toFixed(1)}%`
+          );
+        }, () => abortRef.current);
+
+        await saveModel(model);
+        markTrained(file.name);
+        processedCount++;
+        totalSamples += sampleCount;
+      } catch (e) {
+        setTrainLog(`エラー(${file.name}): ${e instanceof Error ? e.message : String(e)}`);
+        await new Promise(r => setTimeout(r, 800));
+      }
+    }
+
+    if (abortRef.current) {
+      setTrainSummary(`中断 — ${processedCount}/${trainableFiles.length}件処理（${totalSamples}サンプル）`);
+      setTrainPhase('aborted');
+    } else {
+      setTrainSummary(`完了 — ${processedCount}件処理（計${totalSamples}サンプル）`);
+      setTrainPhase('done');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveToken, trainableFiles]);
 
   // ── Video overlay ────────────────────────────────────────────────────────
   const [videoUrl, setVideoUrl]     = useState<string | null>(null);
@@ -494,19 +560,11 @@ export function AnnotationTool() {
           <button
             className={styles.loadBtn}
             style={{ color: '#cc88ff', borderColor: '#664488' }}
-            onClick={() => trainInputRef.current?.click()}
-            title="アノテーション済み JSON を選択して ML モデルを学習"
+            onClick={handleTrainOpen}
+            title="Drive の未学習アノテーション JSON を取得して ML モデルを学習"
           >
-            {trainStatus === 'done' ? 'Train ✓' : trainStatus === 'error' ? 'Train ✗' : 'Train'}
+            {trainPhase === 'done' ? 'Train ✓' : trainPhase === 'error' ? 'Train ✗' : 'Train'}
           </button>
-          <input
-            ref={trainInputRef}
-            type="file"
-            accept=".json"
-            multiple
-            onChange={e => { if (e.target.files?.length) { handleTrain(e.target.files); e.target.value = ''; } }}
-            style={{ display: 'none' }}
-          />
         </div>
       </header>
 
@@ -634,7 +692,7 @@ export function AnnotationTool() {
         </div>
       </div>
       {/* ── ML 学習モーダル ── */}
-      {trainStatus !== 'idle' && (
+      {trainPhase !== 'idle' && (
         <div style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -642,39 +700,99 @@ export function AnnotationTool() {
         }}>
           <div style={{
             background: '#111122', border: '1px solid #446', borderRadius: 12,
-            padding: '24px 28px', width: 320, maxWidth: '90vw',
+            padding: '24px 28px', width: 340, maxWidth: '92vw',
+            display: 'flex', flexDirection: 'column', gap: 12,
           }}>
-            <div style={{ fontWeight: 'bold', color: '#cc88ff', marginBottom: 12 }}>
-              {trainStatus === 'loading'  ? '📂 読み込み中'   :
-               trainStatus === 'training' ? '🤖 学習中'       :
-               trainStatus === 'done'     ? '✅ 学習完了'      :
+            {/* タイトル */}
+            <div style={{ fontWeight: 'bold', color: '#cc88ff', fontSize: 14 }}>
+              {trainPhase === 'fetching'  ? '📂 Drive を確認中…'  :
+               trainPhase === 'confirm'   ? `📋 未学習ファイル ${trainableFiles.length}件` :
+               trainPhase === 'training'  ? '🤖 学習中'            :
+               trainPhase === 'done'      ? '✅ 完了'               :
+               trainPhase === 'aborted'   ? '⏹ 中断しました'       :
                                            '❌ エラー'}
             </div>
-            {/* プログレスバー */}
-            {(trainStatus === 'training') && (
-              <div style={{ background: '#222', borderRadius: 4, height: 6, marginBottom: 10 }}>
-                <div style={{
-                  height: '100%', borderRadius: 4,
-                  background: 'linear-gradient(90deg,#8844ff,#cc44ff)',
-                  width: `${trainProgress}%`, transition: 'width 0.3s',
-                }} />
+
+            {/* confirm: ファイルリスト */}
+            {trainPhase === 'confirm' && (
+              <div style={{
+                maxHeight: 160, overflowY: 'auto',
+                background: '#0a0a18', borderRadius: 6, padding: '6px 8px',
+                fontSize: 11, color: '#88aacc', fontFamily: 'monospace',
+              }}>
+                {trainableFiles.map(f => (
+                  <div key={f.id} style={{ padding: '2px 0', borderBottom: '1px solid #1a1a2a' }}>
+                    {f.name}
+                  </div>
+                ))}
               </div>
             )}
-            <div style={{ fontSize: 12, color: '#aab', fontFamily: 'monospace', minHeight: 32 }}>
-              {trainLog}
-            </div>
-            {(trainStatus === 'done' || trainStatus === 'error') && (
-              <button
-                onClick={() => { setTrainStatus('idle'); setTrainProgress(0); setTrainLog(''); }}
-                style={{
-                  marginTop: 14, width: '100%', padding: '8px 0',
-                  background: '#222', border: '1px solid #446',
-                  color: '#aab', borderRadius: 6, cursor: 'pointer',
-                }}
-              >
-                閉じる
-              </button>
+
+            {/* training: エポック進捗バー */}
+            {trainPhase === 'training' && (
+              <>
+                <div style={{ background: '#222', borderRadius: 4, height: 6 }}>
+                  <div style={{
+                    height: '100%', borderRadius: 4,
+                    background: 'linear-gradient(90deg,#8844ff,#cc44ff)',
+                    width: `${trainEpochPct}%`, transition: 'width 0.3s',
+                  }} />
+                </div>
+                {/* ファイル進捗 */}
+                <div style={{ background: '#222', borderRadius: 4, height: 3 }}>
+                  <div style={{
+                    height: '100%', borderRadius: 4, background: '#446688',
+                    width: `${Math.round(((trainFileIdx) / Math.max(trainableFiles.length, 1)) * 100)}%`,
+                  }} />
+                </div>
+              </>
             )}
+
+            {/* ログテキスト */}
+            <div style={{
+              fontSize: 11, color: '#aab', fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap', minHeight: 28, lineHeight: 1.5,
+            }}>
+              {trainPhase === 'done' || trainPhase === 'aborted' ? trainSummary : trainLog}
+            </div>
+
+            {/* ボタン */}
+            <div style={{ display: 'flex', gap: 8 }}>
+              {trainPhase === 'confirm' && (
+                <>
+                  <button onClick={handleTrainStart} style={{
+                    flex: 1, padding: '8px 0', background: '#2a1a4a',
+                    border: '1px solid #8844ff', color: '#cc88ff',
+                    borderRadius: 6, cursor: 'pointer', fontWeight: 'bold',
+                  }}>
+                    学習開始
+                  </button>
+                  <button onClick={() => { setTrainPhase('idle'); setTrainLog(''); }} style={{
+                    flex: 1, padding: '8px 0', background: '#222',
+                    border: '1px solid #446', color: '#aab', borderRadius: 6, cursor: 'pointer',
+                  }}>
+                    キャンセル
+                  </button>
+                </>
+              )}
+              {trainPhase === 'training' && (
+                <button onClick={() => { abortRef.current = true; setTrainLog(prev => prev + '\n中断リクエスト…'); }} style={{
+                  flex: 1, padding: '8px 0', background: '#2a0a0a',
+                  border: '1px solid #884444', color: '#ff8888',
+                  borderRadius: 6, cursor: 'pointer',
+                }}>
+                  中断
+                </button>
+              )}
+              {(trainPhase === 'done' || trainPhase === 'aborted' || trainPhase === 'error') && (
+                <button onClick={() => { setTrainPhase('idle'); setTrainLog(''); setTrainSummary(''); }} style={{
+                  flex: 1, padding: '8px 0', background: '#222',
+                  border: '1px solid #446', color: '#aab', borderRadius: 6, cursor: 'pointer',
+                }}>
+                  閉じる
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

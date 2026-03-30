@@ -171,7 +171,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle, heightLeaderHint,
-    vizMode !== 'off' ? combinedRawPoses : undefined,  // 骨格ON中のみロギング
+    vizMode !== 'off' ? combinedRawPoses : undefined,
+    mlMode && mlResult ? mlResult.leaderSlot : null,  // ML ON時はロール色をML判断で上書き
   );
 
   // ── BPM 計測（音声モード）

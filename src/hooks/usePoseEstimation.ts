@@ -1529,6 +1529,7 @@ export function usePoseEstimation(
   salsaStyle: SalsaStyle = 'on1',
   heightLeaderHint = false,   // true = 背が高い方をリーダーとして重み付け
   onRawPoses?: (poses: Array<{ landmarks: NormalizedLandmark[] }>, videoTime: number) => void,
+  mlLeaderSlot: 0 | 1 | null = null,  // ML推論によるロール強制上書き（null=ルールベース）
 ): UsePoseEstimationResult {
   const modeRef      = useRef<VizMode>(mode);
   modeRef.current    = mode;
@@ -1536,6 +1537,8 @@ export function usePoseEstimation(
   bpmRef.current     = bpm;
   const mirroredRef  = useRef(isMirrored);
   mirroredRef.current = isMirrored;
+  const mlLeaderSlotRef = useRef<0 | 1 | null>(mlLeaderSlot);
+  mlLeaderSlotRef.current = mlLeaderSlot;
   const styleRef     = useRef<SalsaStyle>(salsaStyle);
   styleRef.current   = salsaStyle;
 
@@ -2680,6 +2683,14 @@ export function usePoseEstimation(
                         faceSuspending: faceSuspNow,
                       });
                     }
+                  }
+
+                  // ── ML ロール上書き（mlLeaderSlot が指定されている場合）
+                  if (mlLeaderSlotRef.current !== null && slots[0].detectedIdx >= 0 && slots[1].detectedIdx >= 0) {
+                    const ls = mlLeaderSlotRef.current;
+                    const fs = (1 - ls) as 0 | 1;
+                    personRoles.set(slots[ls].detectedIdx, 'leader');
+                    personRoles.set(slots[fs].detectedIdx, 'follower');
                   }
 
                   // ── 描画

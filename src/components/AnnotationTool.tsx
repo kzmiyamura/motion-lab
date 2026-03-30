@@ -165,13 +165,14 @@ export function AnnotationTool() {
           await new Promise(r => setTimeout(r, 400));
           continue;
         }
-        const { xs, ys, sampleCount } = buildTrainingData([parsed]);
+        const { xs, ys, sampleCount, breakdown } = buildTrainingData([parsed]);
+        const bdText = Object.entries(breakdown).map(([k, v]) => `${k}:${v}`).join(' ');
         if (sampleCount < 6) {
-          setTrainLog(`サンプル不足(${sampleCount})、スキップ: ${file.name}`);
-          await new Promise(r => setTimeout(r, 400));
+          setTrainLog(`サンプル不足(${sampleCount})、スキップ: ${file.name}\n対象ラベル: standard_pos / side_L_right / side_L_left のみ\n検出内訳: ${bdText || 'なし'}`);
+          await new Promise(r => setTimeout(r, 1200));
           continue;
         }
-        setTrainLog(`(${i + 1}/${fileArray.length}) ${file.name} — ${sampleCount}サンプル 学習中…`);
+        setTrainLog(`(${i + 1}/${fileArray.length}) ${file.name} — ${sampleCount}サンプル 学習中…\n内訳: ${bdText}`);
         const model = await trainModel(xs, ys, (epoch, total, loss, acc) => {
           setTrainEpochPct(Math.round((epoch / total) * 100));
           setTrainLog(

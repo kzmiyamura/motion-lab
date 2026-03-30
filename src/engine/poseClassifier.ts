@@ -45,30 +45,57 @@ export function extractFeatures(p0: Pose, p1: Pose): number[] {
   ];
 }
 
-/** アノテーション済み JSON から学習データを構築 */
+/** アノテーション済み JSON から学習データを構築
+ *
+ * 使用するラベルと Leader 特定方法:
+ *   standard_pos  → poses[0] = Leader（定義による）
+ *   side_L_right  → hipX が大きい方 = Leader（右にいる）
+ *   side_L_left   → hipX が小さい方 = Leader（左にいる）
+ *   それ以外       → スキップ（Leader スロットを一意に特定できない）
+ */
 export function buildTrainingData(logs: AnnotatedPoseLog[]): {
   xs: number[][];
   ys: number[];
   sampleCount: number;
+  breakdown: Record<string, number>;
 } {
   const xs: number[][] = [], ys: number[] = [];
+  const breakdown: Record<string, number> = {};
 
   for (const log of logs) {
     for (const frame of log.frames) {
-      if (frame.label !== 'standard_pos') continue;
       if (!frame.poses || frame.poses.length < 2) continue;
       const [p0, p1] = frame.poses;
       if (!p0?.landmarks || !p1?.landmarks) continue;
       if (p0.landmarks.length < 25 || p1.landmarks.length < 25) continue;
 
-      // poses[0]=Leader のサンプル
-      xs.push(extractFeatures(p0, p1)); ys.push(0);
-      // 対称 augmentation: swap → poses[1]=Leader
-      xs.push(extractFeatures(p1, p0)); ys.push(1);
+      let leaderIsSlot0: boolean | null = null;
+
+      if (frame.label === 'standard_pos') {
+        leaderIsSlot0 = true;
+      } else if (frame.label === 'side_L_right') {
+        // L右・F左: Leader は右側（hipX 大）
+        const hx0 = (p0.landmarks[23].x + p0.landmarks[24].x) / 2;
+        const hx1 = (p1.landmarks[23].x + p1.landmarks[24].x) / 2;
+        leaderIsSlot0 = hx0 > hx1;
+      } else if (frame.label === 'side_L_left') {
+        // L左・F右: Leader は左側（hipX 小）
+        const hx0 = (p0.landmarks[23].x + p0.landmarks[24].x) / 2;
+        const hx1 = (p1.landmarks[23].x + p1.landmarks[24].x) / 2;
+        leaderIsSlot0 = hx0 < hx1;
+      }
+      // overlap / complex_turn / single / ignore → スキップ
+
+      if (leaderIsSlot0 === null) continue;
+
+      const [leader, follower] = leaderIsSlot0 ? [p0, p1] : [p1, p0];
+      xs.push(extractFeatures(leader, follower)); ys.push(0); // leader first
+      xs.push(extractFeatures(follower, leader)); ys.push(1); // augmentation: follower first
+      breakdown[frame.label] = (breakdown[frame.label] ?? 0) + 1;
     }
   }
 
-  return { xs, ys, sampleCount: xs.length };
+  return { xs, ys, sampleCount: xs.length, breakdown };
 }
 
 /** モデルを作成・学習して LayersModel を返す */

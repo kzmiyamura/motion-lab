@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { requestDriveToken, revokeDriveToken } from '../engine/googleAuth';
+import { requestDriveToken, revokeDriveToken, getStoredToken } from '../engine/googleAuth';
 import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, createPublicPermission, type DriveFile, type UploadStats } from '../engine/googleDrive';
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
 import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
@@ -202,6 +202,12 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   // Derived
   const isTheater = playerSize === 'theater';
   const isExpanded = isTheater || isFullscreen;
+
+  // マウント時に有効なトークンを復元（アプリ更新後も再認証不要）
+  useEffect(() => {
+    const stored = getStoredToken();
+    if (stored) setToken(stored);
+  }, []);
 
   // ── Fullscreen detection ───────────────────────────────────────────────
   useEffect(() => {

@@ -61,6 +61,11 @@ export function clearStoredToken(): void {
   localStorage.removeItem(LS_EXPIRY);
 }
 
+/** localStorage に有効なトークンがあればそれを返す（なければ null） */
+export function getStoredToken(): string | null {
+  return loadToken();
+}
+
 function loadGsiScript(): Promise<void> {
   return new Promise((resolve, reject) => {
     if (window.google?.accounts) { resolve(); return; }

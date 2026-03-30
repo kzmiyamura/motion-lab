@@ -4,7 +4,7 @@ import type {
   RawPoseLog, AnnotatedFrame, AnnotatedPoseLog, AnnotationLabel,
 } from '../types/pose';
 import { POSE_CONNECTIONS } from '../types/pose';
-import { requestDriveWriteToken } from '../engine/googleAuth';
+import { requestDriveWriteToken, getStoredToken } from '../engine/googleAuth';
 import { findOrCreateFolder, uploadJsonFile, listFilesInFolder, fetchFileBlob, DriveApiError } from '../engine/googleDrive';
 import { buildTrainingData, trainModel, saveModel, loadModel } from '../engine/poseClassifier';
 import styles from './AnnotationTool.module.css';
@@ -115,6 +115,12 @@ export function AnnotationTool() {
   const [_driveFileCount, setDriveFileCount]  = useState(0);  // Drive の全 JSON 件数（デバッグ用）
   const abortRef = useRef(false);
   const localTrainInputRef = useRef<HTMLInputElement>(null);
+
+  // マウント時に有効なトークンを復元（アプリ更新後も再認証不要）
+  useEffect(() => {
+    const stored = getStoredToken();
+    if (stored) setDriveToken(stored);
+  }, []);
 
   const connectDrive = useCallback(async () => {
     if (!CLIENT_ID) { alert('VITE_GOOGLE_CLIENT_ID が未設定です'); return; }

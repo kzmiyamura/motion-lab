@@ -6,12 +6,11 @@ import type {
 import { POSE_CONNECTIONS } from '../types/pose';
 import { requestDriveWriteToken, getStoredToken } from '../engine/googleAuth';
 import { findOrCreateFolder, uploadJsonFile, listFilesInFolder, fetchFileBlob, DriveApiError } from '../engine/googleDrive';
-import { buildTrainingData, trainModel, saveModel, loadModel, modelToJson } from '../engine/poseClassifier';
+import { buildTrainingData, trainModel, saveModel, modelToJson } from '../engine/poseClassifier';
 import styles from './AnnotationTool.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
 const DRIVE_FOLDER = 'salsa_annotations';
-const TRAINED_KEY  = 'salsa_trained_files';
 
 
 // ── 描画カラー ────────────────────────────────────────────────────────────
@@ -132,20 +131,10 @@ export function AnnotationTool() {
     }
   }, []);
 
-  // 学習済みファイル名を localStorage で管理
-  const getTrainedSet = (): Set<string> => {
-    try { return new Set(JSON.parse(localStorage.getItem(TRAINED_KEY) ?? '[]')); }
-    catch { return new Set(); }
-  };
-  const markTrained = (name: string) => {
-    const s = getTrainedSet(); s.add(name);
-    localStorage.setItem(TRAINED_KEY, JSON.stringify([...s]));
-  };
-
   const MODEL_DRIVE_FILENAME = 'salsa_role_model.json';
 
-  // 学習済みモデルを IndexedDB + Drive に保存
-  const saveModelToDriveIfConnected = useCallback(async (model: import('../engine/poseClassifier').RoleModel) => {
+  // 学習後にモデルを IndexedDB + Drive へ保存
+  const saveModelEverywhere = useCallback(async (model: import('../engine/poseClassifier').RoleModel) => {
     await saveModel(model);
     if (!driveToken) return;
     try {
@@ -160,65 +149,64 @@ export function AnnotationTool() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveToken]);
 
+  // 全ファイルのデータを結合して1回で学習する共通ロジック
+  const runTraining = useCallback(async (allLogs: AnnotatedPoseLog[]) => {
+    if (abortRef.current) return;
+    setTrainPhase('training');
+    setTrainEpochPct(0);
+
+    const { xs, ys, sampleCount, breakdown } = buildTrainingData(allLogs);
+    const bdText = Object.entries(breakdown).map(([k, v]) => `${k}:${v}`).join(' ');
+
+    if (sampleCount < 6) {
+      setTrainLog(`サンプル不足（${sampleCount}件）\n対象ラベル: side_L_right / side_L_left / standard_pos\n内訳: ${bdText || 'なし'}`);
+      setTrainSummary('サンプル不足');
+      setTrainPhase('error');
+      return;
+    }
+
+    setTrainLog(`全 ${allLogs.length} ファイル / ${sampleCount} サンプルで学習開始\n内訳: ${bdText}`);
+
+    const model = await trainModel(xs, ys, (epoch, total, loss, acc) => {
+      setTrainEpochPct(Math.round((epoch / total) * 100));
+      setTrainLog(
+        `全データ累積学習 (${sampleCount}サンプル)\n` +
+        `Epoch ${epoch}/${total}  loss=${loss.toFixed(4)}  acc=${(acc * 100).toFixed(1)}%`
+      );
+    }, () => abortRef.current);
+
+    if (abortRef.current) {
+      setTrainSummary('中断しました');
+      setTrainPhase('aborted');
+      return;
+    }
+
+    await saveModelEverywhere(model);
+    setTrainSummary(`完了 — ${allLogs.length}ファイル / ${sampleCount}サンプル`);
+    setTrainPhase('done');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveModelEverywhere]);
+
   // ── ローカルファイルから直接学習（Drive未使用 or フォールバック）
   const handleTrainFromLocal = useCallback(async (files: FileList) => {
     abortRef.current = false;
     setTrainPhase('training');
+    setTrainLog('ファイルを読み込み中…');
     setTrainEpochPct(0);
-    setTrainFileIdx(0);
-    let processedCount = 0;
-    let totalSamples = 0;
 
-    const fileArray = Array.from(files);
-    for (let i = 0; i < fileArray.length; i++) {
-      if (abortRef.current) break;
-      const file = fileArray[i];
-      setTrainLog(`(${i + 1}/${fileArray.length}) ${file.name} を読み込み中…`);
+    const logs: AnnotatedPoseLog[] = [];
+    for (let i = 0; i < files.length; i++) {
+      setTrainLog(`読み込み中 ${i + 1}/${files.length}: ${files[i].name}`);
       setTrainFileIdx(i);
       try {
-        const text = await file.text();
-        const parsed = JSON.parse(text) as AnnotatedPoseLog;
-        if (parsed.version !== 'salsa_annotated_v1') {
-          setTrainLog(`スキップ: ${file.name} (salsa_annotated_v1 形式ではありません)`);
-          await new Promise(r => setTimeout(r, 400));
-          continue;
-        }
-        const { xs, ys, sampleCount, breakdown } = buildTrainingData([parsed]);
-        const bdText = Object.entries(breakdown).map(([k, v]) => `${k}:${v}`).join(' ');
-        if (sampleCount < 6) {
-          setTrainLog(`サンプル不足(${sampleCount})、スキップ: ${file.name}\n対象ラベル: standard_pos / side_L_right / side_L_left のみ\n検出内訳: ${bdText || 'なし'}`);
-          await new Promise(r => setTimeout(r, 1200));
-          continue;
-        }
-        setTrainLog(`(${i + 1}/${fileArray.length}) ${file.name} — ${sampleCount}サンプル 学習中…\n内訳: ${bdText}`);
-        const model = await trainModel(xs, ys, (epoch, total, loss, acc) => {
-          setTrainEpochPct(Math.round((epoch / total) * 100));
-          setTrainLog(
-            `(${i + 1}/${fileArray.length}) ${file.name}\n` +
-            `Epoch ${epoch}/${total}  loss=${loss.toFixed(4)}  acc=${(acc * 100).toFixed(1)}%`
-          );
-        }, () => abortRef.current);
-        await saveModelToDriveIfConnected(model);
-        markTrained(file.name);
-        processedCount++;
-        totalSamples += sampleCount;
-      } catch (e) {
-        setTrainLog(`エラー(${file.name}): ${e instanceof Error ? e.message : String(e)}`);
-        await new Promise(r => setTimeout(r, 800));
-      }
+        const parsed = JSON.parse(await files[i].text()) as AnnotatedPoseLog;
+        if (parsed.version === 'salsa_annotated_v1') logs.push(parsed);
+      } catch { /* skip */ }
     }
+    await runTraining(logs);
+  }, [runTraining]);
 
-    if (abortRef.current) {
-      setTrainSummary(`中断 — ${processedCount}/${fileArray.length}件処理（${totalSamples}サンプル）`);
-      setTrainPhase('aborted');
-    } else {
-      setTrainSummary(`完了 — ${processedCount}件処理（計${totalSamples}サンプル）`);
-      setTrainPhase('done');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── Step1: Drive から未学習ファイルを取得してconfirmモーダルを表示
+  // ── Step1: Drive から全アノテーションファイルを取得してconfirmモーダルを表示
   const handleTrainOpen = useCallback(async () => {
     if (!driveToken) { alert('先に Google Drive を連携してください（ヘッダーの Drive ボタン）'); return; }
     setTrainPhase('fetching');
@@ -227,25 +215,15 @@ export function AnnotationTool() {
       const folderId = await findOrCreateFolder(driveToken, DRIVE_FOLDER);
       const files = await listFilesInFolder(driveToken, folderId);
       setDriveFileCount(files.length);
-      const trained = getTrainedSet();
-      const untrained = files.filter(f =>
-        f.name.startsWith('salsa_annotated_v1') && !trained.has(f.name)
-      );
-      const alreadyTrained = files.filter(f =>
-        f.name.startsWith('salsa_annotated_v1') && trained.has(f.name)
-      );
-      if (untrained.length === 0) {
-        const nonAnnotated = files.filter(f => !f.name.startsWith('salsa_annotated_v1'));
-        let msg = `Drive に ${files.length} 件のファイルがあります。\n`;
-        if (alreadyTrained.length > 0) msg += `学習済み: ${alreadyTrained.length} 件\n`;
-        if (nonAnnotated.length > 0) msg += `annotated_v1 以外(学習対象外): ${nonAnnotated.length} 件\n`;
-        msg += '\n未学習の salsa_annotated_v1_*.json がありません。\nAnnotation 画面で Export してください。';
+      const annotated = files.filter(f => f.name.startsWith('salsa_annotated_v1'));
+      if (annotated.length === 0) {
+        const msg = `Drive の salsa_annotations/ に ${files.length} 件ありますが\nsalsa_annotated_v1_*.json が見つかりません。\nAnnotation 画面で Export してください。`;
         setTrainLog(msg);
         setTrainPhase('done');
-        setTrainSummary('新規ファイルなし');
+        setTrainSummary('対象ファイルなし');
         return;
       }
-      setTrainableFiles(untrained);
+      setTrainableFiles(annotated);
       setTrainPhase('confirm');
     } catch (e) {
       setTrainLog(`取得失敗: ${e instanceof Error ? e.message : String(e)}`);
@@ -254,69 +232,32 @@ export function AnnotationTool() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveToken]);
 
-  // ── Step2: 学習実行（ファイルごとに逐次処理）
+  // ── Step2: 全ファイルをダウンロードして一括学習
   const handleTrainStart = useCallback(async () => {
     if (!driveToken) return;
     abortRef.current = false;
     setTrainPhase('training');
-    setTrainEpochPct(0);
+    setTrainLog('Drive からデータを読み込み中…');
 
-    await loadModel(); // 将来の incremental learning 用に読み込んでおく（現状未使用）
-    let processedCount = 0;
-    let totalSamples = 0;
-
+    const logs: AnnotatedPoseLog[] = [];
     for (let i = 0; i < trainableFiles.length; i++) {
       if (abortRef.current) break;
       const file = trainableFiles[i];
       setTrainFileIdx(i);
-      setTrainLog(`(${i + 1}/${trainableFiles.length}) ${file.name} を読み込み中…`);
-
+      setTrainLog(`読み込み中 ${i + 1}/${trainableFiles.length}: ${file.name}`);
       try {
         const blob = await fetchFileBlob(driveToken, file.id);
-        const text = await blob.text();
-        const parsed = JSON.parse(text) as AnnotatedPoseLog;
-        if (parsed.version !== 'salsa_annotated_v1') { markTrained(file.name); continue; }
-
-        const { xs, ys, sampleCount } = buildTrainingData([parsed]);
-        if (sampleCount < 6) {
-          setTrainLog(`(${i + 1}/${trainableFiles.length}) ${file.name} — サンプル不足(${sampleCount})、スキップ`);
-          markTrained(file.name);
-          await new Promise(r => setTimeout(r, 400));
-          continue;
-        }
-
-        setTrainLog(`(${i + 1}/${trainableFiles.length}) ${file.name} — ${sampleCount}サンプル 学習中…`);
-        setTrainEpochPct(0);
-
-        // TODO: 既存モデルの重みを引き継ぐ incremental learning は将来対応
-        // 現状は全サンプルを集約して再学習
-        const model = await trainModel(xs, ys, (epoch, total, loss, acc) => {
-          setTrainEpochPct(Math.round((epoch / total) * 100));
-          setTrainLog(
-            `(${i + 1}/${trainableFiles.length}) ${file.name}\n` +
-            `Epoch ${epoch}/${total}  loss=${loss.toFixed(4)}  acc=${(acc * 100).toFixed(1)}%`
-          );
-        }, () => abortRef.current);
-
-        await saveModelToDriveIfConnected(model);
-        markTrained(file.name);
-        processedCount++;
-        totalSamples += sampleCount;
-      } catch (e) {
-        setTrainLog(`エラー(${file.name}): ${e instanceof Error ? e.message : String(e)}`);
-        await new Promise(r => setTimeout(r, 800));
-      }
+        const parsed = JSON.parse(await blob.text()) as AnnotatedPoseLog;
+        if (parsed.version === 'salsa_annotated_v1') logs.push(parsed);
+      } catch { /* skip */ }
     }
 
     if (abortRef.current) {
-      setTrainSummary(`中断 — ${processedCount}/${trainableFiles.length}件処理（${totalSamples}サンプル）`);
-      setTrainPhase('aborted');
-    } else {
-      setTrainSummary(`完了 — ${processedCount}件処理（計${totalSamples}サンプル）`);
-      setTrainPhase('done');
+      setTrainSummary('中断しました'); setTrainPhase('aborted'); return;
     }
+    await runTraining(logs);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [driveToken, trainableFiles]);
+  }, [driveToken, trainableFiles, runTraining]);
 
   // ── Video overlay ────────────────────────────────────────────────────────
   const [videoUrl, setVideoUrl]     = useState<string | null>(null);
@@ -885,7 +826,7 @@ export function AnnotationTool() {
               {(trainPhase === 'done' || trainPhase === 'aborted' || trainPhase === 'error') && (
                 <>
                   {/* Drive に対象ファイルなし → ローカル選択フォールバック */}
-                  {trainPhase === 'done' && trainSummary === '新規ファイルなし' && (
+                  {trainPhase === 'done' && trainSummary === '対象ファイルなし' && (
                     <button
                       onClick={() => { setTrainPhase('idle'); setTrainLog(''); setTrainSummary(''); localTrainInputRef.current?.click(); }}
                       style={{
@@ -902,21 +843,6 @@ export function AnnotationTool() {
                     border: '1px solid #446', color: '#aab', borderRadius: 6, cursor: 'pointer',
                   }}>
                     閉じる
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm('学習済み履歴をリセットしますか？\n次回Train時にすべてのファイルが再度対象になります。')) {
-                        localStorage.removeItem(TRAINED_KEY);
-                        setTrainPhase('idle'); setTrainLog(''); setTrainSummary('');
-                      }
-                    }}
-                    style={{
-                      flex: 1, padding: '8px 0', background: '#1a0a0a',
-                      border: '1px solid #663333', color: '#cc6666', borderRadius: 6, cursor: 'pointer',
-                      fontSize: 11,
-                    }}
-                  >
-                    履歴リセット
                   </button>
                 </>
               )}

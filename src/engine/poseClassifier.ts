@@ -163,6 +163,46 @@ export async function loadModel(): Promise<LayersModel | null> {
   }
 }
 
+/** モデルを JSON 文字列にシリアライズ（Drive 保存用）*/
+export async function modelToJson(model: LayersModel): Promise<string> {
+  const tf = await import('@tensorflow/tfjs');
+  let artifacts: import('@tensorflow/tfjs').io.ModelArtifacts | null = null;
+
+  await model.save(tf.io.withSaveHandler(async (a) => {
+    artifacts = a;
+    return { modelArtifactsInfo: { dateSaved: new Date(), modelTopologyType: 'JSON' as const } };
+  }));
+
+  if (!artifacts) throw new Error('モデルのシリアライズに失敗しました');
+  const a = artifacts as import('@tensorflow/tfjs').io.ModelArtifacts;
+
+  // weightData (ArrayBuffer) を base64 に変換
+  const weightB64 = a.weightData
+    ? btoa(String.fromCharCode(...new Uint8Array(a.weightData as ArrayBuffer)))
+    : null;
+
+  return JSON.stringify({ modelTopology: a.modelTopology, weightSpecs: a.weightSpecs, weightData: weightB64 });
+}
+
+/** JSON 文字列からモデルを復元（Drive 取得後）*/
+export async function modelFromJson(json: string): Promise<LayersModel> {
+  const tf = await import('@tensorflow/tfjs');
+  const data = JSON.parse(json) as { modelTopology: unknown; weightSpecs: unknown; weightData: string | null };
+
+  const weightData = data.weightData
+    ? Uint8Array.from(atob(data.weightData), c => c.charCodeAt(0)).buffer
+    : new ArrayBuffer(0);
+
+  const model = await tf.loadLayersModel(tf.io.fromMemory(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    data.modelTopology as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [{ paths: ['weights'], weights: data.weightSpecs }] as any,
+    weightData,
+  ));
+  return model as unknown as LayersModel;
+}
+
 /** 同期推論: poses[0] が Leader である確率 (0–1) を返す */
 export function predictLeaderProbSync(
   model: LayersModel,

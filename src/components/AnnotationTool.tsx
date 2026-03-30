@@ -6,7 +6,7 @@ import type {
 import { POSE_CONNECTIONS } from '../types/pose';
 import { requestDriveWriteToken, getStoredToken } from '../engine/googleAuth';
 import { findOrCreateFolder, uploadJsonFile, listFilesInFolder, fetchFileBlob, DriveApiError } from '../engine/googleDrive';
-import { buildTrainingData, trainModel, saveModel, loadModel } from '../engine/poseClassifier';
+import { buildTrainingData, trainModel, saveModel, loadModel, modelToJson } from '../engine/poseClassifier';
 import styles from './AnnotationTool.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -142,6 +142,24 @@ export function AnnotationTool() {
     localStorage.setItem(TRAINED_KEY, JSON.stringify([...s]));
   };
 
+  const MODEL_DRIVE_FILENAME = 'salsa_role_model.json';
+
+  // 学習済みモデルを IndexedDB + Drive に保存
+  const saveModelToDriveIfConnected = useCallback(async (model: import('../engine/poseClassifier').RoleModel) => {
+    await saveModel(model);
+    if (!driveToken) return;
+    try {
+      setTrainLog(prev => prev + '\nDrive にモデルをアップロード中…');
+      const json = await modelToJson(model);
+      const folderId = await findOrCreateFolder(driveToken, DRIVE_FOLDER);
+      await uploadJsonFile(driveToken, folderId, MODEL_DRIVE_FILENAME, json);
+      setTrainLog(prev => prev + '\nDrive アップロード完了 ✓');
+    } catch {
+      setTrainLog(prev => prev + '\nDrive アップロード失敗（ローカルには保存済）');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveToken]);
+
   // ── ローカルファイルから直接学習（Drive未使用 or フォールバック）
   const handleTrainFromLocal = useCallback(async (files: FileList) => {
     abortRef.current = false;
@@ -180,7 +198,7 @@ export function AnnotationTool() {
             `Epoch ${epoch}/${total}  loss=${loss.toFixed(4)}  acc=${(acc * 100).toFixed(1)}%`
           );
         }, () => abortRef.current);
-        await saveModel(model);
+        await saveModelToDriveIfConnected(model);
         markTrained(file.name);
         processedCount++;
         totalSamples += sampleCount;
@@ -280,7 +298,7 @@ export function AnnotationTool() {
           );
         }, () => abortRef.current);
 
-        await saveModel(model);
+        await saveModelToDriveIfConnected(model);
         markTrained(file.name);
         processedCount++;
         totalSamples += sampleCount;

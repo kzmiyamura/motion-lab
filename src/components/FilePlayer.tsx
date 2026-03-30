@@ -7,7 +7,7 @@ import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hook
 import { useWakeLock } from '../hooks/useWakeLock';
 import { usePoseEstimation, type VizMode, type SalsaStyle } from '../hooks/usePoseEstimation';
 import { usePoseLogger } from '../hooks/usePoseLogger';
-import { loadModel, predictLeaderProbSync, type RoleModel } from '../engine/poseClassifier';
+import { loadModel, modelFromJson, predictLeaderProbSync, type RoleModel } from '../engine/poseClassifier';
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SequenceView } from './SequenceView';
@@ -133,10 +133,43 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mlTfRef = useRef<any>(null);
 
-  // モデルを IndexedDB から読み込む
+  const [mlModelLoaded, setMlModelLoaded] = useState(false);
+
+  // モデルを IndexedDB → Drive の順で読み込む
   useEffect(() => {
-    loadModel().then(m => { mlModelRef.current = m; });
     import('@tensorflow/tfjs').then(tf => { mlTfRef.current = tf; });
+
+    const MODEL_DRIVE_FILENAME = 'salsa_role_model.json';
+    const DRIVE_FOLDER_NAME    = 'salsa_annotations';
+
+    async function fetchModel() {
+      // 1) IndexedDB から試みる
+      const local = await loadModel();
+      if (local) { mlModelRef.current = local; setMlModelLoaded(true); return; }
+
+      // 2) Drive から取得（token があれば）
+      const token = getStoredToken();
+      if (!token || !CLIENT_ID) return;
+      try {
+        const { findOrCreateFolder, listFilesInFolder, fetchFileBlob } = await import('../engine/googleDrive');
+        const folderId = await findOrCreateFolder(token, DRIVE_FOLDER_NAME);
+        const files = await listFilesInFolder(token, folderId);
+        const modelFile = files.find(f => f.name === MODEL_DRIVE_FILENAME);
+        if (!modelFile) return;
+        const blob = await fetchFileBlob(token, modelFile.id);
+        const json = await blob.text();
+        const model = await modelFromJson(json);
+        // IndexedDB にキャッシュしておく
+        const { saveModel } = await import('../engine/poseClassifier');
+        await saveModel(model);
+        mlModelRef.current = model;
+        setMlModelLoaded(true);
+      } catch {
+        // Drive 取得失敗は無視
+      }
+    }
+
+    fetchModel();
   }, []);
 
   // ── ポーズロガー
@@ -808,11 +841,11 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (
           <button
             className={`${styles.vizModeBtn} ${mlMode ? styles.vizModeBtnActive : ''}`}
-            style={mlMode ? { color: '#cc88ff', borderColor: '#cc88ff' } : { color: '#887799' }}
-            onClick={() => { setMlMode(m => !m); setMlResult(null); }}
-            title={mlModelRef.current ? 'ML推論モード切替' : 'モデル未読み込み（Annotationで学習してください）'}
+            style={mlMode ? { color: '#cc88ff', borderColor: '#cc88ff' } : { color: mlModelLoaded ? '#aa77cc' : '#554466' }}
+            onClick={() => { if (mlModelLoaded) { setMlMode(m => !m); setMlResult(null); } }}
+            title={mlModelLoaded ? 'ML推論モード切替' : 'モデル未読み込み — Annotation画面でTrainしてください'}
           >
-            {mlModelRef.current ? (mlMode ? 'ML ON' : 'ML') : 'ML —'}
+            {mlModelLoaded ? (mlMode ? 'ML ON' : 'ML') : 'ML —'}
           </button>
         )}
         {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (

@@ -114,6 +114,7 @@ export function AnnotationTool() {
   const [trainSummary,    setTrainSummary]    = useState('');
   const [_driveFileCount, setDriveFileCount]  = useState(0);  // Drive の全 JSON 件数（デバッグ用）
   const abortRef = useRef(false);
+  const localTrainInputRef = useRef<HTMLInputElement>(null);
 
   const connectDrive = useCallback(async () => {
     if (!CLIENT_ID) { alert('VITE_GOOGLE_CLIENT_ID が未設定です'); return; }
@@ -134,6 +135,63 @@ export function AnnotationTool() {
     const s = getTrainedSet(); s.add(name);
     localStorage.setItem(TRAINED_KEY, JSON.stringify([...s]));
   };
+
+  // ── ローカルファイルから直接学習（Drive未使用 or フォールバック）
+  const handleTrainFromLocal = useCallback(async (files: FileList) => {
+    abortRef.current = false;
+    setTrainPhase('training');
+    setTrainEpochPct(0);
+    setTrainFileIdx(0);
+    let processedCount = 0;
+    let totalSamples = 0;
+
+    const fileArray = Array.from(files);
+    for (let i = 0; i < fileArray.length; i++) {
+      if (abortRef.current) break;
+      const file = fileArray[i];
+      setTrainLog(`(${i + 1}/${fileArray.length}) ${file.name} を読み込み中…`);
+      setTrainFileIdx(i);
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text) as AnnotatedPoseLog;
+        if (parsed.version !== 'salsa_annotated_v1') {
+          setTrainLog(`スキップ: ${file.name} (salsa_annotated_v1 形式ではありません)`);
+          await new Promise(r => setTimeout(r, 400));
+          continue;
+        }
+        const { xs, ys, sampleCount } = buildTrainingData([parsed]);
+        if (sampleCount < 6) {
+          setTrainLog(`サンプル不足(${sampleCount})、スキップ: ${file.name}`);
+          await new Promise(r => setTimeout(r, 400));
+          continue;
+        }
+        setTrainLog(`(${i + 1}/${fileArray.length}) ${file.name} — ${sampleCount}サンプル 学習中…`);
+        const model = await trainModel(xs, ys, (epoch, total, loss, acc) => {
+          setTrainEpochPct(Math.round((epoch / total) * 100));
+          setTrainLog(
+            `(${i + 1}/${fileArray.length}) ${file.name}\n` +
+            `Epoch ${epoch}/${total}  loss=${loss.toFixed(4)}  acc=${(acc * 100).toFixed(1)}%`
+          );
+        }, () => abortRef.current);
+        await saveModel(model);
+        markTrained(file.name);
+        processedCount++;
+        totalSamples += sampleCount;
+      } catch (e) {
+        setTrainLog(`エラー(${file.name}): ${e instanceof Error ? e.message : String(e)}`);
+        await new Promise(r => setTimeout(r, 800));
+      }
+    }
+
+    if (abortRef.current) {
+      setTrainSummary(`中断 — ${processedCount}/${fileArray.length}件処理（${totalSamples}サンプル）`);
+      setTrainPhase('aborted');
+    } else {
+      setTrainSummary(`完了 — ${processedCount}件処理（計${totalSamples}サンプル）`);
+      setTrainPhase('done');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Step1: Drive から未学習ファイルを取得してconfirmモーダルを表示
   const handleTrainOpen = useCallback(async () => {
@@ -570,11 +628,16 @@ export function AnnotationTool() {
           <button
             className={styles.loadBtn}
             style={{ color: '#cc88ff', borderColor: '#664488' }}
-            onClick={handleTrainOpen}
-            title="Drive の未学習アノテーション JSON を取得して ML モデルを学習"
+            onClick={driveToken ? handleTrainOpen : () => localTrainInputRef.current?.click()}
+            title={driveToken ? 'Drive の未学習アノテーション JSON を取得して ML モデルを学習' : 'ローカルの salsa_annotated_v1_*.json を選択して学習'}
           >
             {trainPhase === 'done' ? 'Train ✓' : trainPhase === 'error' ? 'Train ✗' : 'Train'}
           </button>
+          <input
+            ref={localTrainInputRef}
+            type="file" accept=".json" multiple style={{ display: 'none' }}
+            onChange={e => { if (e.target.files?.length) { handleTrainFromLocal(e.target.files); e.target.value = ''; } }}
+          />
         </div>
       </header>
 
@@ -796,6 +859,19 @@ export function AnnotationTool() {
               )}
               {(trainPhase === 'done' || trainPhase === 'aborted' || trainPhase === 'error') && (
                 <>
+                  {/* Drive に対象ファイルなし → ローカル選択フォールバック */}
+                  {trainPhase === 'done' && trainSummary === '新規ファイルなし' && (
+                    <button
+                      onClick={() => { setTrainPhase('idle'); setTrainLog(''); setTrainSummary(''); localTrainInputRef.current?.click(); }}
+                      style={{
+                        width: '100%', padding: '8px 0', background: '#1a2a1a',
+                        border: '1px solid #446633', color: '#88cc88',
+                        borderRadius: 6, cursor: 'pointer', marginBottom: 4,
+                      }}
+                    >
+                      📂 端末のファイルを選択して学習
+                    </button>
+                  )}
                   <button onClick={() => { setTrainPhase('idle'); setTrainLog(''); setTrainSummary(''); }} style={{
                     flex: 1, padding: '8px 0', background: '#222',
                     border: '1px solid #446', color: '#aab', borderRadius: 6, cursor: 'pointer',

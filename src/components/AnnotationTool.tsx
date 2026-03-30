@@ -11,6 +11,7 @@ import styles from './AnnotationTool.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
 const DRIVE_FOLDER = 'salsa_annotations';
+const TRAINED_KEY  = 'salsa_trained_files';
 
 
 // ── 描画カラー ────────────────────────────────────────────────────────────
@@ -111,6 +112,7 @@ export function AnnotationTool() {
   const [trainEpochPct,   setTrainEpochPct]   = useState(0);  // 0–100
   const [trainLog,        setTrainLog]        = useState('');
   const [trainSummary,    setTrainSummary]    = useState('');
+  const [_driveFileCount, setDriveFileCount]  = useState(0);  // Drive の全 JSON 件数（デバッグ用）
   const abortRef = useRef(false);
 
   const connectDrive = useCallback(async () => {
@@ -124,7 +126,6 @@ export function AnnotationTool() {
   }, []);
 
   // 学習済みファイル名を localStorage で管理
-  const TRAINED_KEY = 'salsa_trained_files';
   const getTrainedSet = (): Set<string> => {
     try { return new Set(JSON.parse(localStorage.getItem(TRAINED_KEY) ?? '[]')); }
     catch { return new Set(); }
@@ -142,12 +143,21 @@ export function AnnotationTool() {
     try {
       const folderId = await findOrCreateFolder(driveToken, DRIVE_FOLDER);
       const files = await listFilesInFolder(driveToken, folderId);
+      setDriveFileCount(files.length);
       const trained = getTrainedSet();
       const untrained = files.filter(f =>
         f.name.startsWith('salsa_annotated_v1') && !trained.has(f.name)
       );
+      const alreadyTrained = files.filter(f =>
+        f.name.startsWith('salsa_annotated_v1') && trained.has(f.name)
+      );
       if (untrained.length === 0) {
-        setTrainLog('未学習のファイルはありません。すべて学習済みです。');
+        const nonAnnotated = files.filter(f => !f.name.startsWith('salsa_annotated_v1'));
+        let msg = `Drive に ${files.length} 件のファイルがあります。\n`;
+        if (alreadyTrained.length > 0) msg += `学習済み: ${alreadyTrained.length} 件\n`;
+        if (nonAnnotated.length > 0) msg += `annotated_v1 以外(学習対象外): ${nonAnnotated.length} 件\n`;
+        msg += '\n未学習の salsa_annotated_v1_*.json がありません。\nAnnotation 画面で Export してください。';
+        setTrainLog(msg);
         setTrainPhase('done');
         setTrainSummary('新規ファイルなし');
         return;
@@ -785,12 +795,29 @@ export function AnnotationTool() {
                 </button>
               )}
               {(trainPhase === 'done' || trainPhase === 'aborted' || trainPhase === 'error') && (
-                <button onClick={() => { setTrainPhase('idle'); setTrainLog(''); setTrainSummary(''); }} style={{
-                  flex: 1, padding: '8px 0', background: '#222',
-                  border: '1px solid #446', color: '#aab', borderRadius: 6, cursor: 'pointer',
-                }}>
-                  閉じる
-                </button>
+                <>
+                  <button onClick={() => { setTrainPhase('idle'); setTrainLog(''); setTrainSummary(''); }} style={{
+                    flex: 1, padding: '8px 0', background: '#222',
+                    border: '1px solid #446', color: '#aab', borderRadius: 6, cursor: 'pointer',
+                  }}>
+                    閉じる
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm('学習済み履歴をリセットしますか？\n次回Train時にすべてのファイルが再度対象になります。')) {
+                        localStorage.removeItem(TRAINED_KEY);
+                        setTrainPhase('idle'); setTrainLog(''); setTrainSummary('');
+                      }
+                    }}
+                    style={{
+                      flex: 1, padding: '8px 0', background: '#1a0a0a',
+                      border: '1px solid #663333', color: '#cc6666', borderRadius: 6, cursor: 'pointer',
+                      fontSize: 11,
+                    }}
+                  >
+                    履歴リセット
+                  </button>
+                </>
               )}
             </div>
           </div>

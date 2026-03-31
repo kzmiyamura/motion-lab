@@ -838,12 +838,19 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
             ))}
           </div>
         )}
-        {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (
+        {source.isVideo && fileViewMode === 'video' && (
           <button
             className={`${styles.vizModeBtn} ${mlMode ? styles.vizModeBtnActive : ''}`}
             style={mlMode ? { color: '#cc88ff', borderColor: '#cc88ff' } : { color: mlModelLoaded ? '#aa77cc' : '#554466' }}
-            onClick={() => { if (mlModelLoaded) { setMlMode(m => !m); setMlResult(null); } }}
-            title={mlModelLoaded ? 'ML推論モード切替' : 'モデル未読み込み — Annotation画面でTrainしてください'}
+            onClick={() => {
+              if (!mlModelLoaded) return;
+              const next = !mlMode;
+              setMlMode(next);
+              setMlResult(null);
+              // 骨格がOFFのままだとMLの色が反映されないので自動でONにする
+              if (next && vizMode === 'off') setVizMode('full');
+            }}
+            title={mlModelLoaded ? 'ML推論モード切替（骨格OFFの場合は自動でONにします）' : 'モデル未読み込み — Annotation画面でTrainしてください'}
           >
             {mlModelLoaded ? (mlMode ? 'ML ON' : 'ML') : 'ML —'}
           </button>

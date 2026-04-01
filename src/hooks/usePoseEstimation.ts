@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { predictLeaderProbSync } from '../engine/poseClassifier';
 
 // @mediapipe/tasks-vision の exports 形式が非標準のため型を自前定義
 interface NormalizedLandmark { x: number; y: number; z: number; visibility?: number; }
@@ -101,6 +102,7 @@ export interface UsePoseEstimationResult {
   exportDebugLog: (videoName?: string) => void;
   debugInfo: PoseDebugInfo | null;
   roleConfidenceLow: boolean;  // Safety Guard: 初期判定の確信度が低い（動き出し優先）
+  mlResult: { leaderSlot: 0 | 1; prob: number } | null;  // RAFループ内のML推論結果
 }
 
 // ── 定数 ─────────────────────────────────────────────────────────────────
@@ -1529,7 +1531,10 @@ export function usePoseEstimation(
   salsaStyle: SalsaStyle = 'on1',
   heightLeaderHint = false,   // true = 背が高い方をリーダーとして重み付け
   onRawPoses?: (poses: Array<{ landmarks: NormalizedLandmark[] }>, videoTime: number) => void,
-  mlLeaderSlot: 0 | 1 | null = null,  // ML推論によるロール強制上書き（null=ルールベース）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mlModel: import('../engine/poseClassifier').RoleModel | null = null,  // ML推論モデル（null=ルールベース）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mlTf: any = null,  // TensorFlow.js インスタンス
 ): UsePoseEstimationResult {
   const modeRef      = useRef<VizMode>(mode);
   modeRef.current    = mode;
@@ -1537,8 +1542,10 @@ export function usePoseEstimation(
   bpmRef.current     = bpm;
   const mirroredRef  = useRef(isMirrored);
   mirroredRef.current = isMirrored;
-  const mlLeaderSlotRef = useRef<0 | 1 | null>(mlLeaderSlot);
-  mlLeaderSlotRef.current = mlLeaderSlot;
+  const mlModelRef   = useRef(mlModel);
+  mlModelRef.current = mlModel;
+  const mlTfRef      = useRef(mlTf);
+  mlTfRef.current    = mlTf;
   const styleRef     = useRef<SalsaStyle>(salsaStyle);
   styleRef.current   = salsaStyle;
 
@@ -1552,6 +1559,10 @@ export function usePoseEstimation(
   // ── ロックオン状態
   const lockedRef = useRef<Centroid | null>(null);
   const [isLocked, setIsLocked] = useState(false);
+
+  // ── ML推論結果（RAFループ内で直接更新）
+  const [mlResult, setMlResult] = useState<{ leaderSlot: 0 | 1; prob: number } | null>(null);
+  const mlResultRef = useRef<{ leaderSlot: 0 | 1; prob: number } | null>(null);
 
   // ── デバッグ用タップ座標（CSS transform 逆変換済み）
   const debugTapCanvasRef = useRef<{ x: number; y: number } | null>(null);
@@ -2687,12 +2698,22 @@ export function usePoseEstimation(
                     }
                   }
 
-                  // ── ML ロール上書き（mlLeaderSlot が指定されている場合）
-                  if (mlLeaderSlotRef.current !== null && slots[0].detectedIdx >= 0 && slots[1].detectedIdx >= 0) {
-                    const ls = mlLeaderSlotRef.current;
-                    const fs = (1 - ls) as 0 | 1;
-                    personRoles.set(slots[ls].detectedIdx, 'leader');
-                    personRoles.set(slots[fs].detectedIdx, 'follower');
+                  // ── ML ロール上書き（モデルが渡されている場合、RAFループ内で同期推論）
+                  if (mlModelRef.current && mlTfRef.current && si0 >= 0 && si1 >= 0) {
+                    try {
+                      const p0 = { landmarks: all[si0] };
+                      const p1 = { landmarks: all[si1] };
+                      const prob = predictLeaderProbSync(mlModelRef.current, mlTfRef.current, p0, p1);
+                      const ls: 0 | 1 = prob >= 0.5 ? 0 : 1;
+                      const fs: 0 | 1 = (1 - ls) as 0 | 1;
+                      personRoles.set(slots[ls].detectedIdx, 'leader');
+                      personRoles.set(slots[fs].detectedIdx, 'follower');
+                      const newResult = { leaderSlot: ls, prob: ls === 0 ? prob : 1 - prob };
+                      mlResultRef.current = newResult;
+                      setMlResult(newResult);
+                    } catch { /* 推論失敗は無視 */ }
+                  } else if (!mlModelRef.current) {
+                    if (mlResultRef.current !== null) { mlResultRef.current = null; setMlResult(null); }
                   }
 
                   // ── 描画
@@ -2904,5 +2925,5 @@ export function usePoseEstimation(
     };
   }, [enabled, videoRef, canvasRef]);
 
-  return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles, roleDetected, swapRoles, annotations, exportDebugLog, debugInfo, roleConfidenceLow };
+  return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles, roleDetected, swapRoles, annotations, exportDebugLog, debugInfo, roleConfidenceLow, mlResult };
 }

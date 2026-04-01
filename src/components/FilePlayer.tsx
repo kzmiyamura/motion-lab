@@ -7,7 +7,7 @@ import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hook
 import { useWakeLock } from '../hooks/useWakeLock';
 import { usePoseEstimation, type VizMode, type SalsaStyle } from '../hooks/usePoseEstimation';
 import { usePoseLogger } from '../hooks/usePoseLogger';
-import { loadModel, modelFromJson, predictLeaderProbSync, type RoleModel } from '../engine/poseClassifier';
+import { loadModel, modelFromJson, type RoleModel } from '../engine/poseClassifier';
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SequenceView } from './SequenceView';
@@ -128,7 +128,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
 
   // ── ML ロール推論
   const [mlMode, setMlMode] = useState(false);
-  const [mlResult, setMlResult] = useState<{ leaderSlot: 0 | 1; prob: number } | null>(null);
   const mlModelRef = useRef<RoleModel | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mlTfRef = useRef<any>(null);
@@ -175,25 +174,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   // ── ポーズロガー
   const { isRecording, frameCount, startRecording, stopRecording, exportJson, getLog, onRawPoses } = usePoseLogger();
 
-  // onRawPoses + ML 推論をまとめたコールバック
-  const combinedRawPoses = useCallback((
-    poses: Parameters<typeof onRawPoses>[0],
-    videoTime: Parameters<typeof onRawPoses>[1],
-  ) => {
-    onRawPoses(poses, videoTime);
-    // ML モードかつモデル読み込み済みのときのみ推論
-    if (mlMode && mlModelRef.current && mlTfRef.current && poses.length >= 2) {
-      const p0 = poses[0], p1 = poses[1];
-      if (p0.landmarks.length >= 25 && p1.landmarks.length >= 25) {
-        const prob = predictLeaderProbSync(mlModelRef.current, mlTfRef.current, p0, p1);
-        const leaderSlot: 0 | 1 = prob >= 0.5 ? 0 : 1;
-        setMlResult({ leaderSlot, prob: leaderSlot === 0 ? prob : 1 - prob });
-      }
-    } else if (!mlMode) {
-      setMlResult(null);
-    }
-  }, [onRawPoses, mlMode]);
-
   const {
     lockAt, unlock, isLocked,
     sequence, clearSequence,
@@ -201,11 +181,13 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     roleDetected, swapRoles,
     annotations, exportDebugLog,
     debugInfo,
+    mlResult,
   } = usePoseEstimation(
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle, heightLeaderHint,
-    vizMode !== 'off' ? combinedRawPoses : undefined,
-    mlMode && mlResult ? mlResult.leaderSlot : null,  // ML ON時はロール色をML判断で上書き
+    vizMode !== 'off' ? onRawPoses : undefined,
+    mlMode ? mlModelRef.current : null,   // ML ON時のみモデルを渡す → RAFループ内で同期推論
+    mlTfRef.current,
   );
 
   // ── BPM 計測（音声モード）
@@ -846,7 +828,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               if (!mlModelLoaded) return;
               const next = !mlMode;
               setMlMode(next);
-              setMlResult(null);
               // 骨格がOFFのままだとMLの色が反映されないので自動でONにする
               if (next && vizMode === 'off') setVizMode('full');
             }}

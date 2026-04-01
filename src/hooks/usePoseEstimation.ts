@@ -2699,6 +2699,18 @@ export function usePoseEstimation(
                   }
 
                   // ── ML ロール上書き（モデルが渡されている場合、RAFループ内で同期推論）
+                  // デバッグ: 毎フレームの状態を1秒に1回ログ
+                  if (!('_mlDbgT' in (globalThis as any))) (globalThis as any)._mlDbgT = 0;
+                  const _now = Date.now();
+                  if (_now - (globalThis as any)._mlDbgT > 1000) {
+                    (globalThis as any)._mlDbgT = _now;
+                    console.log('[ML_DBG]', {
+                      hasModel: !!mlModelRef.current,
+                      hasTf: !!mlTfRef.current,
+                      si0, si1,
+                      allLen: all.length,
+                    });
+                  }
                   if (mlModelRef.current && mlTfRef.current && si0 >= 0 && si1 >= 0) {
                     try {
                       const p0 = { landmarks: all[si0] };
@@ -2711,7 +2723,8 @@ export function usePoseEstimation(
                       const newResult = { leaderSlot: ls, prob: ls === 0 ? prob : 1 - prob };
                       mlResultRef.current = newResult;
                       setMlResult(newResult);
-                    } catch { /* 推論失敗は無視 */ }
+                      console.log('[ML_RUN]', { prob: prob.toFixed(3), ls, detIdx0: slots[0].detectedIdx, detIdx1: slots[1].detectedIdx });
+                    } catch (e) { console.error('[ML_ERR]', e); }
                   } else if (!mlModelRef.current) {
                     if (mlResultRef.current !== null) { mlResultRef.current = null; setMlResult(null); }
                   }

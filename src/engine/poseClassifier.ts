@@ -212,11 +212,12 @@ export function predictLeaderProbSync(
   p1: Pose,
 ): number {
   const features = extractFeatures(p0, p1);
-  const input = tf.tensor2d([features], [1, FEATURE_SIZE]);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const output = (model as any).predict(input) as { dataSync(): Float32Array; dispose(): void };
-  const probs = output.dataSync();
-  input.dispose();
-  output.dispose();
-  return probs[0];
+  let prob = 0.5;
+  tf.tidy(() => {
+    const input = tf.tensor2d([features], [1, FEATURE_SIZE]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const output = (model as any).predict(input) as { dataSync(): Float32Array };
+    prob = output.dataSync()[0];
+  });
+  return prob;
 }

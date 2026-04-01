@@ -925,6 +925,7 @@ function drawRoleBadge(
   role: PersonRole,
   cw: number,
   mirrored: boolean,
+  mlProb: number | null = null,
 ) {
   if (!role) return;
   const nose = landmarks[0];
@@ -932,7 +933,9 @@ function drawRoleBadge(
   const px = lb.offsetX + nose.x * lb.renderW;
   const py = lb.offsetY + nose.y * lb.renderH - 24;
   const color = role === 'leader' ? '#0066ff' : '#ff00cc';
-  const label = role === 'leader' ? 'LEADER' : 'FOLLOWER';
+  const label = mlProb !== null
+    ? `${role === 'leader' ? 'L' : 'F'} (${Math.round(mlProb * 100)}%)`
+    : (role === 'leader' ? 'LEADER' : 'FOLLOWER');
   ctx.save();
   ctx.font = 'bold 11px monospace';
   ctx.fillStyle = color;
@@ -1563,6 +1566,7 @@ export function usePoseEstimation(
   // ── ML推論結果（RAFループ内で直接更新）
   const [mlResult, setMlResult] = useState<{ leaderSlot: 0 | 1; prob: number } | null>(null);
   const mlResultRef = useRef<{ leaderSlot: 0 | 1; prob: number } | null>(null);
+  const mlFrameCounterRef = useRef(0); // 5フレームに1回推論するためのカウンタ
 
   // ── デバッグ用タップ座標（CSS transform 逆変換済み）
   const debugTapCanvasRef = useRef<{ x: number; y: number } | null>(null);
@@ -2698,20 +2702,27 @@ export function usePoseEstimation(
                     }
                   }
 
-                  // ── ML ロール上書き（モデルが渡されている場合、RAFループ内で同期推論）
+                  // ── ML ロール上書き（モデルが渡されている場合、5フレームに1回同期推論）
                   if (mlModelRef.current && mlTfRef.current && si0 >= 0 && si1 >= 0) {
-                    try {
-                      const p0 = { landmarks: all[si0] };
-                      const p1 = { landmarks: all[si1] };
-                      const prob = predictLeaderProbSync(mlModelRef.current, mlTfRef.current, p0, p1);
-                      const ls: 0 | 1 = prob >= 0.5 ? 0 : 1;
-                      const fs: 0 | 1 = (1 - ls) as 0 | 1;
-                      personRoles.set(slots[ls].detectedIdx, 'leader');
-                      personRoles.set(slots[fs].detectedIdx, 'follower');
-                      const newResult = { leaderSlot: ls, prob: ls === 0 ? prob : 1 - prob };
-                      mlResultRef.current = newResult;
-                      setMlResult(newResult);
-                    } catch (e) { /* 推論エラーは無視してルールベースにフォールバック */ }
+                    mlFrameCounterRef.current = (mlFrameCounterRef.current + 1) % 5;
+                    if (mlFrameCounterRef.current === 0) {
+                      try {
+                        const p0 = { landmarks: all[si0] };
+                        const p1 = { landmarks: all[si1] };
+                        const prob = predictLeaderProbSync(mlModelRef.current, mlTfRef.current, p0, p1);
+                        const ls: 0 | 1 = prob >= 0.5 ? 0 : 1;
+                        const newResult = { leaderSlot: ls, prob: ls === 0 ? prob : 1 - prob };
+                        mlResultRef.current = newResult;
+                        setMlResult(newResult);
+                      } catch (e) { /* 推論エラーは無視してルールベースにフォールバック */ }
+                    }
+                    // 推論結果をキャッシュから適用（5フレームすべてで色を維持）
+                    if (mlResultRef.current) {
+                      const { leaderSlot } = mlResultRef.current;
+                      const followerSlot: 0 | 1 = (1 - leaderSlot) as 0 | 1;
+                      personRoles.set(slots[leaderSlot].detectedIdx, 'leader');
+                      personRoles.set(slots[followerSlot].detectedIdx, 'follower');
+                    }
                   } else if (!mlModelRef.current) {
                     if (mlResultRef.current !== null) { mlResultRef.current = null; setMlResult(null); }
                   }
@@ -2726,7 +2737,8 @@ export function usePoseEstimation(
                     }
                     drawStepTrail(ctx, ankleHistoryRef.current, lb, true);
                     for (let i = 0; i < all.length; i++) {
-                      drawRoleBadge(ctx, all[i], lb, personRoles.get(i) ?? null, cw, mirrored);
+                      { const _r = personRoles.get(i) ?? null; const _mlp = mlResultRef.current && _r ? (_r === 'leader' ? mlResultRef.current.prob : 1 - mlResultRef.current.prob) : null;
+                        drawRoleBadge(ctx, all[i], lb, _r, cw, mirrored, _mlp); }
                       { const _si = slots.findIndex(sl => sl.detectedIdx === i);
                         drawFaceStatusBadge(ctx, all[i], lb, cw, mirrored,
                           !faceModelsLoadedRef.current ? 'loading' : faceLockedRef.current ? 'locked' : 'scanning',
@@ -2746,7 +2758,8 @@ export function usePoseEstimation(
                       }
                     }
                     for (let i = 0; i < all.length; i++) {
-                      drawRoleBadge(ctx, all[i], lb, personRoles.get(i) ?? null, cw, mirrored);
+                      { const _r = personRoles.get(i) ?? null; const _mlp = mlResultRef.current && _r ? (_r === 'leader' ? mlResultRef.current.prob : 1 - mlResultRef.current.prob) : null;
+                        drawRoleBadge(ctx, all[i], lb, _r, cw, mirrored, _mlp); }
                       { const _si = slots.findIndex(sl => sl.detectedIdx === i);
                         drawFaceStatusBadge(ctx, all[i], lb, cw, mirrored,
                           !faceModelsLoadedRef.current ? 'loading' : faceLockedRef.current ? 'locked' : 'scanning',
@@ -2767,7 +2780,8 @@ export function usePoseEstimation(
                       }
                     }
                     for (let i = 0; i < all.length; i++) {
-                      drawRoleBadge(ctx, all[i], lb, personRoles.get(i) ?? null, cw, mirrored);
+                      { const _r = personRoles.get(i) ?? null; const _mlp = mlResultRef.current && _r ? (_r === 'leader' ? mlResultRef.current.prob : 1 - mlResultRef.current.prob) : null;
+                        drawRoleBadge(ctx, all[i], lb, _r, cw, mirrored, _mlp); }
                       { const _si = slots.findIndex(sl => sl.detectedIdx === i);
                         drawFaceStatusBadge(ctx, all[i], lb, cw, mirrored,
                           !faceModelsLoadedRef.current ? 'loading' : faceLockedRef.current ? 'locked' : 'scanning',

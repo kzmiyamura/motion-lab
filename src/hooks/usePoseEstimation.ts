@@ -1874,14 +1874,6 @@ export function usePoseEstimation(
                   }
                 }
 
-                // ── ロガーへ生ランドマークを渡す（計算処理なし・生座標のみ）
-                if (onRawPosesRef.current && all.length > 0) {
-                  onRawPosesRef.current(
-                    all.map(lm => ({ landmarks: lm })),
-                    video.currentTime,
-                  );
-                }
-
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
                 if (all.length > 0) {
@@ -2099,6 +2091,16 @@ export function usePoseEstimation(
                   // スロット自身に「今フレームで誰を指しているか」を記憶させる
                   slots[0].detectedIdx = si0;
                   slots[1].detectedIdx = si1;
+
+                  // ── ロガー・ML へ生ランドマークをスロット順で渡す
+                  // スロット順で渡すことで ML の leaderSlot がスロットインデックスと一致する
+                  if (onRawPosesRef.current) {
+                    const slotPoses: { landmarks: NormalizedLandmark[] }[] = [];
+                    if (si0 >= 0) slotPoses.push({ landmarks: all[si0] });
+                    if (si1 >= 0) slotPoses.push({ landmarks: all[si1] });
+                    if (slotPoses.length > 0) onRawPosesRef.current(slotPoses, video.currentTime);
+                  }
+
                   const personRoles = new Map<number, PersonRole>();
 
                   // ── 顔性別判定スキャン（非同期 fire-and-forget、500msごと）────────────

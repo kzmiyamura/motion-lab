@@ -176,6 +176,30 @@ export function YouTubeControl({
     hideTimerRef.current = setTimeout(() => setControlsVisible(false), 3000);
   }, []);
 
+  // ── シーク確定：ネイティブ change イベント ────────────────────────────
+  // React の onChange は native "input" イベントにマップされるが、
+  // iOS Safari でのタップや素早いスワイプでは "input" が touchend より
+  // 後に発火するため onTouchEnd で読む値が古くなる。
+  // native "change" イベントはドラッグ終了・タップどちらでも
+  // 値確定後に必ず発火するため、これを seekTo の唯一のトリガーにする。
+  const showControlsRef = useRef(showControls);
+  showControlsRef.current = showControls;
+  useEffect(() => {
+    const input = seekInputRef.current;
+    if (!input) return;
+    const handler = () => {
+      const val = Number(input.value);
+      setSeekPos(val);
+      try { playerRef.current?.seekTo(val, true); } catch { /* ignore */ }
+      isSeekingRef.current = false;
+      showControlsRef.current();
+    };
+    input.addEventListener('change', handler);
+    return () => input.removeEventListener('change', handler);
+  // seekInputRef / playerRef / isSeekingRef はすべて安定した ref なので deps 空で問題なし
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── BPM / Audio ───────────────────────────────────────────────────────
   const handleMeasuredBpm = useCallback((measured: number) => {
     setBaseBpm(measured);
@@ -337,23 +361,9 @@ export function YouTubeControl({
             if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
           }}
           onChange={(e) => {
-            // 時刻テキスト表示だけ更新（DOM 値は uncontrolled のまま維持）
+            // ドラッグ中の時刻テキスト表示のみ更新。
+            // seekTo の呼び出しはネイティブ change イベントリスナーが担当する。
             setSeekPos(Number(e.target.value));
-          }}
-          onPointerUp={(e) => {
-            const val = Number((e.target as HTMLInputElement).value);
-            setSeekPos(val);
-            try { playerRef.current?.seekTo(val, true); } catch { /* ignore */ }
-            isSeekingRef.current = false;
-            showControls();
-          }}
-          onTouchEnd={(e) => {
-            // iOS Safari では onPointerUp が発火しないため onTouchEnd をフォールバックに使用
-            const val = Number((e.target as HTMLInputElement).value);
-            setSeekPos(val);
-            try { playerRef.current?.seekTo(val, true); } catch { /* ignore */ }
-            isSeekingRef.current = false;
-            showControls();
           }}
           className={styles.seekSlider}
           aria-label="シーク"

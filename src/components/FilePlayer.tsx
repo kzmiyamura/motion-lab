@@ -994,6 +994,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           type="range" min={60} max={220} step={1} value={sliderBpm}
           onChange={e => setSliderBpm(Number(e.target.value))}
           onPointerUp={e => commitBpm(Number((e.target as HTMLInputElement).value))}
+          onTouchEnd={e => commitBpm(Number((e.target as HTMLInputElement).value))}
           onKeyUp={e => commitBpm(Number((e.target as HTMLInputElement).value))}
           className={styles.bpmSlider}
         />

@@ -328,6 +328,15 @@ export function YouTubeControl({
             isSeekingRef.current = false;
             showControls();
           }}
+          onTouchEnd={(e) => {
+            // iOS Safari では <input type="range"> の onPointerUp が発火しないバグがある。
+            // onTouchEnd をフォールバックとして使い、seekTo と isSeekingRef リセットを保証する。
+            const val = Number((e.target as HTMLInputElement).value);
+            setSeekPos(val);
+            try { playerRef.current?.seekTo(val, true); } catch { /* ignore */ }
+            isSeekingRef.current = false;
+            showControls();
+          }}
           className={styles.seekSlider}
           aria-label="シーク"
           disabled={duration === 0}
@@ -610,6 +619,7 @@ export function YouTubeControl({
               value={sliderBpm}
               onChange={(e) => setSliderBpm(Number(e.target.value))}
               onPointerUp={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
+              onTouchEnd={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
               onKeyUp={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
               className={styles.bpmSlider}
               aria-label="BPM"

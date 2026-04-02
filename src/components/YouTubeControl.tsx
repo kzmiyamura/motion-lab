@@ -92,6 +92,7 @@ export function YouTubeControl({
   const playerRef = useRef<YouTubePlayer | null>(null);
   const playerReadyRef = useRef(false);
   const playerSectionRef = useRef<HTMLDivElement>(null);
+  const seekInputRef = useRef<HTMLInputElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setRateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayTapRef = useRef<(() => void) | undefined>(undefined) as MutableRefObject<(() => void) | undefined>;
@@ -121,6 +122,9 @@ export function YouTubeControl({
   }, [videoId]);
 
   // ── Seek position polling (500ms) ────────────────────────────────────
+  // seekPos（時刻テキスト表示用）と seekInputRef.value（スライダー DOM）を両方更新する。
+  // スライダーは uncontrolled なので ref で直接書き込み、
+  // React の再レンダリングがドラッグ中につまみ位置を上書きするのを防ぐ。
   useEffect(() => {
     const id = setInterval(() => {
       if (!playerReadyRef.current || !playerRef.current || isSeekingRef.current) return;
@@ -128,7 +132,11 @@ export function YouTubeControl({
         const cur = playerRef.current.getCurrentTime() ?? 0;
         const dur = playerRef.current.getDuration() ?? 0;
         setSeekPos(cur);
-        if (dur > 0) setDuration(dur);
+        if (seekInputRef.current) seekInputRef.current.value = String(cur);
+        if (dur > 0) {
+          setDuration(dur);
+          if (seekInputRef.current) seekInputRef.current.max = String(dur);
+        }
       } catch { /* ignore */ }
     }, 500);
     return () => clearInterval(id);
@@ -318,16 +326,20 @@ export function YouTubeControl({
       <div className={styles.seekRow}>
         <span className={styles.seekTime}>{formatTime(seekPos)}</span>
         <input
+          ref={seekInputRef}
           type="range"
           min={0}
           max={duration || 1}
           step={0.5}
-          value={seekPos}
+          defaultValue={0}
           onPointerDown={() => {
             isSeekingRef.current = true;
             if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
           }}
-          onChange={(e) => setSeekPos(Number(e.target.value))}
+          onChange={(e) => {
+            // 時刻テキスト表示だけ更新（DOM 値は uncontrolled のまま維持）
+            setSeekPos(Number(e.target.value));
+          }}
           onPointerUp={(e) => {
             const val = Number((e.target as HTMLInputElement).value);
             setSeekPos(val);
@@ -336,8 +348,7 @@ export function YouTubeControl({
             showControls();
           }}
           onTouchEnd={(e) => {
-            // iOS Safari では <input type="range"> の onPointerUp が発火しないバグがある。
-            // onTouchEnd をフォールバックとして使い、seekTo と isSeekingRef リセットを保証する。
+            // iOS Safari では onPointerUp が発火しないため onTouchEnd をフォールバックに使用
             const val = Number((e.target as HTMLInputElement).value);
             setSeekPos(val);
             try { playerRef.current?.seekTo(val, true); } catch { /* ignore */ }

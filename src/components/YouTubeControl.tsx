@@ -196,9 +196,10 @@ export function YouTubeControl({
     };
     input.addEventListener('change', handler);
     return () => input.removeEventListener('change', handler);
-  // seekInputRef / playerRef / isSeekingRef はすべて安定した ref なので deps 空で問題なし
+  // videoId が変わると <input> が mount/unmount されるため deps に含める
+  // その他の参照は安定した ref なので追加不要
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [videoId]);
 
   // ── BPM / Audio ───────────────────────────────────────────────────────
   const handleMeasuredBpm = useCallback((measured: number) => {

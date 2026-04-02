@@ -260,7 +260,14 @@ export function YouTubeControl({
 
   const ytOpts = useMemo(() => ({
     width: '100%', height: '100%',
-    playerVars: { autoplay: 0 as const, rel: 0 as const },
+    playerVars: {
+      autoplay: 0 as const,
+      rel: 0 as const,
+      // iOS Safari でインライン再生を強制する。
+      // これがないと AVPlayer（ネイティブ全画面）で再生され、
+      // IFrame API（seekTo / setPlaybackRate 等）が一切届かなくなる。
+      playsinline: 1 as const,
+    },
   }), []);
 
   const { scale, x, y } = video.zoom;

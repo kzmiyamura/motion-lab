@@ -196,10 +196,13 @@ export function YouTubeControl({
     };
     input.addEventListener('change', handler);
     return () => input.removeEventListener('change', handler);
-  // videoId が変わると <input> が mount/unmount されるため deps に含める
+  // <input> が mount/unmount されるトリガーを deps に含める:
+  //   videoId     : 動画ロード時に controls が現れる
+  //   playerSize  : theater 切替時に controls が別ラッパーへ移動しリマウントされる
+  //   isFullscreen: 全画面切替時も同様
   // その他の参照は安定した ref なので追加不要
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoId]);
+  }, [videoId, playerSize, isFullscreen]);
 
   // ── BPM / Audio ───────────────────────────────────────────────────────
   const handleMeasuredBpm = useCallback((measured: number) => {

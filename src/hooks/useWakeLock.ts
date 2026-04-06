@@ -3,22 +3,41 @@ import { useEffect, useRef, useCallback } from 'react';
 /**
  * 再生中に画面スリープ（省電力モード）を抑制する
  *
- * 2つのアプローチを同時に使用（どちらかが効けば OK）:
- *   1. Wake Lock API  — iOS 16.4+ / Chrome / Firefox
- *      - visibilitychange で解放後に再取得
- *      - 15 秒ごとのハートビートで静かに解放された場合も再取得
- *   2. NoSleep 動画   — 全デバイス共通（Wake Lock の補強）
- *      DOM に 1×1 px のミュート動画を流し続けることで
- *      iOS が「動画再生中」と認識しスクリーンスリープを抑制する
- *
- * @param active  true のとき Wake Lock を要求し、false で解放する
+ * 3層防衛:
+ *   1. Wake Lock API — iOS 16.4+ / Chrome 強制スリープ防止
+ *      5 秒ごとのハートビートで解放後も即再取得
+ *   2. Silent audio + Media Session — iOS に「メディア再生中」を明示
+ *      iOS は active audio session + MediaSession playing 状態を
+ *      「ユーザーがメディアを視聴中」と判断してスリープを抑制する
+ *      canvas captureStream は iOS が本物のメディアと認識しないため廃止
+ *   3. visibilitychange 再取得 — タブ非表示からの復帰時
  */
-export function useWakeLock(active: boolean) {
-  const sentinelRef = useRef<WakeLockSentinel | null>(null);
-  const activeRef   = useRef(active);
-  activeRef.current = active;
 
-  // ── Wake Lock API (iOS 16.4+, Chrome, Firefox) ───────────────────────
+/** 0.5 秒の無音 WAV Blob URL を生成（useSilentAudio と同じ手法） */
+function createSilentAudioUrl(): string {
+  const sr = 8000, samples = sr / 2; // 0.5 秒
+  const buf = new ArrayBuffer(44 + samples * 2);
+  const v = new DataView(buf);
+  const str = (off: number, s: string) =>
+    [...s].forEach((c, i) => v.setUint8(off + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); v.setUint32(4, 36 + samples * 2, true);
+  str(8, 'WAVE');
+  str(12, 'fmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, samples * 2, true);
+  for (let i = 44; i < buf.byteLength; i += 2)
+    v.setInt16(i, Math.round((Math.random() - 0.5) * 4), true); // ±2 LSB ≈ -84 dB
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+export function useWakeLock(active: boolean) {
+  const sentinelRef  = useRef<WakeLockSentinel | null>(null);
+  const activeRef    = useRef(active);
+  activeRef.current  = active;
+
+  // ── 1. Wake Lock API ─────────────────────────────────────────────────
 
   const acquire = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
@@ -28,7 +47,7 @@ export function useWakeLock(active: boolean) {
       sentinelRef.current.addEventListener('release', () => {
         sentinelRef.current = null;
       });
-    } catch { /* 非対応 or 権限拒否 — 無視 */ }
+    } catch { /* 非対応 or 権限拒否 */ }
   }, []);
 
   const release = useCallback(() => {
@@ -41,7 +60,7 @@ export function useWakeLock(active: boolean) {
     return release;
   }, [active, acquire, release]);
 
-  // タブが前面に戻ったとき再取得（非表示で自動解放されるため）
+  // visibilitychange で復帰時に再取得
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible' && activeRef.current) acquire();
@@ -50,65 +69,57 @@ export function useWakeLock(active: boolean) {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [acquire]);
 
-  // 15 秒ごとのハートビート：全画面切替等で静かに解放された場合も再取得する
-  // visibilitychange が発火しない状況（theater モード等）をカバー
+  // 5 秒ごとのハートビート（全画面切替等で静かに解放された場合も即再取得）
   useEffect(() => {
     const id = setInterval(() => {
       if (activeRef.current && !sentinelRef.current) acquire();
-    }, 15_000);
+    }, 5_000);
     return () => clearInterval(id);
   }, [acquire]);
 
-  // ── NoSleep 動画（全デバイス共通・Wake Lock の補強）─────────────────
-  // Wake Lock API の有無に関わらず常に使用する。
-  // ミュート + playsinline の動画が DOM で再生されている間、
-  // iOS は「メディア再生中」として画面スリープを抑制する。
+  // ── 2. Silent audio + Media Session ──────────────────────────────────
+  // canvas captureStream は iOS が本物のメディアと認識しないため使用しない。
+  // 代わりに silent WAV ループ再生 + MediaSession playing 状態を設定し、
+  // iOS の「メディア再生中」判定を確実にトリガーする。
 
-  const noSleepVideoRef = useRef<HTMLVideoElement | null>(null);
+  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const blobUrlRef     = useRef<string | null>(null);
 
+  // マウント時に audio 要素を生成（一度のみ）
   useEffect(() => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 1;
-    canvas.height = 1;
-    canvas.getContext('2d')?.fillRect(0, 0, 1, 1);
-
-    let stream: MediaStream;
-    try {
-      stream = (canvas as HTMLCanvasElement & { captureStream(fps?: number): MediaStream }).captureStream(1);
-    } catch {
-      return; // captureStream 非対応環境は何もしない
-    }
-
-    const video = document.createElement('video');
-    video.srcObject = stream;
-    video.muted = true;
-    video.setAttribute('playsinline', '');
-    video.loop = true;
-    video.style.cssText = [
-      'position:fixed', 'top:0', 'left:0',
-      'width:1px', 'height:1px',
-      'opacity:0.01',         // 完全 opacity:0 だと iOS が最適化でスキップする場合がある
-      'pointer-events:none',
-      'z-index:-1',
-    ].join(';');
-    document.body.appendChild(video);
-    noSleepVideoRef.current = video;
-
+    const url  = createSilentAudioUrl();
+    blobUrlRef.current = url;
+    const audio = new Audio(url);
+    audio.loop = true;
+    silentAudioRef.current = audio;
     return () => {
-      video.pause();
-      video.srcObject = null;
-      video.remove();
-      noSleepVideoRef.current = null;
+      audio.pause();
+      URL.revokeObjectURL(url);
+      silentAudioRef.current = null;
+      blobUrlRef.current = null;
     };
   }, []);
 
+  // active に連動して再生 / 停止 + MediaSession 更新
   useEffect(() => {
-    const video = noSleepVideoRef.current;
-    if (!video) return;
+    const audio = silentAudioRef.current;
+    if (!audio) return;
+
     if (active) {
-      video.play().catch(() => {});
+      audio.play().catch(() => {});
+      // iOS に「メディア再生中」を通知
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'Motion Lab',
+          artist: 'Playing',
+        });
+        navigator.mediaSession.playbackState = 'playing';
+      }
     } else {
-      video.pause();
+      audio.pause();
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
     }
   }, [active]);
 }

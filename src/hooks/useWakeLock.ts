@@ -3,11 +3,13 @@ import { useEffect, useRef, useCallback } from 'react';
 /**
  * 再生中に画面スリープ（省電力モード）を抑制する
  *
- * 2段階フォールバック:
+ * 2つのアプローチを同時に使用（どちらかが効けば OK）:
  *   1. Wake Lock API  — iOS 16.4+ / Chrome / Firefox
- *   2. NoSleep 動画   — iOS 16.3 以下のフォールバック
- *      DOM に 1×1 px のミュート動画（canvas captureStream）を流し続けることで
- *      iOS がスクリーンスリープを抑制する挙動を利用する
+ *      - visibilitychange で解放後に再取得
+ *      - 15 秒ごとのハートビートで静かに解放された場合も再取得
+ *   2. NoSleep 動画   — 全デバイス共通（Wake Lock の補強）
+ *      DOM に 1×1 px のミュート動画を流し続けることで
+ *      iOS が「動画再生中」と認識しスクリーンスリープを抑制する
  *
  * @param active  true のとき Wake Lock を要求し、false で解放する
  */
@@ -39,6 +41,7 @@ export function useWakeLock(active: boolean) {
     return release;
   }, [active, acquire, release]);
 
+  // タブが前面に戻ったとき再取得（非表示で自動解放されるため）
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible' && activeRef.current) acquire();
@@ -47,17 +50,23 @@ export function useWakeLock(active: boolean) {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [acquire]);
 
-  // ── NoSleep 動画フォールバック (iOS 16.3 以下) ───────────────────────
-  // Wake Lock API が使えない環境でのみ有効化する。
-  // ミュート + playsinline の動画はユーザージェスチャなしで再生でき、
-  // iOS は DOM 上で動画が再生中のとき画面スリープを抑制する。
+  // 15 秒ごとのハートビート：全画面切替等で静かに解放された場合も再取得する
+  // visibilitychange が発火しない状況（theater モード等）をカバー
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (activeRef.current && !sentinelRef.current) acquire();
+    }, 15_000);
+    return () => clearInterval(id);
+  }, [acquire]);
+
+  // ── NoSleep 動画（全デバイス共通・Wake Lock の補強）─────────────────
+  // Wake Lock API の有無に関わらず常に使用する。
+  // ミュート + playsinline の動画が DOM で再生されている間、
+  // iOS は「メディア再生中」として画面スリープを抑制する。
 
   const noSleepVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  // マウント時に動画要素を生成（Wake Lock API が使える環境はスキップ）
   useEffect(() => {
-    if ('wakeLock' in navigator) return;
-
     const canvas = document.createElement('canvas');
     canvas.width = 1;
     canvas.height = 1;
@@ -65,10 +74,9 @@ export function useWakeLock(active: boolean) {
 
     let stream: MediaStream;
     try {
-      // captureStream は TypeScript の標準定義に含まれないため型アサーション
       stream = (canvas as HTMLCanvasElement & { captureStream(fps?: number): MediaStream }).captureStream(1);
     } catch {
-      return; // captureStream 非対応（Android 旧世代等）は何もしない
+      return; // captureStream 非対応環境は何もしない
     }
 
     const video = document.createElement('video');
@@ -79,7 +87,7 @@ export function useWakeLock(active: boolean) {
     video.style.cssText = [
       'position:fixed', 'top:0', 'left:0',
       'width:1px', 'height:1px',
-      'opacity:0.01',            // 完全に opacity:0 だと iOS が最適化でスキップする場合がある
+      'opacity:0.01',         // 完全 opacity:0 だと iOS が最適化でスキップする場合がある
       'pointer-events:none',
       'z-index:-1',
     ].join(';');
@@ -94,7 +102,6 @@ export function useWakeLock(active: boolean) {
     };
   }, []);
 
-  // active 変化に連動して再生 / 一時停止
   useEffect(() => {
     const video = noSleepVideoRef.current;
     if (!video) return;

@@ -44,6 +44,9 @@ type Props = {
   onViewModeChange: (mode: 'audio' | 'video') => void;
 };
 
+const IS_IOS = typeof navigator !== 'undefined' &&
+  /iPad|iPhone|iPod/.test(navigator.userAgent) && !(navigator as unknown as { MSStream?: unknown }).MSStream;
+
 function formatTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
@@ -501,6 +504,13 @@ export function YouTubeControl({
               />
             )}
           </>
+        )}
+
+        {/* iOSでは画面スリープを完全には防げないため設定変更を促す */}
+        {videoId && IS_IOS && video.ytPlaying && (
+          <p className={styles.sleepHint}>
+            iPhoneで画面が暗くなる場合は「設定 → 画面表示と明るさ → 自動ロック → なし」に変更してください
+          </p>
         )}
 
         {videoId && (

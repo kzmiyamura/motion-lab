@@ -685,3 +685,11 @@
     padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
 }
+
+.sleepHint {
+  font-size: 11px;
+  color: #888;
+  margin: 4px 0 2px;
+  padding: 0 4px;
+  line-height: 1.4;
+}

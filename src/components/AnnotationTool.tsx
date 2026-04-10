@@ -156,10 +156,11 @@ export function AnnotationTool() {
     setTrainPhase('training');
     setTrainEpochPct(0);
     setTrainLog('特徴量を計算中…');
-    // React が UI を再描画できるよう一瞬制御を返す
     await new Promise(r => setTimeout(r, 80));
 
-    const { xs, ys, sampleCount, breakdown } = buildTrainingDataV2(allLogs);
+    const { xs, ys, sampleCount, breakdown } = await buildTrainingDataV2(allLogs, (done, total) => {
+      setTrainLog(`特徴量を計算中… ${done}/${total} フレーム`);
+    });
     const bdText = Object.entries(breakdown).map(([k, v]) => `${k}:${v}`).join(' ');
 
     if (sampleCount < 6) {

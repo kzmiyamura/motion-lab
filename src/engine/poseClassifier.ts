@@ -293,18 +293,31 @@ export function extractFeaturesV2(
 }
 
 /** アノテーション済み JSON から V2 学習データを構築 */
-export function buildTrainingDataV2(logs: AnnotatedPoseLog[]): {
+export async function buildTrainingDataV2(
+  logs: AnnotatedPoseLog[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<{
   xs: number[][];
   ys: number[];
   sampleCount: number;
   breakdown: Record<string, number>;
-} {
+}> {
   const xs: number[][] = [], ys: number[] = [];
   const breakdown: Record<string, number> = {};
+
+  const totalFrames = logs.reduce((s, l) => s + l.frames.length, 0);
+  let processed = 0;
 
   for (const log of logs) {
     const frames = log.frames;
     for (let i = 0; i < frames.length; i++) {
+      // 50フレームごとにブラウザに制御を返す
+      if (processed % 50 === 0) {
+        onProgress?.(processed, totalFrames);
+        await new Promise(r => setTimeout(r, 0));
+      }
+      processed++;
+
       const frame = frames[i];
       if (!frame.poses || frame.poses.length < 2) continue;
       const [p0, p1] = frame.poses;

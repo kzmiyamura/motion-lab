@@ -113,6 +113,7 @@ export function AnnotationTool() {
   const [trainSummary,    setTrainSummary]    = useState('');
   const [_driveFileCount, setDriveFileCount]  = useState(0);  // Drive の全 JSON 件数（デバッグ用）
   const abortRef = useRef(false);
+  const isDirtyRef = useRef(false); // 保存後に変更があるか
   const localTrainInputRef = useRef<HTMLInputElement>(null);
 
   // マウント時に有効なトークンを復元（アプリ更新後も再認証不要）
@@ -435,6 +436,7 @@ export function AnnotationTool() {
   // ── ラベル付け ──────────────────────────────────────────────────────────
   const applyLabel = useCallback((label: AnnotationLabel) => {
     if (frames.length === 0) return;
+    isDirtyRef.current = true;
     setFrames(prev => {
       const next = [...prev];
       next[idx] = { ...next[idx], label };
@@ -510,6 +512,9 @@ export function AnnotationTool() {
     a.click();
     URL.revokeObjectURL(url);
 
+    // ローカル保存完了時点で dirty をリセット（Drive 失敗でも保存はされている）
+    isDirtyRef.current = false;
+
     // Drive アップロード（連携済みの場合）
     if (driveToken) {
       setUploadStatus('uploading');
@@ -542,9 +547,9 @@ export function AnnotationTool() {
         <button
           className={styles.backBtn}
           onClick={async () => {
-            if (labeled === 0) { navigate('/'); return; }
+            if (!isDirtyRef.current) { navigate('/'); return; }
             const choice = window.confirm(
-              `ラベル済み ${labeled} フレームがあります。\n\nOK → エクスポートしてから戻る\nキャンセル → 保存せずに戻る`
+              `保存されていない変更があります。\n\nOK → エクスポートしてから戻る\nキャンセル → 保存せずに戻る`
             );
             if (choice) { await handleExport(); }
             navigate('/');

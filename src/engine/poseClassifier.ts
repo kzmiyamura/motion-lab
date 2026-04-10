@@ -366,28 +366,27 @@ export async function trainModelV2(
 
   const model = tf.sequential({
     layers: [
-      tf.layers.dense({ inputShape: [FEATURE_SIZE_V2], units: 64, activation: 'relu' }),
-      tf.layers.dropout({ rate: 0.3 }),
-      tf.layers.dense({ units: 32, activation: 'relu' }),
-      tf.layers.dropout({ rate: 0.2 }),
+      tf.layers.dense({ inputShape: [FEATURE_SIZE_V2], units: 32, activation: 'relu' }),
+      tf.layers.dropout({ rate: 0.25 }),
+      tf.layers.dense({ units: 16, activation: 'relu' }),
       tf.layers.dense({ units: 2, activation: 'softmax' }),
     ],
   });
 
   model.compile({
-    optimizer: tf.train.adam(0.001),
+    optimizer: tf.train.adam(0.002),
     loss: 'categoricalCrossentropy',
     metrics: ['accuracy'],
   });
 
-  const epochs = Math.min(150, Math.max(50, Math.floor(xs.length / 6)));
+  const epochs = Math.min(60, Math.max(30, Math.floor(xs.length / 10)));
 
   await model.fit(xsTensor, ysTensor, {
     epochs,
-    batchSize: 32,
+    batchSize: 64,
     shuffle: true,
     validationSplit: 0.1,
-    yieldEvery: 'batch',
+    yieldEvery: 'epoch',
     callbacks: {
       onEpochEnd: async (epoch, logs) => {
         onProgress(epoch + 1, epochs, logs?.loss ?? 0, (logs?.acc ?? 0) as number);

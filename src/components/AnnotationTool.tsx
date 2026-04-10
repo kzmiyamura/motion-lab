@@ -155,6 +155,9 @@ export function AnnotationTool() {
     if (abortRef.current) return;
     setTrainPhase('training');
     setTrainEpochPct(0);
+    setTrainLog('特徴量を計算中…');
+    // React が UI を再描画できるよう一瞬制御を返す
+    await new Promise(r => setTimeout(r, 80));
 
     const { xs, ys, sampleCount, breakdown } = buildTrainingDataV2(allLogs);
     const bdText = Object.entries(breakdown).map(([k, v]) => `${k}:${v}`).join(' ');

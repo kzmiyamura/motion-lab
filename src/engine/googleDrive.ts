@@ -61,10 +61,14 @@ export async function listMediaFiles(
 export async function fetchFileBlob(
   token: string,
   fileId: string,
-  onProgress?: (percent: number) => void,
+  onProgressOrSignal?: ((percent: number) => void) | AbortSignal,
+  signal?: AbortSignal,
 ): Promise<Blob> {
+  const onProgress = typeof onProgressOrSignal === 'function' ? onProgressOrSignal : undefined;
+  const abortSignal = onProgressOrSignal instanceof AbortSignal ? onProgressOrSignal : signal;
   const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: abortSignal,
   });
   if (!res.ok) throw new DriveApiError(`Download failed: HTTP ${res.status}`, res.status);
 

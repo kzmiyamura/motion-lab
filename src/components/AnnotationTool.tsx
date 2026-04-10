@@ -246,9 +246,23 @@ export function AnnotationTool() {
       const file = trainableFiles[i];
       setTrainFileIdx(i);
       setTrainLog(`読み込み中 ${i + 1}/${trainableFiles.length}: ${file.name}`);
+      // ブラウザに制御を返して UI を更新させる
+      await new Promise(r => setTimeout(r, 80));
+      if (abortRef.current) break;
       try {
-        const blob = await fetchFileBlob(driveToken, file.id);
-        const parsed = JSON.parse(await blob.text()) as AnnotatedPoseLog;
+        const TIMEOUT_MS = 20_000;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+        let blob: Blob;
+        try {
+          blob = await fetchFileBlob(driveToken, file.id, undefined, controller.signal);
+        } finally {
+          clearTimeout(timer);
+        }
+        const text = await blob.text();
+        // 大きなJSONのパース前にブラウザに制御を返す
+        await new Promise(r => setTimeout(r, 0));
+        const parsed = JSON.parse(text) as AnnotatedPoseLog;
         if (parsed.version === 'salsa_annotated_v1') logs.push(parsed);
       } catch { /* skip */ }
     }

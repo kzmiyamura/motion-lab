@@ -264,7 +264,11 @@ export function AnnotationTool() {
         await new Promise(r => setTimeout(r, 0));
         const parsed = JSON.parse(text) as AnnotatedPoseLog;
         if (parsed.version === 'salsa_annotated_v1') logs.push(parsed);
-      } catch { /* skip */ }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setTrainLog(`スキップ (${file.name}): ${msg}`);
+        await new Promise(r => setTimeout(r, 600)); // エラーを表示する時間
+      }
     }
 
     if (abortRef.current) {

@@ -356,9 +356,11 @@ export async function buildTrainingDataV2(
       const [leader, follower] = leaderIsSlot0 ? [p0, p1] : [p1, p0];
       const [lHist, fHist]     = leaderIsSlot0 ? [hist0, hist1] : [hist1, hist0];
 
-      xs.push(extractFeaturesV2(leader, follower, lHist, fHist)); ys.push(0);
-      xs.push(extractFeaturesV2(follower, leader, fHist, lHist)); ys.push(1);
-      breakdown[frame.label] = (breakdown[frame.label] ?? 0) + 1;
+      try {
+        xs.push(extractFeaturesV2(leader, follower, lHist, fHist)); ys.push(0);
+        xs.push(extractFeaturesV2(follower, leader, fHist, lHist)); ys.push(1);
+        breakdown[frame.label] = (breakdown[frame.label] ?? 0) + 1;
+      } catch { /* 不正なランドマークはスキップ */ }
     }
   }
 

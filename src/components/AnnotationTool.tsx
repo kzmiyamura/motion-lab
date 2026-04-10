@@ -158,9 +158,17 @@ export function AnnotationTool() {
     setTrainLog('特徴量を計算中…');
     await new Promise(r => setTimeout(r, 80));
 
-    const { xs, ys, sampleCount, breakdown } = await buildTrainingDataV2(allLogs, (done, total) => {
-      setTrainLog(`特徴量を計算中… ${done}/${total} フレーム`);
-    });
+    let buildResult: Awaited<ReturnType<typeof buildTrainingDataV2>>;
+    try {
+      buildResult = await buildTrainingDataV2(allLogs, (done, total) => {
+        setTrainLog(`特徴量を計算中… ${done}/${total} フレーム`);
+      });
+    } catch (err) {
+      setTrainLog(`特徴量計算エラー: ${err instanceof Error ? err.message : String(err)}`);
+      setTrainPhase('error');
+      return;
+    }
+    const { xs, ys, sampleCount, breakdown } = buildResult;
     const bdText = Object.entries(breakdown).map(([k, v]) => `${k}:${v}`).join(' ');
 
     if (sampleCount < 6) {

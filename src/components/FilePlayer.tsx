@@ -7,7 +7,7 @@ import { SLOW_RATES, ZOOM_PRESETS, type SlowRate, type ZoomState } from '../hook
 import { useWakeLock } from '../hooks/useWakeLock';
 import { usePoseEstimation, type VizMode, type SalsaStyle } from '../hooks/usePoseEstimation';
 import { usePoseLogger } from '../hooks/usePoseLogger';
-import { loadModel, modelFromJson, type RoleModel } from '../engine/poseClassifier';
+import { loadModelV2, modelFromJson, type RoleModel } from '../engine/poseClassifier';
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SequenceView } from './SequenceView';
@@ -126,24 +126,24 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
 
-  // ── ML ロール推論
-  const [mlMode, setMlMode] = useState(false);
+  // ── ロールモード: 'rule'=ルールベース, 'ml_exp'=ML実験（V2特徴量）
+  const [roleMode, setRoleMode] = useState<'rule' | 'ml_exp'>('rule');
   const mlModelRef = useRef<RoleModel | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mlTfRef = useRef<any>(null);
 
   const [mlModelLoaded, setMlModelLoaded] = useState(false);
 
-  // モデルを IndexedDB → Drive の順で読み込む
+  // V2 モデルを IndexedDB → Drive の順で読み込む
   useEffect(() => {
     import('@tensorflow/tfjs').then(tf => { mlTfRef.current = tf; });
 
-    const MODEL_DRIVE_FILENAME = 'salsa_role_model.json';
-    const DRIVE_FOLDER_NAME    = 'salsa_annotations';
+    const MODEL_DRIVE_FILENAME_V2 = 'salsa_role_model_v2.json';
+    const DRIVE_FOLDER_NAME       = 'salsa_annotations';
 
     async function fetchModel() {
-      // 1) IndexedDB から試みる
-      const local = await loadModel();
+      // 1) IndexedDB から試みる（V2）
+      const local = await loadModelV2();
       if (local) { mlModelRef.current = local; setMlModelLoaded(true); return; }
 
       // 2) Drive から取得（token があれば）
@@ -153,14 +153,13 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         const { findOrCreateFolder, listFilesInFolder, fetchFileBlob } = await import('../engine/googleDrive');
         const folderId = await findOrCreateFolder(token, DRIVE_FOLDER_NAME);
         const files = await listFilesInFolder(token, folderId);
-        const modelFile = files.find(f => f.name === MODEL_DRIVE_FILENAME);
+        const modelFile = files.find(f => f.name === MODEL_DRIVE_FILENAME_V2);
         if (!modelFile) return;
         const blob = await fetchFileBlob(token, modelFile.id);
         const json = await blob.text();
         const model = await modelFromJson(json);
-        // IndexedDB にキャッシュしておく
-        const { saveModel } = await import('../engine/poseClassifier');
-        await saveModel(model);
+        const { saveModelV2 } = await import('../engine/poseClassifier');
+        await saveModelV2(model);
         mlModelRef.current = model;
         setMlModelLoaded(true);
       } catch {
@@ -186,8 +185,9 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     mediaRef, canvasRef, source?.isVideo ? vizMode : 'off',
     bpm, isMirrored, salsaStyle, heightLeaderHint,
     vizMode !== 'off' ? onRawPoses : undefined,
-    mlMode ? mlModelRef.current : null,   // ML ON時のみモデルを渡す → RAFループ内で同期推論
+    roleMode === 'ml_exp' ? mlModelRef.current : null,  // ML実験モード時のみモデルを渡す
     mlTfRef.current,
+    'v2',  // V2特徴量（腰基準相対座標＋速度）を使用
   );
 
   // ── BPM 計測（音声モード）
@@ -821,20 +821,32 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           </div>
         )}
         {source.isVideo && fileViewMode === 'video' && (
-          <button
-            className={`${styles.vizModeBtn} ${mlMode ? styles.vizModeBtnActive : ''}`}
-            style={mlMode ? { color: '#cc88ff', borderColor: '#cc88ff' } : { color: mlModelLoaded ? '#aa77cc' : '#554466' }}
-            onClick={() => {
-              if (!mlModelLoaded) return;
-              const next = !mlMode;
-              setMlMode(next);
-              // 骨格がOFFのままだとMLの色が反映されないので自動でONにする
-              if (next && vizMode === 'off') setVizMode('full');
-            }}
-            title={mlModelLoaded ? 'ML推論モード切替（骨格OFFの場合は自動でONにします）' : 'モデル未読み込み — Annotation画面でTrainしてください'}
-          >
-            {mlModelLoaded ? (mlMode ? 'ML ON' : 'ML') : 'ML —'}
-          </button>
+          <>
+            <button
+              className={`${styles.vizModeBtn} ${roleMode === 'rule' ? styles.vizModeBtnActive : ''}`}
+              style={roleMode === 'rule' ? {} : { color: 'rgba(255,255,255,0.4)' }}
+              onClick={() => setRoleMode('rule')}
+              title="SHR ルールベース判定"
+            >
+              ルールベース
+            </button>
+            <button
+              className={`${styles.vizModeBtn} ${roleMode === 'ml_exp' ? styles.vizModeBtnActive : ''}`}
+              style={roleMode === 'ml_exp'
+                ? { color: '#cc88ff', borderColor: '#cc88ff', background: 'rgba(180,100,255,0.15)' }
+                : { color: mlModelLoaded ? '#aa77cc' : '#554466' }}
+              onClick={() => {
+                if (!mlModelLoaded) return;
+                setRoleMode('ml_exp');
+                if (vizMode === 'off') setVizMode('full');
+              }}
+              title={mlModelLoaded
+                ? 'あなたの学習データで判定（V2特徴量: 関節座標＋速度）'
+                : 'モデル未学習 — Annotation画面でV2学習を実行してください'}
+            >
+              {mlModelLoaded ? '🧪 ML実験' : '🧪 ML —'}
+            </button>
+          </>
         )}
         {source.isVideo && fileViewMode === 'video' && vizMode !== 'off' && (
           <button
@@ -1162,17 +1174,17 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                     display: vizMode !== 'off' ? 'block' : 'none',
                   }}
                 />
-                {mlMode && mlResult && (
+                {roleMode === 'ml_exp' && mlResult && (
                   <div style={{
                     position: 'absolute', top: 6, right: 6,
-                    background: 'rgba(0,0,0,0.75)',
-                    border: `1px solid ${mlResult.leaderSlot === 0 ? '#4488ff' : '#ff44cc'}`,
+                    background: 'rgba(0,0,0,0.82)',
+                    border: '1px solid #cc88ff',
                     borderRadius: 6, padding: '3px 8px',
                     fontSize: 11, fontFamily: 'monospace',
-                    color: mlResult.leaderSlot === 0 ? '#4488ff' : '#ff44cc',
+                    color: '#cc88ff',
                     pointerEvents: 'none', zIndex: 10,
                   }}>
-                    🤖 L=S{mlResult.leaderSlot} {Math.round(mlResult.prob * 100)}%
+                    🧪 L=S{mlResult.leaderSlot} {Math.round(mlResult.prob * 100)}%
                   </div>
                 )}
                 <div

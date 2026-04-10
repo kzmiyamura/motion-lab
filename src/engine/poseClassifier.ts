@@ -203,6 +203,247 @@ export async function modelFromJson(json: string): Promise<LayersModel> {
   return model as unknown as LayersModel;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// V2 特徴量エンジン
+// 特徴量: 13関節の腰基準正規化座標 × 2人 + 相対座標 + 速度ベクトル
+// SHR などの加工済み数値を一切使わず、生のポーズ変化だけを学習の主役にする
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** V2 で使う 13 関節インデックス（MediaPipe 33点から選択） */
+export const KEY_JOINTS_V2 = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28] as const;
+// nose, L/R_shoulder, L/R_elbow, L/R_wrist, L/R_hip, L/R_knee, L/R_ankle
+
+/** V2 で速度を計算する 6 関節（腰・手首・足首） */
+export const VEL_JOINTS_V2 = [23, 24, 15, 16, 27, 28] as const;
+
+/**
+ * FEATURE_SIZE_V2 = 102
+ *   positions p0 : 13 × 2 = 26
+ *   positions p1 : 13 × 2 = 26
+ *   relative      : 13 × 2 = 26
+ *   velocity p0   :  6 × 2 = 12
+ *   velocity p1   :  6 × 2 = 12
+ */
+export const FEATURE_SIZE_V2 = 102;
+
+const MODEL_KEY_V2 = 'indexeddb://salsa-role-model-v2';
+
+type LmPoint = { x: number; y: number };
+
+/**
+ * ランドマーク配列を腰中点基準・体長スケールで正規化し、
+ * KEY_JOINTS_V2 の 13 点だけを返す
+ */
+export function normalizeKeyJointsV2(
+  lm: Array<{ x: number; y: number; z?: number; visibility?: number }>,
+): LmPoint[] {
+  const cx = (lm[23].x + lm[24].x) / 2;
+  const cy = (lm[23].y + lm[24].y) / 2;
+  const scale = Math.hypot(lm[0].x - cx, lm[0].y - cy) || 1;
+  return KEY_JOINTS_V2.map(j => ({
+    x: (lm[j].x - cx) / scale,
+    y: (lm[j].y - cy) / scale,
+  }));
+}
+
+/**
+ * V2 特徴ベクトルを抽出 (FEATURE_SIZE_V2 = 102)
+ *
+ * @param p0      スロット0のポーズ（Leaderとして渡す）
+ * @param p1      スロット1のポーズ（Followerとして渡す）
+ * @param hist0   p0 の過去フレーム正規化座標（新しい順, 最大5フレーム）
+ * @param hist1   p1 の過去フレーム正規化座標（新しい順, 最大5フレーム）
+ */
+export function extractFeaturesV2(
+  p0: Pose,
+  p1: Pose,
+  hist0: LmPoint[][] = [],
+  hist1: LmPoint[][] = [],
+): number[] {
+  const n0 = normalizeKeyJointsV2(p0.landmarks);
+  const n1 = normalizeKeyJointsV2(p1.landmarks);
+  const features: number[] = [];
+
+  // 1. 正規化座標 p0 (26)
+  for (const pt of n0) { features.push(pt.x, pt.y); }
+  // 2. 正規化座標 p1 (26)
+  for (const pt of n1) { features.push(pt.x, pt.y); }
+  // 3. 相対座標 p0 - p1 (26)
+  for (let i = 0; i < KEY_JOINTS_V2.length; i++) {
+    features.push(n0[i].x - n1[i].x, n0[i].y - n1[i].y);
+  }
+
+  // VEL_JOINTS_V2 の KEY_JOINTS_V2 内インデックスを事前計算
+  const velIdx = VEL_JOINTS_V2.map(j => KEY_JOINTS_V2.indexOf(j));
+
+  // 4. 速度 p0（3フレーム前との差分 / 3）(12)
+  const prev0 = hist0.length >= 3 ? hist0[2] : null;
+  for (const vi of velIdx) {
+    features.push(prev0 ? (n0[vi].x - prev0[vi].x) / 3 : 0);
+    features.push(prev0 ? (n0[vi].y - prev0[vi].y) / 3 : 0);
+  }
+  // 5. 速度 p1（3フレーム前との差分 / 3）(12)
+  const prev1 = hist1.length >= 3 ? hist1[2] : null;
+  for (const vi of velIdx) {
+    features.push(prev1 ? (n1[vi].x - prev1[vi].x) / 3 : 0);
+    features.push(prev1 ? (n1[vi].y - prev1[vi].y) / 3 : 0);
+  }
+
+  return features; // 102
+}
+
+/** アノテーション済み JSON から V2 学習データを構築 */
+export function buildTrainingDataV2(logs: AnnotatedPoseLog[]): {
+  xs: number[][];
+  ys: number[];
+  sampleCount: number;
+  breakdown: Record<string, number>;
+} {
+  const xs: number[][] = [], ys: number[] = [];
+  const breakdown: Record<string, number> = {};
+
+  for (const log of logs) {
+    const frames = log.frames;
+    for (let i = 0; i < frames.length; i++) {
+      const frame = frames[i];
+      if (!frame.poses || frame.poses.length < 2) continue;
+      const [p0, p1] = frame.poses;
+      if (!p0?.landmarks || !p1?.landmarks) continue;
+      if (p0.landmarks.length < 29 || p1.landmarks.length < 29) continue;
+
+      let leaderIsSlot0: boolean | null = null;
+      if (frame.label === 'standard_pos') {
+        leaderIsSlot0 = true;
+      } else if (frame.label === 'side_L_right') {
+        const hx0 = (p0.landmarks[23].x + p0.landmarks[24].x) / 2;
+        const hx1 = (p1.landmarks[23].x + p1.landmarks[24].x) / 2;
+        leaderIsSlot0 = hx0 > hx1;
+      } else if (frame.label === 'side_L_left') {
+        const hx0 = (p0.landmarks[23].x + p0.landmarks[24].x) / 2;
+        const hx1 = (p1.landmarks[23].x + p1.landmarks[24].x) / 2;
+        leaderIsSlot0 = hx0 < hx1;
+      }
+      if (leaderIsSlot0 === null) continue;
+
+      // 過去3フレームの正規化座標を構築（速度特徴量用）
+      const hist0: LmPoint[][] = [];
+      const hist1: LmPoint[][] = [];
+      for (let h = 1; h <= 3; h++) {
+        const fi = i - h;
+        if (fi >= 0 && frames[fi].poses?.length >= 2) {
+          const pf0 = frames[fi].poses[0];
+          const pf1 = frames[fi].poses[1];
+          hist0.push(pf0?.landmarks?.length >= 29 ? normalizeKeyJointsV2(pf0.landmarks) : []);
+          hist1.push(pf1?.landmarks?.length >= 29 ? normalizeKeyJointsV2(pf1.landmarks) : []);
+        } else {
+          hist0.push([]); hist1.push([]);
+        }
+      }
+
+      const [leader, follower] = leaderIsSlot0 ? [p0, p1] : [p1, p0];
+      const [lHist, fHist]     = leaderIsSlot0 ? [hist0, hist1] : [hist1, hist0];
+
+      xs.push(extractFeaturesV2(leader, follower, lHist, fHist)); ys.push(0);
+      xs.push(extractFeaturesV2(follower, leader, fHist, lHist)); ys.push(1);
+      breakdown[frame.label] = (breakdown[frame.label] ?? 0) + 1;
+    }
+  }
+
+  return { xs, ys, sampleCount: xs.length, breakdown };
+}
+
+/** V2 モデルを作成・学習して LayersModel を返す */
+export async function trainModelV2(
+  xs: number[][],
+  ys: number[],
+  onProgress: (epoch: number, total: number, loss: number, acc: number) => void,
+  shouldAbort?: () => boolean,
+): Promise<LayersModel> {
+  const tf = await import('@tensorflow/tfjs');
+
+  const xsTensor = tf.tensor2d(xs, [xs.length, FEATURE_SIZE_V2]);
+  const ysTensor = tf.oneHot(tf.tensor1d(ys, 'int32'), 2);
+
+  const model = tf.sequential({
+    layers: [
+      tf.layers.dense({ inputShape: [FEATURE_SIZE_V2], units: 64, activation: 'relu' }),
+      tf.layers.dropout({ rate: 0.3 }),
+      tf.layers.dense({ units: 32, activation: 'relu' }),
+      tf.layers.dropout({ rate: 0.2 }),
+      tf.layers.dense({ units: 2, activation: 'softmax' }),
+    ],
+  });
+
+  model.compile({
+    optimizer: tf.train.adam(0.001),
+    loss: 'categoricalCrossentropy',
+    metrics: ['accuracy'],
+  });
+
+  const epochs = Math.min(150, Math.max(50, Math.floor(xs.length / 6)));
+
+  await model.fit(xsTensor, ysTensor, {
+    epochs,
+    batchSize: 32,
+    shuffle: true,
+    validationSplit: 0.1,
+    yieldEvery: 'batch',
+    callbacks: {
+      onEpochEnd: async (epoch, logs) => {
+        onProgress(epoch + 1, epochs, logs?.loss ?? 0, (logs?.acc ?? 0) as number);
+        if (shouldAbort?.()) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (model as any).stopTraining = true;
+        }
+      },
+    },
+  });
+
+  tf.dispose([xsTensor, ysTensor]);
+  return model as unknown as LayersModel;
+}
+
+/** V2 モデルを IndexedDB に保存 */
+export async function saveModelV2(model: LayersModel): Promise<void> {
+  await model.save(MODEL_KEY_V2);
+}
+
+/** IndexedDB から V2 モデルを読み込む（存在しなければ null）*/
+export async function loadModelV2(): Promise<LayersModel | null> {
+  try {
+    const tf = await import('@tensorflow/tfjs');
+    return await tf.loadLayersModel(MODEL_KEY_V2) as unknown as LayersModel;
+  } catch {
+    return null;
+  }
+}
+
+/** V2 モデルを JSON 文字列にシリアライズ */
+export async function modelToJsonV2(model: LayersModel): Promise<string> {
+  return modelToJson(model); // 同じシリアライズ処理を流用
+}
+
+/** V2 同期推論: poses[0] が Leader である確率 (0–1) を返す */
+export function predictLeaderProbSyncV2(
+  model: LayersModel,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tf: any,
+  p0: Pose,
+  p1: Pose,
+  hist0: LmPoint[][] = [],
+  hist1: LmPoint[][] = [],
+): number {
+  const features = extractFeaturesV2(p0, p1, hist0, hist1);
+  let prob = 0.5;
+  tf.tidy(() => {
+    const input = tf.tensor2d([features], [1, FEATURE_SIZE_V2]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const output = (model as any).predict(input) as { dataSync(): Float32Array };
+    prob = output.dataSync()[0];
+  });
+  return prob;
+}
+
 /** 同期推論: poses[0] が Leader である確率 (0–1) を返す */
 export function predictLeaderProbSync(
   model: LayersModel,

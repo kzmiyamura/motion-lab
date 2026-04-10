@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { predictLeaderProbSync } from '../engine/poseClassifier';
+import { predictLeaderProbSync, predictLeaderProbSyncV2, normalizeKeyJointsV2 } from '../engine/poseClassifier';
 
 // @mediapipe/tasks-vision の exports 形式が非標準のため型を自前定義
 interface NormalizedLandmark { x: number; y: number; z: number; visibility?: number; }
@@ -1538,6 +1538,7 @@ export function usePoseEstimation(
   mlModel: import('../engine/poseClassifier').RoleModel | null = null,  // ML推論モデル（null=ルールベース）
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mlTf: any = null,  // TensorFlow.js インスタンス
+  mlVersion: 'v1' | 'v2' = 'v2',  // 使用する特徴量バージョン
 ): UsePoseEstimationResult {
   const modeRef      = useRef<VizMode>(mode);
   modeRef.current    = mode;
@@ -1567,6 +1568,8 @@ export function usePoseEstimation(
   const [mlResult, setMlResult] = useState<{ leaderSlot: 0 | 1; prob: number } | null>(null);
   const mlResultRef = useRef<{ leaderSlot: 0 | 1; prob: number } | null>(null);
   const mlFrameCounterRef = useRef(0); // 5フレームに1回推論するためのカウンタ
+  // V2 用: スロットごとの過去5フレーム正規化ランドマーク履歴（新しい順）
+  const lmHistoryRef = useRef<[Array<{x:number;y:number}[]>, Array<{x:number;y:number}[]>]>([[], []]);
 
   // ── デバッグ用タップ座標（CSS transform 逆変換済み）
   const debugTapCanvasRef = useRef<{ x: number; y: number } | null>(null);
@@ -2708,12 +2711,25 @@ export function usePoseEstimation(
 
                   // ── ML ロール上書き（モデルが渡されている場合、5フレームに1回同期推論）
                   if (mlModelRef.current && mlTfRef.current && si0 >= 0 && si1 >= 0) {
+                    // V2: ランドマーク履歴を更新（新しい順で最大5フレーム保持）
+                    const updateHist = (histArr: Array<{x:number;y:number}[]>, lm: typeof all[0]) => {
+                      if (lm && lm.length >= 29) histArr.unshift(normalizeKeyJointsV2(lm));
+                      if (histArr.length > 5) histArr.pop();
+                    };
+                    updateHist(lmHistoryRef.current[0], all[si0]);
+                    updateHist(lmHistoryRef.current[1], all[si1]);
+
                     mlFrameCounterRef.current = (mlFrameCounterRef.current + 1) % 5;
                     if (mlFrameCounterRef.current === 0) {
                       try {
                         const p0 = { landmarks: all[si0] };
                         const p1 = { landmarks: all[si1] };
-                        const prob = predictLeaderProbSync(mlModelRef.current, mlTfRef.current, p0, p1);
+                        const prob = mlVersion === 'v2'
+                          ? predictLeaderProbSyncV2(
+                              mlModelRef.current, mlTfRef.current, p0, p1,
+                              lmHistoryRef.current[0], lmHistoryRef.current[1],
+                            )
+                          : predictLeaderProbSync(mlModelRef.current, mlTfRef.current, p0, p1);
                         const ls: 0 | 1 = prob >= 0.5 ? 0 : 1;
                         const newResult = { leaderSlot: ls, prob: ls === 0 ? prob : 1 - prob };
                         mlResultRef.current = newResult;

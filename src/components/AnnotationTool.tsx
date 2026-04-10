@@ -6,7 +6,7 @@ import type {
 import { POSE_CONNECTIONS } from '../types/pose';
 import { requestDriveWriteToken, getStoredToken } from '../engine/googleAuth';
 import { findOrCreateFolder, uploadJsonFile, listFilesInFolder, fetchFileBlob, DriveApiError } from '../engine/googleDrive';
-import { buildTrainingData, trainModel, saveModel, modelToJson } from '../engine/poseClassifier';
+import { buildTrainingDataV2, trainModelV2, saveModelV2, modelToJson } from '../engine/poseClassifier';
 import styles from './AnnotationTool.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -132,11 +132,11 @@ export function AnnotationTool() {
     }
   }, []);
 
-  const MODEL_DRIVE_FILENAME = 'salsa_role_model.json';
+  const MODEL_DRIVE_FILENAME = 'salsa_role_model_v2.json';
 
-  // 学習後にモデルを IndexedDB + Drive へ保存
+  // 学習後にモデルを IndexedDB + Drive へ保存（V2）
   const saveModelEverywhere = useCallback(async (model: import('../engine/poseClassifier').RoleModel) => {
-    await saveModel(model);
+    await saveModelV2(model);
     if (!driveToken) return;
     try {
       setTrainLog(prev => prev + '\nDrive にモデルをアップロード中…');
@@ -156,7 +156,7 @@ export function AnnotationTool() {
     setTrainPhase('training');
     setTrainEpochPct(0);
 
-    const { xs, ys, sampleCount, breakdown } = buildTrainingData(allLogs);
+    const { xs, ys, sampleCount, breakdown } = buildTrainingDataV2(allLogs);
     const bdText = Object.entries(breakdown).map(([k, v]) => `${k}:${v}`).join(' ');
 
     if (sampleCount < 6) {
@@ -168,7 +168,7 @@ export function AnnotationTool() {
 
     setTrainLog(`全 ${allLogs.length} ファイル / ${sampleCount} サンプルで学習開始\n内訳: ${bdText}`);
 
-    const model = await trainModel(xs, ys, (epoch, total, loss, acc) => {
+    const model = await trainModelV2(xs, ys, (epoch, total, loss, acc) => {
       setTrainEpochPct(Math.round((epoch / total) * 100));
       setTrainLog(
         `全データ累積学習 (${sampleCount}サンプル)\n` +

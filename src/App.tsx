@@ -11,6 +11,7 @@ import { InstallPrompt } from './components/InstallPrompt';
 import { UpdateToast } from './components/UpdateToast';
 import { YouTubeControl } from './components/YouTubeControl';
 import { FilePlayer } from './components/FilePlayer';
+import { StudioPlayer } from './components/StudioPlayer';
 import styles from './App.module.css';
 
 function App() {
@@ -39,7 +40,7 @@ function App() {
   } = useAudioEngine();
 
   const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
-  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm'>('youtube');
+  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio'>('youtube');
   const [ytViewMode, setYtViewMode] = useState<'audio' | 'video'>('video');
 
   useEffect(() => {
@@ -73,6 +74,12 @@ function App() {
             onClick={() => setMainTab('rhythm')}
           >
             🥁 Rhythm
+          </button>
+          <button
+            className={`${styles.mainTabBtn} ${mainTab === 'studio' ? styles.mainTabBtnActive : ''}`}
+            onClick={() => setMainTab('studio')}
+          >
+            🎬 Studio
           </button>
         </div>
       </header>
@@ -265,6 +272,13 @@ function App() {
             reverbWetLevel={reverbWetLevel}
             onReverbWetLevelChange={setReverbWetLevel}
           />
+        </section>
+      </div>
+
+      {/* ── Studio タブ ── */}
+      <div className={mainTab === 'studio' ? styles.tabPanel : styles.tabPanelHidden}>
+        <section className={styles.section}>
+          <StudioPlayer />
         </section>
       </div>
 

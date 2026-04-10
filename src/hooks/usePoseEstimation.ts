@@ -1989,7 +1989,8 @@ export function usePoseEstimation(
                   // ── [Frame Top] ps リアクティブ整合チェック（第0原則の先頭守護）──────
                   // per-personループより先に実行することで、ループ内の personRoles.set が
                   // 必ず ps確定済みの正しいロールを読む。genderLocked確定後は毎フレーム最優先。
-                  if (genderLockedRef.current && !manualRoleLockedRef.current && !faceLockedRef.current) {
+                  // ML ON 時はスキップ（ML が単独で判定するため）
+                  if (genderLockedRef.current && !manualRoleLockedRef.current && !faceLockedRef.current && !mlModelRef.current) {
                     const ps0t = profileLeaderScore(slots[0].profile, 1);
                     const ps1t = profileLeaderScore(slots[1].profile, 1);
                     if (ps0t > 0 && ps1t > 0) {
@@ -2227,7 +2228,9 @@ export function usePoseEstimation(
                   }
 
                   // ── face-api 結果をスロットに適用してロール確定 ──────────────────────
+                  // ML ON 時は face-api によるロール上書きもスキップ
                   if (!faceLockedRef.current && !manualRoleLockedRef.current
+                      && !mlModelRef.current
                       && faceScanResultsRef.current.length >= 2) {
                     const males   = faceScanResultsRef.current.filter(r => r.gender === 'male');
                     const females = faceScanResultsRef.current.filter(r => r.gender === 'female');
@@ -2505,7 +2508,8 @@ export function usePoseEstimation(
                   const faceSuspending = !faceLockedRef.current
                     && initTimeRef.current > 0
                     && now - initTimeRef.current < FACE_SCAN_SUSPEND_MS;
-                  if (profileCompleteRef.current && !manualRoleLockedRef.current && !faceLockedRef.current && !faceSuspending) {
+                  // ML ON 時は SHR ルールベース判定をスキップ（ML が単独で判定するため）
+                  if (profileCompleteRef.current && !manualRoleLockedRef.current && !faceLockedRef.current && !faceSuspending && !mlModelRef.current) {
                     const ps0 = profileLeaderScore(slots[0].profile, 1);
                     const ps1 = profileLeaderScore(slots[1].profile, 1);
                     if (ps0 > 0 && ps1 > 0) {
@@ -2717,9 +2721,12 @@ export function usePoseEstimation(
                       } catch (e) { /* 推論エラーは無視してルールベースにフォールバック */ }
                     }
                     // 推論結果をキャッシュから適用（5フレームすべてで色を維持）
+                    // ML が単独権威: personRoles（描画）と slots[].role（内部）の両方を更新
                     if (mlResultRef.current) {
                       const { leaderSlot } = mlResultRef.current;
                       const followerSlot: 0 | 1 = (1 - leaderSlot) as 0 | 1;
+                      slots[leaderSlot].role  = 'leader';
+                      slots[followerSlot].role = 'follower';
                       personRoles.set(slots[leaderSlot].detectedIdx, 'leader');
                       personRoles.set(slots[followerSlot].detectedIdx, 'follower');
                     }

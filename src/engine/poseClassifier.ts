@@ -327,6 +327,12 @@ export async function buildTrainingDataV2(
       let leaderIsSlot0: boolean | null = null;
       if (frame.label === 'standard_pos') {
         leaderIsSlot0 = true;
+      } else if (frame.label === 'leader_s0') {
+        // 一括指定ラベル: スロット0がリーダー（位置非依存・人間の目視確認済み）
+        leaderIsSlot0 = true;
+      } else if (frame.label === 'leader_s1') {
+        // 一括指定ラベル: スロット1がリーダー（位置非依存・人間の目視確認済み）
+        leaderIsSlot0 = false;
       } else if (frame.label === 'side_L_right') {
         const hx0 = (p0.landmarks[23].x + p0.landmarks[24].x) / 2;
         const hx1 = (p1.landmarks[23].x + p1.landmarks[24].x) / 2;

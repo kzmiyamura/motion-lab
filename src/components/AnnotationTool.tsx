@@ -59,6 +59,8 @@ const LABEL_DISPLAY: Record<AnnotationLabel, string> = {
   side_L_left:     'L左・F右',
   complex_turn:    '回転中',
   ignore_trash:    '破棄',
+  leader_s0:       'L=S0(一括)',
+  leader_s1:       'L=S1(一括)',
   skip:            'skip',
 };
 
@@ -73,6 +75,8 @@ const LABEL_COLOR: Record<AnnotationLabel, string> = {
   side_L_left:     '#00ccbb',
   complex_turn:    '#ffee44',
   ignore_trash:    '#555',
+  leader_s0:       '#ff9900',
+  leader_s1:       '#ff9900',
   skip:            '#333',
 };
 
@@ -290,6 +294,34 @@ export function AnnotationTool() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveToken, trainableFiles, runTraining]);
 
+  // ── 一括リーダー指定 ─────────────────────────────────────────────────────
+  const [bulkMode, setBulkMode]         = useState(false);
+  const [bulkResult, setBulkResult]     = useState('');
+
+  // 現在のフレームでスロット0/1がどちら（左/右）か判定
+  const getBulkSlotSides = useCallback(() => {
+    const f = frames[idx] ?? frames.find(fr => fr.poses.length >= 2);
+    if (!f || f.poses.length < 2) return { leftSlot: 0 as const, rightSlot: 1 as const };
+    const p0 = f.poses[0], p1 = f.poses[1];
+    const hx0 = ((p0.landmarks[23]?.x ?? 0) + (p0.landmarks[24]?.x ?? 0)) / 2;
+    const hx1 = ((p1.landmarks[23]?.x ?? 0) + (p1.landmarks[24]?.x ?? 0)) / 2;
+    return hx0 <= hx1
+      ? { leftSlot: 0 as const, rightSlot: 1 as const }
+      : { leftSlot: 1 as const, rightSlot: 0 as const };
+  }, [frames, idx]);
+
+  const applyBulkLabel = useCallback((leaderSlot: 0 | 1) => {
+    if (frames.length === 0) return;
+    isDirtyRef.current = true;
+    const label: AnnotationLabel = leaderSlot === 0 ? 'leader_s0' : 'leader_s1';
+    const count = frames.filter(f => f.poses.length >= 2).length;
+    setFrames(prev => prev.map(f =>
+      f.poses.length >= 2 ? { ...f, label } : f
+    ));
+    setBulkResult(`${count} フレームに「${LABEL_DISPLAY[label]}」を設定しました`);
+    setBulkMode(false);
+  }, [frames]);
+
   // ── Video overlay ────────────────────────────────────────────────────────
   const [videoUrl, setVideoUrl]     = useState<string | null>(null);
   const [videoName, setVideoName]   = useState('');
@@ -385,7 +417,9 @@ export function AnnotationTool() {
 
     const drawOverlays = () => {
       frame.poses.forEach((pose, pi) => {
-        drawSkeleton(ctx, pose.landmarks, cw, ch, COLORS[pi % COLORS.length]);
+        // 一括指定モード中は両骨格をニュートラルな白で表示（ルールベース色分けの影響を排除）
+        const color = bulkMode ? 'rgba(255,255,255,0.75)' : COLORS[pi % COLORS.length];
+        drawSkeleton(ctx, pose.landmarks, cw, ch, color);
       });
       const lbl = frame.label;
       if (lbl !== 'skip') {
@@ -461,7 +495,8 @@ export function AnnotationTool() {
       seekCleanup.current?.();
       seekCleanup.current = null;
     };
-  }, [idx, videoUrl, frames]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, videoUrl, frames, bulkMode]);
 
   // ── ラベル付け ──────────────────────────────────────────────────────────
   const applyLabel = useCallback((label: AnnotationLabel) => {
@@ -694,6 +729,61 @@ export function AnnotationTool() {
               <p className={styles.placeholderSub}>salsa_raw_v2_*.json</p>
             </div>
           )}
+          {/* ── 一括リーダー指定オーバーレイ ── */}
+          {bulkMode && (() => {
+            const { leftSlot, rightSlot } = getBulkSlotSides();
+            return (
+              <div style={{
+                position: 'absolute', inset: 0,
+                background: 'rgba(0,0,0,0.72)',
+                display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center',
+                gap: 16, borderRadius: 8, padding: 20,
+              }}>
+                <div style={{ color: '#fff', fontSize: 15, fontWeight: 'bold', textAlign: 'center' }}>
+                  どちらがリーダーですか？
+                </div>
+                <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11, textAlign: 'center', marginTop: -8 }}>
+                  動画を見て判断してください（骨格の色は無効化しています）<br/>
+                  全フレームに一括でラベルを付けます
+                </div>
+                <div style={{ display: 'flex', gap: 12, width: '100%' }}>
+                  <button
+                    onClick={() => applyBulkLabel(leftSlot)}
+                    style={{
+                      flex: 1, padding: '14px 8px',
+                      background: '#1a2a3a', border: '2px solid #4488ff',
+                      color: '#88bbff', borderRadius: 10,
+                      fontSize: 13, fontWeight: 'bold', cursor: 'pointer',
+                    }}
+                  >
+                    ← 左の人<br/>がリーダー
+                  </button>
+                  <button
+                    onClick={() => applyBulkLabel(rightSlot)}
+                    style={{
+                      flex: 1, padding: '14px 8px',
+                      background: '#2a1a3a', border: '2px solid #cc44ff',
+                      color: '#cc88ff', borderRadius: 10,
+                      fontSize: 13, fontWeight: 'bold', cursor: 'pointer',
+                    }}
+                  >
+                    右の人<br/>がリーダー →
+                  </button>
+                </div>
+                <button
+                  onClick={() => setBulkMode(false)}
+                  style={{
+                    padding: '6px 24px', background: 'transparent',
+                    border: '1px solid #444', color: '#888',
+                    borderRadius: 6, cursor: 'pointer', fontSize: 12,
+                  }}
+                >
+                  キャンセル
+                </button>
+              </div>
+            );
+          })()}
           {/* フレーム情報オーバーレイ */}
           {currentFrame && (
             <div className={styles.frameOverlay}>
@@ -714,6 +804,29 @@ export function AnnotationTool() {
         {/* プログレスバー */}
         <div className={styles.progressWrap}>
           <div className={styles.progressBar} style={{ width: `${progress}%` }} />
+        </div>
+
+        {/* 一括リーダー指定ボタン + 結果メッセージ */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+          <button
+            onClick={() => { setBulkMode(true); setBulkResult(''); }}
+            disabled={frames.length === 0}
+            style={{
+              padding: '7px 14px',
+              background: '#1a1a2a',
+              border: '1.5px solid #ff9900',
+              color: '#ff9900',
+              borderRadius: 8, fontSize: 12, fontWeight: 'bold',
+              cursor: frames.length === 0 ? 'not-allowed' : 'pointer',
+              opacity: frames.length === 0 ? 0.4 : 1,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            一括指定
+          </button>
+          {bulkResult && (
+            <span style={{ fontSize: 11, color: '#ff9900', opacity: 0.85 }}>{bulkResult}</span>
+          )}
         </div>
 
         {/* アクションボタン */}

@@ -83,7 +83,11 @@ export async function fetchFileBlob(
   const chunks: Uint8Array<ArrayBuffer>[] = [];
   let loaded = 0;
 
+  // AbortSignal を reader のキャンセルにも接続
+  abortSignal?.addEventListener('abort', () => { reader.cancel(); }, { once: true });
+
   while (true) {
+    if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value);

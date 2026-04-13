@@ -563,7 +563,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
       const x = e.clientX - rect.left;
       const zone = x < rect.width * 0.25 ? 'left' : x > rect.width * 0.75 ? 'right' : 'center';
       const now = Date.now();
-      if (zone !== 'center' && now - lastTapUpTimeRef.current < 300 && lastTapZoneRef.current === zone) {
+      if (zone !== 'center' && now - lastTapUpTimeRef.current < 400 && lastTapZoneRef.current === zone) {
         const dir: 1 | -1 = zone === 'left' ? -1 : 1;
         stepFrame(dir);
         doubleTapHoldRef.current = setInterval(() => stepFrame(dir), 120);

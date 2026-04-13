@@ -549,6 +549,34 @@
   -webkit-touch-callout: none;
 }
 
+/* ── コマ送りオーバーレイボタン ── */
+.stepOverlayBtn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 11;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.stepOverlayBtn:active {
+  background: rgba(0, 0, 0, 0.7);
+}
+.stepOverlayBtnLeft  { left: 12px; }
+.stepOverlayBtnRight { right: 12px; }
+
 .zoomOverlay:active {
   cursor: grabbing;
 }

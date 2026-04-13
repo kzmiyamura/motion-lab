@@ -546,6 +546,27 @@ export function YouTubeControl({
               {viewMode === 'video' && (
                 <div className={styles.zoomOverlay} {...video.overlayHandlers} />
               )}
+              {/* 一時停止中のコマ送りオーバーレイボタン */}
+              {viewMode === 'video' && !video.ytPlaying && (
+                <>
+                  <button
+                    className={`${styles.stepOverlayBtn} ${styles.stepOverlayBtnLeft}`}
+                    onPointerDown={() => video.startStep(-1)}
+                    onPointerUp={video.stopStep}
+                    onPointerLeave={video.stopStep}
+                    onPointerCancel={video.stopStep}
+                    title="コマ戻し（長押し）"
+                  >◀</button>
+                  <button
+                    className={`${styles.stepOverlayBtn} ${styles.stepOverlayBtnRight}`}
+                    onPointerDown={() => video.startStep(1)}
+                    onPointerUp={video.stopStep}
+                    onPointerLeave={video.stopStep}
+                    onPointerCancel={video.stopStep}
+                    title="コマ送り（長押し）"
+                  >▶</button>
+                </>
+              )}
               <div className={styles.transformContainer} style={transformStyle}>
                 <YouTube
                   videoId={videoId}

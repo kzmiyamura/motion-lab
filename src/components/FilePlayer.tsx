@@ -125,11 +125,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   // Zoom gesture refs
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastDistRef = useRef<number | null>(null);
-  // Double-tap-hold refs
-  const lastTapUpTimeRef = useRef<number>(0);
-  const lastTapZoneRef = useRef<'left' | 'right' | 'center' | null>(null);
-  const doubleTapHoldRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const suppressNextClickRef = useRef(false);
 
   // ── ロールモード: 'rule'=ルールベース, 'ml_exp'=ML実験（V2特徴量）
   const [roleMode, setRoleMode] = useState<'rule' | 'ml_exp'>('rule');
@@ -260,11 +255,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   // Cleanup blob URL on unmount
   useEffect(() => {
     return () => { if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current); };
-  }, []);
-
-  // Cleanup double-tap hold interval on unmount
-  useEffect(() => {
-    return () => { if (doubleTapHoldRef.current) clearInterval(doubleTapHoldRef.current); };
   }, []);
 
   // Sync volume/mute to media element
@@ -500,10 +490,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
 
   // Overlay click: lock-on → controls toggle → play/pause
   const handleOverlayClick = (e: React.MouseEvent) => {
-    if (suppressNextClickRef.current) {
-      suppressNextClickRef.current = false;
-      return;
-    }
     // ロック待機中 & 骨格表示 ON → その座標の人物をロックオン
     if (lockModeActive && source?.isVideo && vizMode !== 'off') {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -526,24 +512,15 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
       lockAt(canvasX, canvasY);
       return;
     }
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const zone = x < rect.width * 0.25 ? 'left' : x > rect.width * 0.75 ? 'right' : 'center';
     if (isExpanded) {
-      if (zone !== 'center') {
-        // 左右ゾーン：表示のみ（非表示にしない）
-        showControls();
-      } else if (controlsVisible) {
+      if (controlsVisible) {
         if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
         setControlsVisible(false);
       } else {
         showControls();
       }
     } else {
-      // 通常モード：再生中は全ゾーンでpause、一時停止中は中央のみplay（左右はダブルタップ予約）
-      if (zone === 'center' || isPlaying) {
-        togglePlay();
-      }
+      togglePlay();
     }
   };
 
@@ -555,31 +532,12 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     if (pointersRef.current.size === 2) {
       const pts = [...pointersRef.current.values()];
       lastDistRef.current = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-      return;
-    }
-    // Double-tap-hold detection (single finger, left/right zone, not locked)
-    if (pointersRef.current.size === 1 && !lockModeActive) {
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const zone = x < rect.width * 0.25 ? 'left' : x > rect.width * 0.75 ? 'right' : 'center';
-      const now = Date.now();
-      if (zone !== 'center' && now - lastTapUpTimeRef.current < 400 && lastTapZoneRef.current === zone) {
-        const dir: 1 | -1 = zone === 'left' ? -1 : 1;
-        stepFrame(dir);
-        doubleTapHoldRef.current = setInterval(() => stepFrame(dir), 120);
-        suppressNextClickRef.current = true;
-      }
     }
   };
 
   const onOverlayPointerMove = (e: React.PointerEvent) => {
     if (!pointersRef.current.has(e.pointerId)) return;
     e.preventDefault();
-    if (doubleTapHoldRef.current) {
-      // during hold, update position to avoid stale jump on release
-      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      return;
-    }
     const prev = pointersRef.current.get(e.pointerId)!;
     const dx = e.clientX - prev.x;
     const dy = e.clientY - prev.y;
@@ -598,16 +556,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   };
 
   const onOverlayPointerUp = (e: React.PointerEvent) => {
-    if (doubleTapHoldRef.current) {
-      clearInterval(doubleTapHoldRef.current);
-      doubleTapHoldRef.current = null;
-      lastTapUpTimeRef.current = 0; // reset to prevent triple-tap
-    } else if (pointersRef.current.size === 1) {
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      lastTapZoneRef.current = x < rect.width * 0.25 ? 'left' : x > rect.width * 0.75 ? 'right' : 'center';
-      lastTapUpTimeRef.current = Date.now();
-    }
     pointersRef.current.delete(e.pointerId);
     if (pointersRef.current.size < 2) lastDistRef.current = null;
   };
@@ -1248,6 +1196,27 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                   onClick={handleOverlayClick}
                   style={{ cursor: lockModeActive && vizMode !== 'off' && !isLocked ? 'crosshair' : 'pointer' }}
                 />
+                {/* 一時停止中のコマ送りオーバーレイボタン */}
+                {!isPlaying && fileViewMode === 'video' && (
+                  <>
+                    <button
+                      className={`${styles.stepOverlayBtn} ${styles.stepOverlayBtnLeft}`}
+                      onPointerDown={() => startStep(-1)}
+                      onPointerUp={stopStep}
+                      onPointerLeave={stopStep}
+                      onPointerCancel={stopStep}
+                      title="コマ戻し（長押し）"
+                    >◀</button>
+                    <button
+                      className={`${styles.stepOverlayBtn} ${styles.stepOverlayBtnRight}`}
+                      onPointerDown={() => startStep(1)}
+                      onPointerUp={stopStep}
+                      onPointerLeave={stopStep}
+                      onPointerCancel={stopStep}
+                      title="コマ送り（長押し）"
+                    >▶</button>
+                  </>
+                )}
                 {debugInfo && vizMode !== 'off' && (
                   <div className={styles.debugPanel}>
                     {/* ── スロット状態（シンプル表示）── */}

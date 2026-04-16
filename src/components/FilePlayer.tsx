@@ -14,7 +14,6 @@ import { SequenceView } from './SequenceView';
 import styles from './FilePlayer.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
-const HTML5_MIN_RATE = 0.1; // HTML5 video minimum playbackRate (iOS Safari)
 
 type FileSource = { name: string; url: string; isVideo: boolean };
 type PlayerSize = 'normal' | 'theater';
@@ -113,9 +112,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playerSectionRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pseudoCycleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pseudoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pseudoPlayingRef = useRef(false);
-  const runPseudoCycleRef = useRef<(rate: SlowRate) => void>(() => {});
   // View mode (audio / video)
   const [fileViewMode, setFileViewMode] = useState<'audio' | 'video'>('video');
 
@@ -207,17 +205,14 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     handlePressStart, handlePressEnd, handleTap,
   } = useBpmMeasure(handleMeasuredBpm, bpm);
 
-  // ── Pseudo-slow play/pause cycling (for 0.01x / 0.05x) ───────────────
+  // ── Pseudo-slow: interval-based seek (video stays paused) ────────────
   const stopPseudoCycle = useCallback(() => {
     pseudoPlayingRef.current = false;
-    if (pseudoCycleRef.current) { clearTimeout(pseudoCycleRef.current); pseudoCycleRef.current = null; }
+    if (pseudoIntervalRef.current) { clearInterval(pseudoIntervalRef.current); pseudoIntervalRef.current = null; }
   }, []);
 
   useEffect(() => {
-    return () => {
-      pseudoPlayingRef.current = false;
-      if (pseudoCycleRef.current) clearTimeout(pseudoCycleRef.current);
-    };
+    return () => { if (pseudoIntervalRef.current) clearInterval(pseudoIntervalRef.current); };
   }, []);
 
   // ── 音声/動画モード切替
@@ -440,22 +435,6 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     setDriveError('');
   };
 
-  // runPseudoCycle is stored in ref so recursive setTimeout always calls the latest version
-  const runPseudoCycle = (rate: SlowRate) => {
-    if (!pseudoPlayingRef.current) return;
-    const playMs = Math.round(getStepSize(rate) / HTML5_MIN_RATE * 1000);
-    const pauseMs = Math.round(playMs * (HTML5_MIN_RATE / rate - 1));
-    const el = mediaRef.current;
-    if (!el) { stopPseudoCycle(); return; }
-    el.play().catch(() => stopPseudoCycle());
-    pseudoCycleRef.current = setTimeout(() => {
-      if (!pseudoPlayingRef.current) return;
-      mediaRef.current?.pause();
-      pseudoCycleRef.current = setTimeout(() => runPseudoCycleRef.current(rate), pauseMs);
-    }, playMs);
-  };
-  runPseudoCycleRef.current = runPseudoCycle;
-
   // ── Player controls ────────────────────────────────────────────────────
   const togglePlay = () => {
     const el = mediaRef.current;
@@ -463,11 +442,17 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     if (PSEUDO_SLOW_RATES.has(slowRate)) {
       if (pseudoPlayingRef.current) {
         stopPseudoCycle();
-        el.pause();
+        setIsPlaying(false);
       } else {
         pseudoPlayingRef.current = true;
-        el.playbackRate = HTML5_MIN_RATE;
-        runPseudoCycleRef.current(slowRate);
+        setIsPlaying(true);
+        const step = getStepSize(slowRate);
+        const intervalMs = Math.round(step / slowRate * 1000);
+        pseudoIntervalRef.current = setInterval(() => {
+          const cur = mediaRef.current;
+          if (!cur) { stopPseudoCycle(); setIsPlaying(false); return; }
+          cur.currentTime = Math.min(cur.duration || Infinity, cur.currentTime + step);
+        }, intervalMs);
       }
     } else {
       if (el.paused) el.play().catch(() => {}); else el.pause();
@@ -493,18 +478,25 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const applySlowRate = (rate: SlowRate) => {
     const isPseudo = PSEUDO_SLOW_RATES.has(rate);
     const wasPseudo = PSEUDO_SLOW_RATES.has(slowRate);
+    const wasPlaying = pseudoPlayingRef.current || !(mediaRef.current?.paused ?? true);
+    stopPseudoCycle();
     setSlowRateState(rate);
     if (isPseudo) {
-      if (mediaRef.current) mediaRef.current.playbackRate = HTML5_MIN_RATE;
-      // Start/restart cycle if video is currently playing (regardless of whether we were in pseudo mode)
-      const wasPlaying = pseudoPlayingRef.current || !(mediaRef.current?.paused ?? true);
-      stopPseudoCycle();
+      setIsPlaying(wasPlaying);
       if (wasPlaying) {
         pseudoPlayingRef.current = true;
-        runPseudoCycleRef.current(rate);
+        const step = getStepSize(rate);
+        const intervalMs = Math.round(step / rate * 1000);
+        pseudoIntervalRef.current = setInterval(() => {
+          const el = mediaRef.current;
+          if (!el) { stopPseudoCycle(); setIsPlaying(false); return; }
+          el.currentTime = Math.min(el.duration || Infinity, el.currentTime + step);
+        }, intervalMs);
       }
     } else {
-      if (wasPseudo) stopPseudoCycle();
+      if (wasPseudo && wasPlaying) {
+        mediaRef.current?.play().catch(() => {});
+      }
       if (mediaRef.current) mediaRef.current.playbackRate = rate;
     }
   };
@@ -514,7 +506,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     if (!baseBpm) setBaseBpm(val);
     const base = baseBpm ?? val;
     if (mediaRef.current && !PSEUDO_SLOW_RATES.has(slowRate)) {
-      mediaRef.current.playbackRate = Math.max(0.25, Math.min(2, slowRate * (val / base)));
+      mediaRef.current.playbackRate = Math.max(0.1, Math.min(2, slowRate * (val / base)));
     }
   };
 
@@ -1215,14 +1207,17 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
               onTimeUpdate={handleTimeUpdate}
               onLoadedMetadata={() => {
                 setDuration(mediaRef.current?.duration ?? 0);
-                if (mediaRef.current) {
-                  mediaRef.current.playbackRate = PSEUDO_SLOW_RATES.has(slowRate) ? HTML5_MIN_RATE : slowRate;
-                }
+                if (mediaRef.current) mediaRef.current.playbackRate = slowRate;
               }}
               onEnded={() => {
-                stopPseudoCycle();
-                const el = mediaRef.current;
-                if (el) { el.currentTime = 0; el.play().catch(() => {}); }
+                if (pseudoPlayingRef.current) {
+                  stopPseudoCycle();
+                  setIsPlaying(false);
+                  if (mediaRef.current) mediaRef.current.currentTime = 0;
+                } else {
+                  const el = mediaRef.current;
+                  if (el) { el.currentTime = 0; el.play().catch(() => {}); }
+                }
               }}
               playsInline
               controls={false}

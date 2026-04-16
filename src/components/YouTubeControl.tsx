@@ -290,8 +290,8 @@ export function YouTubeControl({
     if (e.data === 0) {
       try { playerRef.current?.seekTo(0, true); } catch { /* ignore */ }
     }
-    // Suppress play/pause events that are part of pseudo-slow cycling
-    if (video.pseudoPlayingRef.current && (e.data === 1 || e.data === 2)) return;
+    // Pseudo-slow mode manages ytPlaying internally; ignore YouTube state events
+    if (video.pseudoPlayingRef.current) return;
     setYtPlaying(e.data === 1 || e.data === 3);
   }, [setYtPlaying, video.pseudoPlayingRef]);
 

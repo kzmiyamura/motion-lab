@@ -27,9 +27,8 @@ export function getStepSize(slowRate: number): number {
 }
 
 // ── Pseudo-slow constants ─────────────────────────────────────────────────
-// Rates below YouTube's minimum (0.25x) are emulated via play/pause cycling
+// Rates below browser/YouTube minimums are emulated via interval-based seekTo
 export const PSEUDO_SLOW_RATES = new Set<number>([0.01, 0.05]);
-const YT_MIN_RATE = 0.25; // YouTube IFrame API minimum
 
 // ── Main hook ──────────────────────────────────────────────────────────────
 export function useVideoTraining(
@@ -46,30 +45,14 @@ export function useVideoTraining(
   const loopIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Pseudo-slow play/pause cycling ────────────────────────────────────
-  const pseudoCycleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ── Pseudo-slow: interval-based seekTo (video stays paused) ─────────
+  const pseudoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pseudoPlayingRef = useRef(false);
-  const runPseudoCycleRef = useRef<(rate: number) => void>(() => {});
 
   const stopPseudoCycle = useCallback(() => {
     pseudoPlayingRef.current = false;
-    if (pseudoCycleRef.current) { clearTimeout(pseudoCycleRef.current); pseudoCycleRef.current = null; }
+    if (pseudoIntervalRef.current) { clearInterval(pseudoIntervalRef.current); pseudoIntervalRef.current = null; }
   }, []);
-
-  // runPseudoCycle is kept in a ref so recursive setTimeout always uses the latest version
-  const runPseudoCycle = (rate: number) => {
-    if (!pseudoPlayingRef.current) return;
-    // Play for `playMs` at YT_MIN_RATE → advances getStepSize(rate) seconds of video
-    const playMs = Math.round(getStepSize(rate) / YT_MIN_RATE * 1000);
-    const pauseMs = Math.round(playMs * (YT_MIN_RATE / rate - 1));
-    try { playerRef.current?.playVideo(); } catch { stopPseudoCycle(); return; }
-    pseudoCycleRef.current = setTimeout(() => {
-      if (!pseudoPlayingRef.current) return;
-      try { playerRef.current?.pauseVideo(); } catch { return; }
-      pseudoCycleRef.current = setTimeout(() => runPseudoCycleRef.current(rate), pauseMs);
-    }, playMs);
-  };
-  runPseudoCycleRef.current = runPseudoCycle;
 
   // ── Loop polling ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -100,8 +83,7 @@ export function useVideoTraining(
   useEffect(() => {
     return () => {
       if (stepIntervalRef.current) clearInterval(stepIntervalRef.current);
-      pseudoPlayingRef.current = false;
-      if (pseudoCycleRef.current) clearTimeout(pseudoCycleRef.current);
+      if (pseudoIntervalRef.current) clearInterval(pseudoIntervalRef.current);
     };
   }, []);
 
@@ -110,13 +92,18 @@ export function useVideoTraining(
     if (PSEUDO_SLOW_RATES.has(slowRate)) {
       if (pseudoPlayingRef.current) {
         stopPseudoCycle();
-        try { playerRef.current?.pauseVideo(); } catch {}
         setYtPlaying(false);
       } else {
         pseudoPlayingRef.current = true;
         setYtPlaying(true);
-        try { playerRef.current?.setPlaybackRate(YT_MIN_RATE); } catch {}
-        runPseudoCycleRef.current(slowRate);
+        const step = getStepSize(slowRate);
+        const intervalMs = Math.round(step / slowRate * 1000);
+        pseudoIntervalRef.current = setInterval(() => {
+          try {
+            const t = playerRef.current?.getCurrentTime?.() ?? 0;
+            playerRef.current?.seekTo(t + step, true);
+          } catch { stopPseudoCycle(); setYtPlaying(false); }
+        }, intervalMs);
       }
     } else {
       try {
@@ -129,19 +116,25 @@ export function useVideoTraining(
   const setSlowRate = useCallback((rate: SlowRate) => {
     const wasPseudo = PSEUDO_SLOW_RATES.has(slowRate);
     const isPseudo = PSEUDO_SLOW_RATES.has(rate);
+    const wasPlaying = pseudoPlayingRef.current || ytPlaying;
     setSlowRateState(rate);
+    stopPseudoCycle();
     if (isPseudo) {
-      try { playerRef.current?.setPlaybackRate(YT_MIN_RATE); } catch {}
-      // Start/restart cycle if currently playing (regardless of whether we were in pseudo mode)
-      const wasPlaying = pseudoPlayingRef.current || ytPlaying;
-      stopPseudoCycle();
+      setYtPlaying(wasPlaying);
       if (wasPlaying) {
         pseudoPlayingRef.current = true;
-        runPseudoCycleRef.current(rate);
+        const step = getStepSize(rate);
+        const intervalMs = Math.round(step / rate * 1000);
+        pseudoIntervalRef.current = setInterval(() => {
+          try {
+            const t = playerRef.current?.getCurrentTime?.() ?? 0;
+            playerRef.current?.seekTo(t + step, true);
+          } catch { stopPseudoCycle(); setYtPlaying(false); }
+        }, intervalMs);
       }
     } else if (wasPseudo) {
-      stopPseudoCycle();
-      if (ytPlaying) {
+      // Exiting pseudo: restore actual playback
+      if (wasPlaying) {
         try { playerRef.current?.playVideo(); } catch {}
       }
     }

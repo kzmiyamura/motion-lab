@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { requestDriveToken, revokeDriveToken, getStoredToken } from '../engine/googleAuth';
 import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, createPublicPermission, type DriveFile, type UploadStats } from '../engine/googleDrive';
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
-import { SLOW_RATES, ZOOM_PRESETS, getStepSize, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
+import { SLOW_RATES, ZOOM_PRESETS, getStepSize, PSEUDO_SLOW_RATES, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import { useWakeLock } from '../hooks/useWakeLock';
 import { usePoseEstimation, type VizMode, type SalsaStyle } from '../hooks/usePoseEstimation';
 import { usePoseLogger } from '../hooks/usePoseLogger';
@@ -14,6 +14,7 @@ import { SequenceView } from './SequenceView';
 import styles from './FilePlayer.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
+const HTML5_MIN_RATE = 0.1; // HTML5 video minimum playbackRate (iOS Safari)
 
 type FileSource = { name: string; url: string; isVideo: boolean };
 type PlayerSize = 'normal' | 'theater';
@@ -112,6 +113,9 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playerSectionRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pseudoCycleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pseudoPlayingRef = useRef(false);
+  const runPseudoCycleRef = useRef<(rate: SlowRate) => void>(() => {});
   // View mode (audio / video)
   const [fileViewMode, setFileViewMode] = useState<'audio' | 'video'>('video');
 
@@ -202,6 +206,19 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     firstTapSet,
     handlePressStart, handlePressEnd, handleTap,
   } = useBpmMeasure(handleMeasuredBpm, bpm);
+
+  // ── Pseudo-slow play/pause cycling (for 0.01x / 0.05x) ───────────────
+  const stopPseudoCycle = useCallback(() => {
+    pseudoPlayingRef.current = false;
+    if (pseudoCycleRef.current) { clearTimeout(pseudoCycleRef.current); pseudoCycleRef.current = null; }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      pseudoPlayingRef.current = false;
+      if (pseudoCycleRef.current) clearTimeout(pseudoCycleRef.current);
+    };
+  }, []);
 
   // ── 音声/動画モード切替
   const handleViewModeChange = useCallback((m: 'audio' | 'video') => {
@@ -307,6 +324,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const openFileSource = useCallback((
     name: string, url: string, mimeType: string,
   ) => {
+    stopPseudoCycle();
     if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
     prevBlobUrl.current = url;
     setSource({ name, url, isVideo: mimeType.startsWith('video/') });
@@ -324,7 +342,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     unlock();
     setLockModeActive(false);
     clearSequence();
-  }, [bpm, unlock, clearSequence]);
+  }, [bpm, unlock, clearSequence, stopPseudoCycle]);
 
   const handleFileSelect = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
@@ -422,11 +440,38 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     setDriveError('');
   };
 
+  // runPseudoCycle is stored in ref so recursive setTimeout always calls the latest version
+  const runPseudoCycle = (rate: SlowRate) => {
+    if (!pseudoPlayingRef.current) return;
+    const playMs = Math.round(getStepSize(rate) / HTML5_MIN_RATE * 1000);
+    const pauseMs = Math.round(playMs * (HTML5_MIN_RATE / rate - 1));
+    const el = mediaRef.current;
+    if (!el) { stopPseudoCycle(); return; }
+    el.play().catch(() => stopPseudoCycle());
+    pseudoCycleRef.current = setTimeout(() => {
+      if (!pseudoPlayingRef.current) return;
+      mediaRef.current?.pause();
+      pseudoCycleRef.current = setTimeout(() => runPseudoCycleRef.current(rate), pauseMs);
+    }, playMs);
+  };
+  runPseudoCycleRef.current = runPseudoCycle;
+
   // ── Player controls ────────────────────────────────────────────────────
   const togglePlay = () => {
     const el = mediaRef.current;
     if (!el) return;
-    if (el.paused) el.play().catch(() => {}); else el.pause();
+    if (PSEUDO_SLOW_RATES.has(slowRate)) {
+      if (pseudoPlayingRef.current) {
+        stopPseudoCycle();
+        el.pause();
+      } else {
+        pseudoPlayingRef.current = true;
+        el.playbackRate = HTML5_MIN_RATE;
+        runPseudoCycleRef.current(slowRate);
+      }
+    } else {
+      if (el.paused) el.play().catch(() => {}); else el.pause();
+    }
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -446,15 +491,27 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   };
 
   const applySlowRate = (rate: SlowRate) => {
+    const wasPseudo = PSEUDO_SLOW_RATES.has(slowRate);
+    const isPseudo = PSEUDO_SLOW_RATES.has(rate);
     setSlowRateState(rate);
-    if (mediaRef.current) mediaRef.current.playbackRate = rate;
+    if (isPseudo) {
+      if (mediaRef.current) mediaRef.current.playbackRate = HTML5_MIN_RATE;
+      if (pseudoPlayingRef.current) {
+        stopPseudoCycle();
+        pseudoPlayingRef.current = true;
+        runPseudoCycleRef.current(rate);
+      }
+    } else {
+      if (wasPseudo) stopPseudoCycle();
+      if (mediaRef.current) mediaRef.current.playbackRate = rate;
+    }
   };
 
   const commitBpm = (val: number) => {
     onBpmChange(val);
     if (!baseBpm) setBaseBpm(val);
     const base = baseBpm ?? val;
-    if (mediaRef.current) {
+    if (mediaRef.current && !PSEUDO_SLOW_RATES.has(slowRate)) {
       mediaRef.current.playbackRate = Math.max(0.25, Math.min(2, slowRate * (val / base)));
     }
   };
@@ -561,6 +618,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   };
 
   const goHome = () => {
+    stopPseudoCycle();
     mediaRef.current?.pause();
     if (playerSize === 'theater') setPlayerSize('normal');
     if (isFullscreen) exitFullscreen();
@@ -1151,13 +1209,16 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                   : undefined,
               }}
               onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
+              onPause={() => { if (!pseudoPlayingRef.current) setIsPlaying(false); }}
               onTimeUpdate={handleTimeUpdate}
               onLoadedMetadata={() => {
                 setDuration(mediaRef.current?.duration ?? 0);
-                if (mediaRef.current) mediaRef.current.playbackRate = slowRate;
+                if (mediaRef.current) {
+                  mediaRef.current.playbackRate = PSEUDO_SLOW_RATES.has(slowRate) ? HTML5_MIN_RATE : slowRate;
+                }
               }}
               onEnded={() => {
+                stopPseudoCycle();
                 const el = mediaRef.current;
                 if (el) { el.currentTime = 0; el.play().catch(() => {}); }
               }}

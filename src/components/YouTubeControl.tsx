@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type MutableRefObject } from 'react';
 import YouTube, { type YouTubePlayer } from 'react-youtube';
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
-import { useVideoTraining } from '../hooks/useVideoTraining';
+import { useVideoTraining, PSEUDO_SLOW_RATES } from '../hooks/useVideoTraining';
 import type { SlowRate } from '../hooks/useVideoTraining';
 import { ModeSwitcher } from './ModeSwitcher';
 import { VideoControls } from './VideoControls';
@@ -237,6 +237,8 @@ export function YouTubeControl({
       rate = viewMode === 'video' ? video.slowRate : 1;
     }
     rate = Math.min(2, Math.max(0.25, rate));
+    // Pseudo-slow rates are managed by useVideoTraining's play/pause cycling — skip debounce
+    if (PSEUDO_SLOW_RATES.has(video.slowRate)) return;
     if (setRateTimerRef.current) clearTimeout(setRateTimerRef.current);
     const rateToSet = rate;
     setRateTimerRef.current = setTimeout(() => {
@@ -288,8 +290,10 @@ export function YouTubeControl({
     if (e.data === 0) {
       try { playerRef.current?.seekTo(0, true); } catch { /* ignore */ }
     }
+    // Suppress play/pause events that are part of pseudo-slow cycling
+    if (video.pseudoPlayingRef.current && (e.data === 1 || e.data === 2)) return;
     setYtPlaying(e.data === 1 || e.data === 3);
-  }, [setYtPlaying]);
+  }, [setYtPlaying, video.pseudoPlayingRef]);
 
   const handleSlowRate = useCallback((rate: SlowRate) => {
     video.setSlowRate(rate);

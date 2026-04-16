@@ -491,13 +491,15 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   };
 
   const applySlowRate = (rate: SlowRate) => {
-    const wasPseudo = PSEUDO_SLOW_RATES.has(slowRate);
     const isPseudo = PSEUDO_SLOW_RATES.has(rate);
+    const wasPseudo = PSEUDO_SLOW_RATES.has(slowRate);
     setSlowRateState(rate);
     if (isPseudo) {
       if (mediaRef.current) mediaRef.current.playbackRate = HTML5_MIN_RATE;
-      if (pseudoPlayingRef.current) {
-        stopPseudoCycle();
+      // Start/restart cycle if video is currently playing (regardless of whether we were in pseudo mode)
+      const wasPlaying = pseudoPlayingRef.current || !(mediaRef.current?.paused ?? true);
+      stopPseudoCycle();
+      if (wasPlaying) {
         pseudoPlayingRef.current = true;
         runPseudoCycleRef.current(rate);
       }

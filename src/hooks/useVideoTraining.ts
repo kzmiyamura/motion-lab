@@ -132,9 +132,10 @@ export function useVideoTraining(
     setSlowRateState(rate);
     if (isPseudo) {
       try { playerRef.current?.setPlaybackRate(YT_MIN_RATE); } catch {}
-      if (pseudoPlayingRef.current) {
-        // Restart cycle with new rate
-        stopPseudoCycle();
+      // Start/restart cycle if currently playing (regardless of whether we were in pseudo mode)
+      const wasPlaying = pseudoPlayingRef.current || ytPlaying;
+      stopPseudoCycle();
+      if (wasPlaying) {
         pseudoPlayingRef.current = true;
         runPseudoCycleRef.current(rate);
       }

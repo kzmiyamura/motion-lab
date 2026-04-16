@@ -120,9 +120,11 @@ export function useVideoTraining(
     setSlowRateState(rate);
     stopPseudoCycle();
     if (isPseudo) {
+      // Pause actual playback; set ref before pause so handleStateChange ignores the event
+      pseudoPlayingRef.current = wasPlaying;
+      if (wasPlaying) try { playerRef.current?.pauseVideo(); } catch { /* ignore */ }
       setYtPlaying(wasPlaying);
       if (wasPlaying) {
-        pseudoPlayingRef.current = true;
         const step = getStepSize(rate);
         const intervalMs = Math.round(step / rate * 1000);
         pseudoIntervalRef.current = setInterval(() => {

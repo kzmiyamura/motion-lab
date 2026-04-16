@@ -482,9 +482,11 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     stopPseudoCycle();
     setSlowRateState(rate);
     if (isPseudo) {
+      // Pause actual playback; set ref before pause so onPause suppression works
+      pseudoPlayingRef.current = wasPlaying;
+      if (wasPlaying) mediaRef.current?.pause();
       setIsPlaying(wasPlaying);
       if (wasPlaying) {
-        pseudoPlayingRef.current = true;
         const step = getStepSize(rate);
         const intervalMs = Math.round(step / rate * 1000);
         pseudoIntervalRef.current = setInterval(() => {
@@ -494,10 +496,11 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         }, intervalMs);
       }
     } else {
+      pseudoPlayingRef.current = false;
+      if (mediaRef.current) mediaRef.current.playbackRate = rate;
       if (wasPseudo && wasPlaying) {
         mediaRef.current?.play().catch(() => {});
       }
-      if (mediaRef.current) mediaRef.current.playbackRate = rate;
     }
   };
 

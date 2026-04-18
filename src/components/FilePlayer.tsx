@@ -208,7 +208,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   }, [onBpmChange]);
 
   const {
-    isPressing, elapsedMs, estimatedBeat,
+    isPressing, elapsedMs,
     firstTapSet,
     handleTap,
   } = useBpmMeasure(handleMeasuredBpm, bpm);

@@ -216,7 +216,7 @@ export function YouTubeControl({
   }, [onBpmChange]);
 
   const {
-    isPressing, elapsedMs, estimatedBeat,
+    isPressing, elapsedMs,
     firstTapSet,
     handleTap,
   } = useBpmMeasure(handleMeasuredBpm, bpm);

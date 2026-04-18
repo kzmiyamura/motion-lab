@@ -656,12 +656,11 @@ export function YouTubeControl({
                 const isBeat = i % 2 === 0;
                 const beatNum = Math.floor(i / 2);
                 const isAccent = isBeat && (beatNum === 0 || beatNum === 4);
-                const isActive = activeSub === i;
                 return (
                   <div key={i} className={[
                     isBeat ? styles.beatDot : styles.beatDotAnd,
-                    isActive ? (isAccent ? styles.beatDotAccent : styles.beatDotCurrent) : '',
-                    isActive && !isBeat ? styles.beatDotAndActive : '',
+                    isAccent ? styles.beatDotAccent : styles.beatDotCurrent,
+                    !isBeat ? styles.beatDotAndActive : '',
                   ].filter(Boolean).join(' ')}>
                     {label}
                   </div>

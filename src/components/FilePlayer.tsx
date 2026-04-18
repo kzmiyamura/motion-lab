@@ -997,6 +997,10 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           ? beat1VideoTime + (Math.floor(Math.max(0, beat1Elapsed / secsPerBar)) + 1) * secsPerBar
           : null;
         const SUB_BEATS = ['1','and','2','and','3','and','4','and','5','and','6','and','7','and','8','and'];
+        // activeSub: 0–15, which sub-beat is currently playing. -1 = unknown
+        const activeSub = (beat1VideoTime !== null && measBpm > 0)
+          ? Math.floor((currentTime - beat1VideoTime) * measBpm / 30) % 16
+          : -1;
         const handleBpmTap = () => {
           if (!firstTapSet) setBeat1VideoTime(currentTime);
           handleTap();
@@ -1022,11 +1026,13 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                 const isBeat = i % 2 === 0;
                 const beatNum = Math.floor(i / 2);
                 const isAccent = isBeat && (beatNum === 0 || beatNum === 4);
+                const isActive = i === activeSub;
                 return (
                   <div key={i} className={[
                     isBeat ? styles.beatDot : styles.beatDotAnd,
-                    isAccent ? styles.beatDotAccent : styles.beatDotCurrent,
-                    !isBeat ? styles.beatDotAndActive : '',
+                    isActive && isAccent ? styles.beatDotAccent : '',
+                    isActive && !isAccent && isBeat ? styles.beatDotCurrent : '',
+                    isActive && !isBeat ? styles.beatDotAndActive : '',
                   ].filter(Boolean).join(' ')}>
                     {label}
                   </div>

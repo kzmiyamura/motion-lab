@@ -33,7 +33,7 @@ export function useBpmMeasure(
   /** Used to animate the beat counter while measuring */
   referenceBpm: number,
 ): BpmMeasureResult {
-  const [mode, setMode] = useState<MeasureMode>('longpress');
+  const [mode, setMode] = useState<MeasureMode>('twotap');
   const [isPressing, setIsPressing] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [firstTapTime, setFirstTapTime] = useState<number | null>(null);

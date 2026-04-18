@@ -90,6 +90,7 @@ export function YouTubeControl({
   const [isMirrored, setIsMirrored] = useState(false);
 
   const [seekPos, setSeekPos] = useState(0);
+  const [beat1VideoTime, setBeat1VideoTime] = useState<number | null>(null);
   const [duration, setDuration] = useState(0);
 
   const playerRef = useRef<YouTubePlayer | null>(null);
@@ -193,6 +194,7 @@ export function YouTubeControl({
     const handler = () => {
       const val = Number(input.value);
       setSeekPos(val);
+      setBeat1VideoTime(null);
       try { playerRef.current?.seekTo(val, true); } catch { /* ignore */ }
       isSeekingRef.current = false;
       showControlsRef.current();
@@ -214,10 +216,9 @@ export function YouTubeControl({
   }, [onBpmChange]);
 
   const {
-    mode, switchMode,
     isPressing, elapsedMs, estimatedBeat,
     firstTapSet,
-    handlePressStart, handlePressEnd, handleTap,
+    handleTap,
   } = useBpmMeasure(handleMeasuredBpm, bpm);
 
   const video = useVideoTraining(playerRef, viewMode === 'video', overlayTapRef);
@@ -602,99 +603,131 @@ export function YouTubeControl({
       </div>
 
       {/* ── BPM 測定（audio mode のみ）── */}
-      {viewMode === 'audio' && (
-        <div className={styles.block}>
-          <div className={styles.blockHeader}>
-            <span className={styles.blockLabel}>BPM 測定</span>
-            <div className={styles.modeToggle}>
-              <button
-                className={`${styles.modeBtn} ${mode === 'longpress' ? styles.modeBtnActive : ''}`}
-                onClick={() => switchMode('longpress')}
-              >長押し</button>
-              <button
-                className={`${styles.modeBtn} ${mode === 'twotap' ? styles.modeBtnActive : ''}`}
-                onClick={() => switchMode('twotap')}
-              >2タップ</button>
+      {viewMode === 'audio' && (() => {
+        const measBpm = baseBpm ?? 0;
+        const beat1Elapsed = beat1VideoTime !== null ? seekPos - beat1VideoTime : -1;
+        const activeSub = (() => {
+          if (isPressing || firstTapSet) return estimatedBeat > 0 ? (estimatedBeat - 1) * 2 : -1;
+          if (beat1Elapsed >= 0 && measBpm > 0) return Math.floor(beat1Elapsed * measBpm / 30) % 16;
+          return -1;
+        })();
+        const secsPerBar = measBpm > 0 ? 8 * 60 / measBpm : 0;
+        const nextBeat1 = (beat1VideoTime !== null && secsPerBar > 0)
+          ? beat1VideoTime + (Math.floor(Math.max(0, beat1Elapsed / secsPerBar)) + 1) * secsPerBar
+          : null;
+        const SUB_BEATS = ['1','and','2','and','3','and','4','and','5','and','6','and','7','and','8','and'];
+        const fmtBeatTime = (sec: number) => {
+          const m = Math.floor(sec / 60);
+          const s = Math.floor(sec % 60);
+          const ms = Math.round((sec % 1) * 1000);
+          return `${m}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
+        };
+        const handleBpmTap = () => {
+          if (!firstTapSet) setBeat1VideoTime(seekPos);
+          handleTap();
+        };
+        return (
+          <div className={styles.block}>
+            <div className={styles.blockHeader}>
+              <span className={styles.blockLabel}>BPM 測定</span>
             </div>
-          </div>
 
-          <div className={styles.beatDots}>
-            {Array.from({ length: 8 }, (_, i) => (
-              <div
-                key={i}
-                className={[
-                  styles.beatDot,
-                  isPressing && i < estimatedBeat ? styles.beatDotLit : '',
-                  isPressing && i === estimatedBeat - 1 ? styles.beatDotCurrent : '',
-                ].filter(Boolean).join(' ')}
-              >
-                {i + 1}
+            {/* SlowRate buttons */}
+            <VideoControls
+              ytPlaying={video.ytPlaying}
+              onTogglePlay={video.togglePlay}
+              onStep={video.stepFrame}
+              slowRate={video.slowRate}
+              onSlowRate={handleSlowRate}
+              loopStart={video.loopStart}
+              loopEnd={video.loopEnd}
+              isLooping={video.isLooping}
+              onMarkLoop={video.markLoop}
+              onClearLoop={video.clearLoop}
+              onToggleLoop={() => video.setIsLooping(v => !v)}
+              onPreset={video.applyPreset}
+              isMirrored={isMirrored}
+              onMirrorToggle={() => setIsMirrored(v => !v)}
+            />
+
+            {/* Beat display 1and2and...8and */}
+            <div className={styles.beatDots}>
+              {SUB_BEATS.map((label, i) => {
+                const isBeat = i % 2 === 0;
+                const beatNum = Math.floor(i / 2);
+                const isAccent = isBeat && (beatNum === 0 || beatNum === 4);
+                const isActive = activeSub === i;
+                return (
+                  <div key={i} className={[
+                    isBeat ? styles.beatDot : styles.beatDotAnd,
+                    isActive ? (isAccent ? styles.beatDotAccent : styles.beatDotCurrent) : '',
+                    isActive && !isBeat ? styles.beatDotAndActive : '',
+                  ].filter(Boolean).join(' ')}>
+                    {label}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Beat 1 timestamps */}
+            {beat1VideoTime !== null && measBpm > 0 && (
+              <div className={styles.beat1Info}>
+                <span>Beat 1: {fmtBeatTime(beat1VideoTime)}</span>
+                {nextBeat1 !== null && <span>→ 次: {fmtBeatTime(nextBeat1)}</span>}
               </div>
-            ))}
-          </div>
+            )}
 
-          {mode === 'longpress' ? (
-            <button
-              className={`${styles.measureBtn} ${isPressing ? styles.measureBtnActive : ''}`}
-              onPointerDown={handlePressStart}
-              onPointerUp={handlePressEnd}
-              onPointerLeave={handlePressEnd}
-            >
-              {isPressing
-                ? `${(elapsedMs / 1000).toFixed(1)} s 計測中…`
-                : '① 押す  →  ⑧ 離す（8拍分）'}
-            </button>
-          ) : (
+            {/* 2-tap button */}
             <button
               className={`${styles.measureBtn} ${(isPressing || firstTapSet) ? styles.measureBtnActive : ''}`}
-              onClick={handleTap}
+              onClick={handleBpmTap}
             >
               {!firstTapSet ? '「1」でタップ' : `${(elapsedMs / 1000).toFixed(1)} s — 「次の1」でタップ`}
             </button>
-          )}
 
-          {baseBpm !== null && (
-            <div className={styles.bpmResult}>
-              <button
-                className={styles.bpmAdjBtn}
-                onClick={() => { const n = Math.max(1, (baseBpm ?? 1) - 1); setBaseBpm(n); onBpmChange(n); }}
-                aria-label="BPM基準 −1"
-              >−</button>
-              <span className={styles.bpmResultValue}>{baseBpm}</span>
-              <button
-                className={styles.bpmAdjBtn}
-                onClick={() => { const n = (baseBpm ?? 1) + 1; setBaseBpm(n); onBpmChange(n); }}
-                aria-label="BPM基準 +1"
-              >＋</button>
-              <span className={styles.bpmResultUnit}>BPM 基準</span>
-              {bpm !== baseBpm && (
-                <span className={styles.rateTag}>×{playbackRate.toFixed(2)}</span>
-              )}
+            {baseBpm !== null && (
+              <div className={styles.bpmResult}>
+                <button
+                  className={styles.bpmAdjBtn}
+                  onClick={() => { const n = Math.max(1, (baseBpm ?? 1) - 1); setBaseBpm(n); onBpmChange(n); }}
+                  aria-label="BPM基準 −1"
+                >−</button>
+                <span className={styles.bpmResultValue}>{baseBpm}</span>
+                <button
+                  className={styles.bpmAdjBtn}
+                  onClick={() => { const n = (baseBpm ?? 1) + 1; setBaseBpm(n); onBpmChange(n); }}
+                  aria-label="BPM基準 +1"
+                >＋</button>
+                <span className={styles.bpmResultUnit}>BPM 基準</span>
+                {bpm !== baseBpm && (
+                  <span className={styles.rateTag}>×{playbackRate.toFixed(2)}</span>
+                )}
+              </div>
+            )}
+
+            {/* ── BPM スライダー ── */}
+            {/* onChange はローカル表示のみ。onPointerUp/onKeyUp で確定 → setPlaybackRate は1回だけ */}
+            <div className={styles.bpmSliderRow}>
+              <label className={styles.bpmSliderLabel} htmlFor="yt-bpm-slider">BPM</label>
+              <input
+                id="yt-bpm-slider"
+                type="range"
+                min={80}
+                max={220}
+                step={1}
+                value={sliderBpm}
+                onChange={(e) => setSliderBpm(Number(e.target.value))}
+                onPointerUp={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
+                onTouchEnd={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
+                onKeyUp={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
+                className={styles.bpmSlider}
+                aria-label="BPM"
+              />
+              <span className={styles.bpmSliderValue}>{sliderBpm}</span>
             </div>
-          )}
-
-          {/* ── BPM スライダー ── */}
-          {/* onChange はローカル表示のみ。onPointerUp/onKeyUp で確定 → setPlaybackRate は1回だけ */}
-          <div className={styles.bpmSliderRow}>
-            <label className={styles.bpmSliderLabel} htmlFor="yt-bpm-slider">BPM</label>
-            <input
-              id="yt-bpm-slider"
-              type="range"
-              min={80}
-              max={220}
-              step={1}
-              value={sliderBpm}
-              onChange={(e) => setSliderBpm(Number(e.target.value))}
-              onPointerUp={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
-              onTouchEnd={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
-              onKeyUp={(e) => onBpmChange(Number((e.target as HTMLInputElement).value))}
-              className={styles.bpmSlider}
-              aria-label="BPM"
-            />
-            <span className={styles.bpmSliderValue}>{sliderBpm}</span>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

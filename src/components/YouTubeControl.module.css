@@ -58,7 +58,9 @@
 /* ── Beat dots 1–8 ── */
 .beatDots {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
   justify-content: center;
 }
 
@@ -723,4 +725,42 @@
   margin: 4px 0 2px;
   padding: 0 4px;
   line-height: 1.4;
+}
+
+/* ── BPM beat display additions ── */
+.beatDotAnd {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.38rem;
+  color: rgba(255,255,255,0.2);
+  transition: background 0.08s;
+}
+
+.beatDotAndActive {
+  background: rgba(88,166,255,0.25);
+  border-color: rgba(88,166,255,0.6);
+  color: rgba(88,166,255,0.8);
+}
+
+.beatDotAccent {
+  background: rgba(255,80,80,0.55);
+  border-color: #ff6060;
+  color: #fff;
+  transform: scale(1.15);
+}
+
+.beat1Info {
+  display: flex;
+  gap: 12px;
+  font-size: 0.62rem;
+  color: var(--color-fg-dim);
+  font-variant-numeric: tabular-nums;
+  justify-content: center;
+  flex-wrap: wrap;
 }

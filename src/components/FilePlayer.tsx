@@ -39,6 +39,13 @@ function fmtBytes(b: number): string {
   return `${b} B`;
 }
 
+function fmtBeatTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  const ms = Math.round((sec % 1) * 1000);
+  return `${m}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+}
+
 function fmtSpeed(bps: number): string {
   if (bps >= 1024 ** 2) return `${(bps / 1024 ** 2).toFixed(1)} MB/s`;
   if (bps >= 1024)      return `${(bps / 1024).toFixed(0)} KB/s`;
@@ -110,6 +117,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   /** アップロード用に元の File オブジェクトを保持（Drive ファイルは null） */
   const sourceFileRef = useRef<File | null>(null);
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [beat1VideoTime, setBeat1VideoTime] = useState<number | null>(null);
+  const prevTimeRef = useRef(0);
   const playerSectionRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pseudoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -199,10 +208,9 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   }, [onBpmChange]);
 
   const {
-    mode: bpmMode, switchMode: switchBpmMode,
     isPressing, elapsedMs, estimatedBeat,
     firstTapSet,
-    handlePressStart, handlePressEnd, handleTap,
+    handleTap,
   } = useBpmMeasure(handleMeasuredBpm, bpm);
 
   // ── Pseudo-slow: interval-based seek (video stays paused) ────────────
@@ -325,6 +333,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     setSource({ name, url, isVideo: mimeType.startsWith('video/') });
     setBaseBpm(bpm);
     setSliderBpm(bpm);
+    setBeat1VideoTime(null);
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
@@ -469,6 +478,8 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     const el = mediaRef.current;
     if (!el) return;
     const t = el.currentTime;
+    if (Math.abs(t - prevTimeRef.current) > 1.0) setBeat1VideoTime(null);
+    prevTimeRef.current = t;
     setCurrentTime(t);
     if (isLooping && loopStart !== null && loopEnd !== null && t >= loopEnd) {
       el.currentTime = loopStart;
@@ -978,76 +989,93 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
       )}
 
       {/* ── BPM 計測ブロック（音声モードのみ） ── */}
-      {fileViewMode === 'audio' && (
-        <div className={styles.bpmMeasureBlock}>
-          <div className={styles.bpmMeasureHeader}>
+      {fileViewMode === 'audio' && (() => {
+        const measBpm = baseBpm ?? 0;
+        const beat1Elapsed = beat1VideoTime !== null ? currentTime - beat1VideoTime : -1;
+        const activeSub = (() => {
+          if (isPressing || firstTapSet) return estimatedBeat > 0 ? (estimatedBeat - 1) * 2 : -1;
+          if (beat1Elapsed >= 0 && measBpm > 0) return Math.floor(beat1Elapsed * measBpm / 30) % 16;
+          return -1;
+        })();
+        const secsPerBar = measBpm > 0 ? 8 * 60 / measBpm : 0;
+        const nextBeat1 = (beat1VideoTime !== null && secsPerBar > 0)
+          ? beat1VideoTime + (Math.floor(Math.max(0, beat1Elapsed / secsPerBar)) + 1) * secsPerBar
+          : null;
+        const SUB_BEATS = ['1','and','2','and','3','and','4','and','5','and','6','and','7','and','8','and'];
+        const handleBpmTap = () => {
+          if (!firstTapSet) setBeat1VideoTime(currentTime);
+          handleTap();
+        };
+        return (
+          <div className={styles.bpmMeasureBlock}>
             <span className={styles.bpmMeasureLabel}>BPM 計測</span>
-            <div className={styles.bpmModeToggle}>
-              <button
-                className={`${styles.bpmModeBtn} ${bpmMode === 'longpress' ? styles.bpmModeBtnActive : ''}`}
-                onClick={() => switchBpmMode('longpress')}
-              >長押し</button>
-              <button
-                className={`${styles.bpmModeBtn} ${bpmMode === 'twotap' ? styles.bpmModeBtnActive : ''}`}
-                onClick={() => switchBpmMode('twotap')}
-              >2タップ</button>
+
+            {/* SlowRate buttons */}
+            <div className={styles.rateGroup}>
+              {SLOW_RATES.map(r => (
+                <button key={r}
+                  className={`${styles.rateBtn} ${slowRate === r ? styles.rateBtnActive : ''}`}
+                  onClick={() => applySlowRate(r)}>
+                  {r === 1.0 ? '1×' : `${r}×`}
+                </button>
+              ))}
             </div>
-          </div>
 
-          <div className={styles.beatDots}>
-            {Array.from({ length: 8 }, (_, i) => (
-              <div
-                key={i}
-                className={[
-                  styles.beatDot,
-                  isPressing && i < estimatedBeat ? styles.beatDotLit : '',
-                  isPressing && i === estimatedBeat - 1 ? styles.beatDotCurrent : '',
-                ].filter(Boolean).join(' ')}
-              >
-                {i + 1}
+            {/* Beat display 1and2and...8and */}
+            <div className={styles.beatDots}>
+              {SUB_BEATS.map((label, i) => {
+                const isBeat = i % 2 === 0;
+                const beatNum = Math.floor(i / 2);
+                const isAccent = isBeat && (beatNum === 0 || beatNum === 4);
+                const isActive = activeSub === i;
+                return (
+                  <div key={i} className={[
+                    isBeat ? styles.beatDot : styles.beatDotAnd,
+                    isActive ? (isAccent ? styles.beatDotAccent : styles.beatDotCurrent) : '',
+                    isActive && !isBeat ? styles.beatDotAndActive : '',
+                  ].filter(Boolean).join(' ')}>
+                    {label}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Beat 1 timestamps */}
+            {beat1VideoTime !== null && measBpm > 0 && (
+              <div className={styles.beat1Info}>
+                <span>Beat 1: {fmtBeatTime(beat1VideoTime)}</span>
+                {nextBeat1 !== null && <span>→ 次: {fmtBeatTime(nextBeat1)}</span>}
               </div>
-            ))}
-          </div>
+            )}
 
-          {bpmMode === 'longpress' ? (
-            <button
-              className={`${styles.measureBtn} ${isPressing ? styles.measureBtnActive : ''}`}
-              onPointerDown={handlePressStart}
-              onPointerUp={handlePressEnd}
-              onPointerLeave={handlePressEnd}
-            >
-              {isPressing
-                ? `${(elapsedMs / 1000).toFixed(1)} s 計測中…`
-                : '① 押す  →  ⑧ 離す（8拍分）'}
-            </button>
-          ) : (
+            {/* 2-tap button */}
             <button
               className={`${styles.measureBtn} ${(isPressing || firstTapSet) ? styles.measureBtnActive : ''}`}
-              onClick={handleTap}
+              onClick={handleBpmTap}
             >
               {!firstTapSet ? '「1」でタップ' : `${(elapsedMs / 1000).toFixed(1)} s — 「次の1」でタップ`}
             </button>
-          )}
 
-          {baseBpm !== null && (
-            <div className={styles.bpmResult}>
-              <button
-                className={styles.bpmAdjBtn}
-                onClick={() => { const n = Math.max(1, baseBpm - 1); setBaseBpm(n); onBpmChange(n); }}
-              >−</button>
-              <span className={styles.bpmResultValue}>{baseBpm}</span>
-              <button
-                className={styles.bpmAdjBtn}
-                onClick={() => { const n = baseBpm + 1; setBaseBpm(n); onBpmChange(n); }}
-              >＋</button>
-              <span className={styles.bpmResultUnit}>BPM 基準</span>
-              {bpm !== baseBpm && (
-                <span className={styles.bpmRateTag}>×{(bpm / baseBpm).toFixed(2)}</span>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+            {baseBpm !== null && (
+              <div className={styles.bpmResult}>
+                <button
+                  className={styles.bpmAdjBtn}
+                  onClick={() => { const n = Math.max(1, baseBpm - 1); setBaseBpm(n); onBpmChange(n); }}
+                >−</button>
+                <span className={styles.bpmResultValue}>{baseBpm}</span>
+                <button
+                  className={styles.bpmAdjBtn}
+                  onClick={() => { const n = baseBpm + 1; setBaseBpm(n); onBpmChange(n); }}
+                >＋</button>
+                <span className={styles.bpmResultUnit}>BPM 基準</span>
+                {bpm !== baseBpm && (
+                  <span className={styles.bpmRateTag}>×{(bpm / baseBpm).toFixed(2)}</span>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* BPM slider */}
       <div className={styles.bpmRow}>

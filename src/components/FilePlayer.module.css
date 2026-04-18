@@ -1043,7 +1043,9 @@
 
 .beatDots {
   display: flex;
-  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
   justify-content: center;
 }
 
@@ -1353,4 +1355,42 @@
 @media (max-width: 480px) {
   .rateGroup { margin-left: 0; }
   .rateBtn { padding: 0.18rem 0.35rem; font-size: 0.62rem; }
+}
+
+/* ── BPM beat display additions ── */
+.beatDotAnd {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.38rem;
+  color: rgba(255,255,255,0.15);
+  transition: background 0.08s;
+}
+
+.beatDotAndActive {
+  background: rgba(88,166,255,0.25);
+  border-color: rgba(88,166,255,0.6);
+  color: rgba(88,166,255,0.8);
+}
+
+.beatDotAccent {
+  background: rgba(255,80,80,0.55);
+  border-color: #ff6060;
+  color: #fff;
+  transform: scale(1.15);
+}
+
+.beat1Info {
+  display: flex;
+  gap: 12px;
+  font-size: 0.62rem;
+  color: var(--color-fg-dim);
+  font-variant-numeric: tabular-nums;
+  justify-content: center;
+  flex-wrap: wrap;
 }

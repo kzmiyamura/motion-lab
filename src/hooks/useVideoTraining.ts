@@ -28,7 +28,7 @@ export function getStepSize(slowRate: number): number {
 
 // ── Pseudo-slow constants ─────────────────────────────────────────────────
 // Rates below browser/YouTube minimums are emulated via interval-based seekTo
-export const PSEUDO_SLOW_RATES = new Set<number>([0.01, 0.05]);
+export const PSEUDO_SLOW_RATES = new Set<number>([0.01, 0.05, 0.1]);
 
 // ── Main hook ──────────────────────────────────────────────────────────────
 export function useVideoTraining(

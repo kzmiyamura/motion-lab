@@ -142,7 +142,7 @@ export function YouTubeControl({
           if (seekInputRef.current) seekInputRef.current.max = String(dur);
         }
       } catch { /* ignore */ }
-    }, 500);
+    }, 100);
     return () => clearInterval(id);
   }, []);
 
@@ -225,17 +225,16 @@ export function YouTubeControl({
   useWakeLock(video.ytPlaying);
 
   // ── Unified playback rate effect ──────────────────────────────────────
-  // audio mode: bpm/baseBpm ratio  (slowRate ignored)
-  // video mode: (bpm/baseBpm) * slowRate, or just slowRate if no baseBpm
+  // Both modes: (bpm/baseBpm) * slowRate, or just slowRate if no baseBpm
   // 250ms デバウンス: スライダーを動かすたびに YouTube API を叩かないようにする
   useEffect(() => {
     if (!playerReadyRef.current || !playerRef.current) return;
     let rate: number;
     if (baseBpm) {
       const bpmRatio = bpm / baseBpm;
-      rate = viewMode === 'video' ? bpmRatio * video.slowRate : bpmRatio;
+      rate = bpmRatio * video.slowRate;
     } else {
-      rate = viewMode === 'video' ? video.slowRate : 1;
+      rate = video.slowRate;
     }
     rate = Math.min(2, Math.max(0.25, rate));
     // Pseudo-slow rates are managed by useVideoTraining's play/pause cycling — skip debounce

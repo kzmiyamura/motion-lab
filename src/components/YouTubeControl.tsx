@@ -606,11 +606,6 @@ export function YouTubeControl({
       {viewMode === 'audio' && (() => {
         const measBpm = baseBpm ?? 0;
         const beat1Elapsed = beat1VideoTime !== null ? seekPos - beat1VideoTime : -1;
-        const activeSub = (() => {
-          if (isPressing || firstTapSet) return estimatedBeat > 0 ? (estimatedBeat - 1) * 2 : -1;
-          if (beat1Elapsed >= 0 && measBpm > 0) return Math.floor(beat1Elapsed * measBpm / 30) % 16;
-          return -1;
-        })();
         const secsPerBar = measBpm > 0 ? 8 * 60 / measBpm : 0;
         const nextBeat1 = (beat1VideoTime !== null && secsPerBar > 0)
           ? beat1VideoTime + (Math.floor(Math.max(0, beat1Elapsed / secsPerBar)) + 1) * secsPerBar

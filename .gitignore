@@ -15,6 +15,11 @@ dist-ssr
 # Wrangler ローカルエミュレートキャッシュ (D1・R2 ローカルデータ含む)
 .wrangler/
 
+# ThinkCentre 自宅サーバー (server/) のローカルデータ
+server/storage/
+server/data/
+server/.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -12,7 +12,6 @@ import { UpdateToast } from './components/UpdateToast';
 import { YouTubeControl } from './components/YouTubeControl';
 import { FilePlayer } from './components/FilePlayer';
 import { StudioPlayer } from './components/StudioPlayer';
-import { HomeServerLibrary } from './components/HomeServerLibrary';
 import styles from './App.module.css';
 
 function App() {
@@ -41,7 +40,7 @@ function App() {
   } = useAudioEngine();
 
   const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
-  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio' | 'homeserver'>('youtube');
+  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio'>('youtube');
   const [ytViewMode, setYtViewMode] = useState<'audio' | 'video'>('video');
 
   useEffect(() => {
@@ -82,12 +81,6 @@ function App() {
           >
             🎬 Studio
           </button>
-          <button
-            className={`${styles.mainTabBtn} ${mainTab === 'homeserver' ? styles.mainTabBtnActive : ''}`}
-            onClick={() => setMainTab('homeserver')}
-          >
-            🏠 Home
-          </button>
         </div>
       </header>
 
@@ -115,13 +108,6 @@ function App() {
             bpm={bpm}
             onBpmChange={setBpm}
           />
-        </section>
-      </div>
-
-      {/* ── Home Server タブ（ThinkCentre自宅サーバー） ── */}
-      <div className={mainTab === 'homeserver' ? styles.tabPanel : styles.tabPanelHidden}>
-        <section className={styles.section}>
-          <HomeServerLibrary />
         </section>
       </div>
 

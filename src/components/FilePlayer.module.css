@@ -796,6 +796,12 @@
 }
 .driveShareBtn:disabled { opacity: 0.5; cursor: default; }
 
+.fileSizeInfo {
+  font-size: 0.7rem;
+  color: var(--color-fg-dim);
+  margin: 0;
+}
+
 /* ── Upload section ── */
 .uploadSection {
   display: flex;

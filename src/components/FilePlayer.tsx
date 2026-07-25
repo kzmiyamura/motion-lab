@@ -1138,6 +1138,11 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
         <span className={styles.bpmValue}>{isMuted ? 0 : Math.round(volume * 100)}%</span>
       </div>
 
+      {/* ファイルサイズ表示（アップロード可否・エラー診断用） */}
+      {sourceFileRef.current && (
+        <p className={styles.fileSizeInfo}>📦 動画サイズ: {fmtBytes(sourceFileRef.current.size)}</p>
+      )}
+
       {/* Google Drive バックアップ（ローカルファイルのみ） */}
       {sourceFileRef.current && (
         <div className={styles.uploadSection}>

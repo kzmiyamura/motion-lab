@@ -24,8 +24,14 @@ npm run dev
 3. `server/` で `npm install`
 4. `server/.env` を作成（`.env.example` をコピーして編集）。`CORS_ORIGIN` に `https://motion-lab-apa.pages.dev` を含めること
 5. 起動確認: `npm run start`（開発中は `npm run dev` でも可）
-6. **常駐化**: PC再起動時にも自動起動させたい場合、[PM2](https://pm2.keymetrics.io/) や Windows の「タスクスケジューラ」でスタートアップ時に `npm run start` を実行するよう設定する
-   - 例（PM2）: `npm install -g pm2` → `pm2 start npm --name motion-lab-server -- run start` → `pm2 save` → `pm2 startup`
+6. **常駐化**: PM2 でプロセスを常駐させ、Windows起動時に自動復元する
+   - `npm install -g pm2`
+   - PM2はWindowsで `npm` 経由のスクリプト起動が失敗するため、`tsx` を直接指定して起動する:
+     `pm2 start node_modules/tsx/dist/cli.mjs --name motion-lab-server --interpreter node -- src/index.ts`
+   - `pm2 save` でプロセスリストを保存
+   - **自動起動**: `pm2 startup` はWindowsの初期化システムを認識できず失敗する（Linuxのsystemd相当が無いため）。また `schtasks` の `onlogon` トリガー作成には管理者権限が必要でこのユーザー権限では作成不可だった。代わりに **スタートアップフォルダ**方式を使う:
+     - `server/pm2-resurrect.cmd`（`pm2 resurrect` を呼ぶだけの薄いラッパー）を `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\` にコピーする
+     - これによりユーザーログオン時に自動で `pm2 resurrect` が走り、`pm2 save` した内容（motion-lab-server）が復元される
 7. **Cloudflare Tunnel で外部公開**（ルーターのポート開放不要）:
    - `cloudflared` をインストール: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
    - Cloudflare ダッシュボード（Zero Trust）で Tunnel を作成し、`localhost:4000`（`.env` の `PORT` と一致させる）へのルートを設定

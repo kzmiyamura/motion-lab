@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { requestDriveToken, revokeDriveToken, getStoredToken } from '../engine/googleAuth';
 import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, createPublicPermission, type DriveFile, type UploadStats } from '../engine/googleDrive';
+import { uploadVideoToHomeServer, type HomeUploadStats } from '../engine/homeServer';
 import { saveFile, listFiles, deleteFile, type StoredFile } from '../engine/localFileStore';
 import { SLOW_RATES, ZOOM_PRESETS, getStepSize, PSEUDO_SLOW_RATES, type SlowRate, type ZoomState } from '../hooks/useVideoTraining';
 import { useWakeLock } from '../hooks/useWakeLock';
@@ -14,6 +15,7 @@ import { SequenceView } from './SequenceView';
 import styles from './FilePlayer.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
+const HOME_SERVER_URL = (import.meta.env.VITE_HOME_SERVER_URL ?? '') as string;
 
 type FileSource = { name: string; url: string; isVideo: boolean };
 type PlayerSize = 'normal' | 'theater';
@@ -106,6 +108,12 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
   const [uploadStats, setUploadStats] = useState<UploadStats | null>(null);
   const [uploadError, setUploadError] = useState('');
   const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
+
+  // Home server (ThinkCentre) upload state
+  type HomeUploadStatus = 'idle' | 'uploading' | 'done' | 'error';
+  const [homeUploadStatus, setHomeUploadStatus] = useState<HomeUploadStatus>('idle');
+  const [homeUploadStats, setHomeUploadStats] = useState<HomeUploadStats | null>(null);
+  const [homeUploadError, setHomeUploadError] = useState('');
 
   // Share state
   const [sharingId, setSharingId] = useState<string | null>(null);
@@ -728,6 +736,23 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     }
   };
 
+  // ── ThinkCentre 自宅サーバーへの保存 ─────────────────────────────────
+  const handleHomeServerUpload = async () => {
+    const file = sourceFileRef.current;
+    if (!file || !HOME_SERVER_URL) return;
+
+    setHomeUploadError('');
+    setHomeUploadStats(null);
+    setHomeUploadStatus('uploading');
+    try {
+      await uploadVideoToHomeServer(HOME_SERVER_URL, file, stats => setHomeUploadStats(stats));
+      setHomeUploadStatus('done');
+    } catch (e) {
+      setHomeUploadError(e instanceof Error ? e.message : '保存に失敗しました。');
+      setHomeUploadStatus('error');
+    }
+  };
+
   // ── Player controls content (shared between normal and theater layout) ──
   const playerControlsContent = source ? (
     <>
@@ -1173,6 +1198,54 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
                 </div>
               )}
               {uploadStatus === 'uploading' && !uploadStats && (
+                <span className={styles.uploadProgressLabel}>アップロード開始中…</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ThinkCentre 自宅サーバーに保存（ローカルファイルのみ） */}
+      {sourceFileRef.current && HOME_SERVER_URL && (
+        <div className={styles.uploadSection}>
+          {homeUploadStatus === 'idle' || homeUploadStatus === 'error' ? (
+            <>
+              <button
+                className={styles.uploadBtn}
+                onClick={handleHomeServerUpload}
+              >
+                🏠 ThinkCentre に保存
+              </button>
+              {homeUploadStatus === 'error' && (
+                <p className={styles.uploadError}>{homeUploadError}</p>
+              )}
+            </>
+          ) : homeUploadStatus === 'done' ? (
+            <p className={styles.uploadSuccess}>
+              ✅ ThinkCentre に保存しました。変換が完了すると Home タブから再生できます。
+            </p>
+          ) : (
+            <div className={styles.uploadProgressWrap}>
+              <div className={styles.uploadProgressBar}>
+                <div
+                  className={styles.uploadProgressFill}
+                  style={{ width: `${homeUploadStats?.percent ?? 0}%` }}
+                />
+              </div>
+              {homeUploadStats ? (
+                <div className={styles.uploadStatsRow}>
+                  <span className={styles.uploadPct}>{homeUploadStats.percent}%</span>
+                  <span className={styles.uploadDetail}>
+                    {fmtBytes(homeUploadStats.loaded)} / {fmtBytes(homeUploadStats.total)}
+                  </span>
+                  {homeUploadStats.speedBps > 0 && (
+                    <span className={styles.uploadSpeed}>{fmtSpeed(homeUploadStats.speedBps)}</span>
+                  )}
+                  {homeUploadStats.etaSec > 0 && (
+                    <span className={styles.uploadEta}>{fmtEta(homeUploadStats.etaSec)}</span>
+                  )}
+                </div>
+              ) : (
                 <span className={styles.uploadProgressLabel}>アップロード開始中…</span>
               )}
             </div>

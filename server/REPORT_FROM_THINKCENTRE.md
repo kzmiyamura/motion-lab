@@ -38,3 +38,45 @@
 
 - Cloudflare Access設定（Phase 2、スコープ外のため未着手）
 - `src/`・`wrangler.toml`（フロントエンド側、指示書通り無変更）
+
+---
+
+# ThinkCentre側 作業報告（2026-07-27）: 固定URL中継（tunnel-wrapper）導入
+
+`server/CLAUDE.md` の「追加タスク（2026-07-27）」を実施。以下、指示書の「報告してほしいこと」への回答。
+
+## 実施内容
+
+1. 既存の `motion-lab-tunnel`（`cloudflared` を直接起動していたPM2プロセス）を `pm2 delete` し、代わりに `server/tunnel-wrapper.mjs` を起動する構成へ変更。
+2. PM2起動時に環境変数を設定（`RELAY_REPORT_URL` / `RELAY_SECRET` / `HOME_SERVER_PORT=4000` / `CLOUDFLARED_PATH`）。
+3. `pm2 save` で dump 更新（スタートアップフォルダ方式の `pm2 resurrect` で復元される）。
+
+## ⚠️ tunnel-wrapper.mjs を1点修正（Mac側で確認をお願いします）
+
+**症状**: ラッパーをそのまま起動すると `Error: spawn cloudflared ENOENT` で即クラッシュ→PM2が無限再起動。
+**原因**: 実機の `cloudflared` は `C:\Program Files (x86)\cloudflared\cloudflared.exe` にフルパス設置されており、**PATHに通っていない**。ラッパーは `spawn('cloudflared', ...)` とハードコードしていたため見つけられなかった（既存の直接起動PM2プロセスはフルパス指定だったので動いていた）。
+**修正**: `CLOUDFLARED_PATH` 環境変数でバイナリのパスを指定可能にした（未指定時は従来通り `'cloudflared'`）。差分は以下2箇所のみ、挙動はデフォルトで後方互換:
+```js
+const CLOUDFLARED_BIN = process.env.CLOUDFLARED_PATH ?? 'cloudflared';
+...
+const proc = spawn(CLOUDFLARED_BIN, ['tunnel', '--url', `http://localhost:${PORT}`], { ... });
+```
+→ この変更はコミット・プッシュ済み。Mac側で問題なければそのまま残してください。
+
+## 報告事項
+
+1. **動作確認（指示書ステップ4）**: すべて成功。
+   - `pm2 logs` に `[tunnel-wrapper] reported new URL: https://...trycloudflare.com` が出力される。
+   - `GET https://motion-lab-apa.pages.dev/relay/report` → `{"target":"https://receiving-trend-slight-oct.trycloudflare.com","updatedAt":"2026-07-27T13:43:44Z"}` と反映を確認。
+   - `GET https://motion-lab-apa.pages.dev/relay/api/health` → `{"status":"ok"}`。**固定URL経由でThinkCentreに到達できることを確認済み**。
+
+2. **再起動時の自動報告（指示書ステップ5）**: 成功。`pm2 restart motion-lab-tunnel` で意図的に落としたところ、cloudflaredが新URLを発行し、ラッパーが自動的に `/relay/report` へ再報告、relay側の `target` も新URLへ更新された（`sudden-improving-sen-armed` → `receiving-trend-slight-oct`）。
+
+3. **cloudflaredのURL出力先と正規表現**: URLは **stderr** ではなく **stdout** に `INF` ログとして出力されていた（`INF | Your quick Tunnel has been created! ...` 付近）。ラッパーは stdout/stderr 両方を監視しており、正規表現 `/https:\/\/[a-z0-9-]+\.trycloudflare\.com/` で問題なく1発で拾えている。調整不要。
+
+4. **常駐化・再起動後の維持**: `pm2 save` 済みのため、スタートアップフォルダ方式の `pm2 resurrect` で `tunnel-wrapper.mjs` ごと復元される見込み。環境変数（`CLOUDFLARED_PATH` 含む）もPM2 dumpに保存済み。次回PCログオン後に実際の復元も確認予定。
+
+## 触れていないもの
+
+- `functions/`・`wrangler.toml`（Cloudflare Pages側、指示書通り無変更）
+- `RELAY_SECRET` の値は変更していない（Mac側と同一値のまま）

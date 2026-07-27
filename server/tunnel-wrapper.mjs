@@ -17,6 +17,8 @@ import { spawn } from 'node:child_process';
 const REPORT_URL = process.env.RELAY_REPORT_URL;
 const SECRET = process.env.RELAY_SECRET;
 const PORT = process.env.HOME_SERVER_PORT ?? '4000';
+// Windows実機など cloudflared が PATH に無い環境向け。フルパスを指定できる（既定は 'cloudflared'）
+const CLOUDFLARED_BIN = process.env.CLOUDFLARED_PATH ?? 'cloudflared';
 
 if (!REPORT_URL || !SECRET) {
   console.error('RELAY_REPORT_URL と RELAY_SECRET を環境変数で設定してください');
@@ -44,7 +46,7 @@ async function reportUrl(url) {
 
 function startTunnel() {
   console.log('[tunnel-wrapper] starting cloudflared...');
-  const proc = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${PORT}`], {
+  const proc = spawn(CLOUDFLARED_BIN, ['tunnel', '--url', `http://localhost:${PORT}`], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 

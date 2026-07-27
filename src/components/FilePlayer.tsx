@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import Hls from 'hls.js';
 import { requestDriveToken, revokeDriveToken, getStoredToken } from '../engine/googleAuth';
 import { listMediaFiles, fetchFileBlob, findOrCreateFolder, uploadFileResumable, createPublicPermission, type DriveFile, type UploadStats } from '../engine/googleDrive';
 import { uploadVideoToHomeServer, type HomeUploadStats } from '../engine/homeServer';
@@ -17,10 +18,16 @@ import styles from './FilePlayer.module.css';
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
 const HOME_SERVER_URL = (import.meta.env.VITE_HOME_SERVER_URL ?? '') as string;
 
-type FileSource = { name: string; url: string; isVideo: boolean };
+type FileSource = { name: string; url: string; isVideo: boolean; isHls?: boolean };
 type PlayerSize = 'normal' | 'theater';
 
-type Props = { bpm: number; onBpmChange: (bpm: number) => void };
+type Props = {
+  bpm: number;
+  onBpmChange: (bpm: number) => void;
+  /** Home タブから「このThinkCentre動画を開く」と指定された時に渡される */
+  pendingHlsSource?: { name: string; url: string } | null;
+  onPendingHlsSourceConsumed?: () => void;
+};
 
 function formatTime(s: number): string {
   if (!isFinite(s)) return '0:00';
@@ -61,7 +68,7 @@ function fmtEta(sec: number): string {
   return `残り約${(sec / 3600).toFixed(1)}時間`;
 }
 
-export function FilePlayer({ bpm, onBpmChange }: Props) {
+export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSourceConsumed }: Props) {
   const navigate = useNavigate();
   const [subTab, setSubTab] = useState<'local' | 'drive'>('local');
   const [source, setSource] = useState<FileSource | null>(null);
@@ -355,6 +362,58 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     setLockModeActive(false);
     clearSequence();
   }, [bpm, unlock, clearSequence, stopPseudoCycle]);
+
+  /** ThinkCentre (Home タブ) から渡された HLS ストリームを開く */
+  const openHlsSource = useCallback((name: string, hlsUrl: string) => {
+    stopPseudoCycle();
+    sourceFileRef.current = null; // リモート動画はバックアップ対象外
+    setUploadStatus('idle');
+    setHomeUploadStatus('idle');
+    setSource({ name, url: hlsUrl, isVideo: true, isHls: true });
+    setBaseBpm(bpm);
+    setSliderBpm(bpm);
+    setBeat1VideoTime(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setSlowRateState(1.0);
+    setLoopStart(null);
+    setLoopEnd(null);
+    setIsLooping(false);
+    setZoom({ scale: 1, x: 0, y: 0 });
+    unlock();
+    setLockModeActive(false);
+    clearSequence();
+  }, [bpm, unlock, clearSequence, stopPseudoCycle]);
+
+  useEffect(() => {
+    if (pendingHlsSource) {
+      openHlsSource(pendingHlsSource.name, pendingHlsSource.url);
+      onPendingHlsSourceConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingHlsSource]);
+
+  // HLSソースの場合、hls.js（Safariはネイティブ再生）を video 要素にアタッチ
+  const hlsRef = useRef<Hls | null>(null);
+  useEffect(() => {
+    const video = mediaRef.current;
+    if (!video || !source?.isHls) return;
+
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = source.url;
+    } else if (Hls.isSupported()) {
+      const hls = new Hls();
+      hlsRef.current = hls;
+      hls.loadSource(source.url);
+      hls.attachMedia(video);
+    }
+
+    return () => {
+      hlsRef.current?.destroy();
+      hlsRef.current = null;
+    };
+  }, [source?.url, source?.isHls]);
 
   const handleFileSelect = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
@@ -1303,7 +1362,7 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
           }>
             <video
               ref={mediaRef}
-              src={source.url}
+              src={source.isHls ? undefined : source.url}
               className={styles.videoEl}
               style={{
                 transform: source.isVideo

@@ -22,6 +22,13 @@ export interface HomeServerVideo {
   thumbnailUrl: string | null;
   hlsUrl: string | null;
   errorMessage: string | null;
+  folderId: string | null;
+  createdAt: string;
+}
+
+export interface HomeServerFolder {
+  id: string;
+  name: string;
   createdAt: string;
 }
 
@@ -95,4 +102,44 @@ export async function listHomeServerVideos(baseUrl: string): Promise<HomeServerV
 export function resolveHomeServerUrl(baseUrl: string, path: string | null): string | null {
   if (!path) return null;
   return `${baseUrl}${path}`;
+}
+
+export async function deleteHomeServerVideo(baseUrl: string, id: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/videos/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new HomeServerApiError(`削除に失敗しました: HTTP ${res.status}`);
+}
+
+export async function updateHomeServerVideo(
+  baseUrl: string,
+  id: string,
+  fields: { title?: string; folderId?: string | null },
+): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/videos/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) throw new HomeServerApiError(`更新に失敗しました: HTTP ${res.status}`);
+}
+
+export async function listHomeServerFolders(baseUrl: string): Promise<HomeServerFolder[]> {
+  const res = await fetch(`${baseUrl}/api/folders`);
+  if (!res.ok) throw new HomeServerApiError(`フォルダ一覧の取得に失敗しました: HTTP ${res.status}`);
+  const data = await res.json() as { folders: HomeServerFolder[] };
+  return data.folders ?? [];
+}
+
+export async function createHomeServerFolder(baseUrl: string, name: string): Promise<HomeServerFolder> {
+  const res = await fetch(`${baseUrl}/api/folders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new HomeServerApiError(`フォルダ作成に失敗しました: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function deleteHomeServerFolder(baseUrl: string, id: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/folders/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new HomeServerApiError(`フォルダ削除に失敗しました: HTTP ${res.status}`);
 }

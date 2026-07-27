@@ -42,6 +42,7 @@ function App() {
 
   const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
   const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio' | 'homeserver'>('youtube');
+  const [homeVideoToPlay, setHomeVideoToPlay] = useState<{ name: string; url: string } | null>(null);
   const [ytViewMode, setYtViewMode] = useState<'audio' | 'video'>('video');
 
   useEffect(() => {
@@ -114,6 +115,8 @@ function App() {
           <FilePlayer
             bpm={bpm}
             onBpmChange={setBpm}
+            pendingHlsSource={homeVideoToPlay}
+            onPendingHlsSourceConsumed={() => setHomeVideoToPlay(null)}
           />
         </section>
       </div>
@@ -121,7 +124,12 @@ function App() {
       {/* ── Home Server タブ（ThinkCentre自宅サーバー） ── */}
       <div className={mainTab === 'homeserver' ? styles.tabPanel : styles.tabPanelHidden}>
         <section className={styles.section}>
-          <HomeServerLibrary />
+          <HomeServerLibrary
+            onOpenInPlayer={(name, url) => {
+              setHomeVideoToPlay({ name, url });
+              setMainTab('files');
+            }}
+          />
         </section>
       </div>
 

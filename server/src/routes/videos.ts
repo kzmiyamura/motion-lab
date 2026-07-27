@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rm } from 'node:fs/promises';
 import { Router } from 'express';
 import multer from 'multer';
 import { convertVideo } from '../converter.js';
-import { getVideo, insertVideo, listVideos, markVideoError, markVideoReady, type VideoRow } from '../db.js';
+import { deleteVideo, getVideo, insertVideo, listVideos, markVideoError, markVideoReady, updateVideo, type VideoRow } from '../db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const STORAGE_DIR = path.resolve(__dirname, '../../storage');
@@ -35,6 +36,7 @@ function toPublicVideo(row: VideoRow) {
     thumbnailUrl: row.status === 'ready' ? `/thumbnails/${row.id}.jpg` : null,
     hlsUrl: row.status === 'ready' ? `/hls/${row.id}/playlist.m3u8` : null,
     errorMessage: row.error_message,
+    folderId: row.folder_id,
     createdAt: row.created_at,
   };
 }
@@ -70,4 +72,31 @@ videosRouter.post('/', upload.single('file'), (req, res) => {
     .catch(err => {
       markVideoError(id, err instanceof Error ? err.message : String(err));
     });
+});
+
+videosRouter.patch('/:id', (req, res) => {
+  const row = getVideo(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+
+  const body = req.body as { title?: string; folderId?: string | null };
+  const fields: { title?: string; folderId?: string | null } = {};
+  if (typeof body.title === 'string' && body.title.trim()) fields.title = body.title.trim();
+  if ('folderId' in body) fields.folderId = body.folderId;
+
+  updateVideo(row.id, fields);
+  res.json(toPublicVideo(getVideo(row.id)!));
+});
+
+videosRouter.delete('/:id', async (req, res) => {
+  const row = getVideo(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+
+  const ext = path.extname(row.original_filename) || '.mp4';
+  await Promise.all([
+    rm(path.join(ORIGINALS_DIR, `${row.id}${ext}`), { force: true }),
+    rm(path.join(HLS_DIR, row.id), { recursive: true, force: true }),
+    rm(path.join(THUMBNAILS_DIR, `${row.id}.jpg`), { force: true }),
+  ]);
+  deleteVideo(row.id);
+  res.json({ status: 'ok' });
 });

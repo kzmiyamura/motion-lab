@@ -62,25 +62,100 @@
   border: 1.5px solid var(--color-border);
   border-radius: 10px;
   overflow: hidden;
+}
+
+.cardPlayArea {
+  display: flex;
+  flex-direction: column;
   cursor: pointer;
   text-align: left;
   padding: 0;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  background: none;
+  border: none;
+  width: 100%;
+  transition: opacity 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
 
-.card:hover:not(:disabled) {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 28%, transparent);
+.cardPlayArea:hover:not(:disabled) {
+  opacity: 0.9;
 }
 
-.card:active:not(:disabled) {
-  transform: scale(0.97);
+.cardPlayArea:active:not(:disabled) {
+  opacity: 0.8;
 }
 
-.card:disabled {
+.cardPlayArea:disabled {
   cursor: default;
   opacity: 0.7;
+}
+
+/* ── フォルダナビゲーション ── */
+.folderRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.folderChip {
+  padding: 0.25rem 0.65rem;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
+  border-radius: 20px;
+  color: var(--color-ui-text-dim);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.folderChipActive {
+  border-color: var(--color-accent);
+  color: var(--color-ui-text-bright);
+  background: var(--color-ui-medium);
+}
+
+.folderDeleteBtn {
+  padding: 0.25rem 0.65rem;
+  background: rgba(255, 96, 96, 0.1);
+  border: 1.5px solid rgba(255, 96, 96, 0.35);
+  border-radius: 20px;
+  color: #ff6060;
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+/* ── カード内アクション行 ── */
+.cardActions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.moveSelect {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.62rem;
+  background: var(--color-ui-dark2);
+  color: var(--color-fg-dim);
+  border: 1px solid var(--color-border2);
+  border-radius: 6px;
+  padding: 0.2rem 0.3rem;
+}
+
+.cardActionBtn {
+  background: var(--color-ui-dark2);
+  border: 1px solid var(--color-border2);
+  border-radius: 6px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .thumbWrap {
@@ -135,42 +210,3 @@
   margin: 0;
 }
 
-/* ── Player overlay ── */
-.playerWrap {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  background: rgba(0, 0, 0, 0.92);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.6rem;
-  padding: 1rem;
-}
-
-.player {
-  width: 100%;
-  max-width: 900px;
-  max-height: 80vh;
-  background: #000;
-}
-
-.playerTitle {
-  color: var(--color-fg);
-  font-size: 0.8rem;
-  margin: 0;
-}
-
-.closeBtn {
-  position: absolute;
-  top: 1rem;
-  right: 1rem;
-  padding: 0.35rem 0.7rem;
-  background: var(--color-ui-dark2);
-  border: 1.5px solid var(--color-border2);
-  border-radius: 20px;
-  color: var(--color-fg);
-  font-size: 0.72rem;
-  cursor: pointer;
-}

@@ -2,6 +2,7 @@ import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
 import { HLS_DIR, ORIGINALS_DIR, THUMBNAILS_DIR, videosRouter } from './routes/videos.js';
+import { foldersRouter } from './routes/folders.js';
 
 const PORT = Number(process.env.PORT ?? 4000);
 const CORS_ORIGIN = (process.env.CORS_ORIGIN ?? 'http://localhost:5173')
@@ -11,12 +12,14 @@ const CORS_ORIGIN = (process.env.CORS_ORIGIN ?? 'http://localhost:5173')
 const app = express();
 
 app.use(cors({ origin: CORS_ORIGIN }));
+app.use(express.json());
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
 app.use('/api/videos', videosRouter);
+app.use('/api/folders', foldersRouter);
 app.use('/hls', express.static(HLS_DIR));
 app.use('/thumbnails', express.static(THUMBNAILS_DIR));
 

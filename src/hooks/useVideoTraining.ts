@@ -19,11 +19,12 @@ export const ZOOM_PRESETS = [
 export type ZoomPresetId = typeof ZOOM_PRESETS[number]['id'];
 
 // ── Step size based on playback rate ──────────────────────────────────────
-export function getStepSize(slowRate: number): number {
-  if (slowRate <= 0.25) return 0.033;  // 1 frame — detailed analysis
-  if (slowRate <= 0.75) return 0.2;    // ~6 frames
-  if (slowRate <= 1.25) return 1.0;    // 1 second
-  return 3.0;                          // 3 seconds
+// fps: 動画の実フレームレート（検出できない場合は 30 を仮定）
+export function getStepSize(slowRate: number, fps: number = 30): number {
+  if (slowRate <= 0.25) return 1 / fps;  // 1 frame — detailed analysis
+  if (slowRate <= 0.75) return 6 / fps;  // ~6 frames
+  if (slowRate <= 1.25) return 1.0;      // 1 second
+  return 3.0;                            // 3 seconds
 }
 
 // ── Pseudo-slow constants ─────────────────────────────────────────────────

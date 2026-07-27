@@ -37,6 +37,14 @@ function formatTime(s: number): string {
   return `${m}:${sec}`;
 }
 
+/** ミリ秒まで表示（A/B点など速度計測の精度確認用） */
+function formatTimeMs(s: number): string {
+  if (!isFinite(s)) return '0:00.000';
+  const m = Math.floor(s / 60);
+  const sec = (s % 60).toFixed(3).padStart(6, '0');
+  return `${m}:${sec}`;
+}
+
 function formatSize(bytes: string | undefined): string {
   if (!bytes) return '';
   return `${(Number(bytes) / 1024 / 1024).toFixed(1)} MB`;
@@ -82,6 +90,8 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1.0);
   const [isMuted, setIsMuted] = useState(false);
+  /** requestVideoFrameCallback で実測したフレームレート（未検出時は null、コマ送りは30fps仮定にフォールバック） */
+  const [detectedFps, setDetectedFps] = useState<number | null>(null);
 
   // Training controls
   const [slowRate, setSlowRateState] = useState<SlowRate>(1.0);
@@ -416,6 +426,44 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
     };
   }, [source?.url, source?.isHls]);
 
+  // 実際のフレームレートを検出（requestVideoFrameCallback対応ブラウザのみ）。
+  // コマ送りの1コマ移動量を「30fps仮定」ではなく実fpsに合わせて正確にするため。
+  useEffect(() => {
+    setDetectedFps(null);
+    const video = mediaRef.current;
+    if (!video || !source?.isVideo) return;
+    if (!('requestVideoFrameCallback' in video)) return;
+
+    let cancelled = false;
+    let handle: number;
+    const mediaTimes: number[] = [];
+
+    const onFrame: VideoFrameRequestCallback = (_now, metadata) => {
+      if (cancelled) return;
+      mediaTimes.push(metadata.mediaTime);
+      if (mediaTimes.length < 12) {
+        handle = video.requestVideoFrameCallback(onFrame);
+        return;
+      }
+      const deltas: number[] = [];
+      for (let i = 1; i < mediaTimes.length; i++) {
+        const d = mediaTimes[i] - mediaTimes[i - 1];
+        if (d > 0.001 && d < 0.5) deltas.push(d); // シーク・一時停止による外れ値を除外
+      }
+      if (deltas.length >= 5) {
+        deltas.sort((a, b) => a - b);
+        const medianDelta = deltas[Math.floor(deltas.length / 2)];
+        setDetectedFps(1 / medianDelta);
+      }
+    };
+    handle = video.requestVideoFrameCallback(onFrame);
+
+    return () => {
+      cancelled = true;
+      video.cancelVideoFrameCallback?.(handle);
+    };
+  }, [source?.url, source?.isVideo]);
+
   const handleFileSelect = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
     sourceFileRef.current = file;
@@ -523,7 +571,7 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
       } else {
         pseudoPlayingRef.current = true;
         setIsPlaying(true);
-        const step = getStepSize(slowRate);
+        const step = getStepSize(slowRate, detectedFps ?? 30);
         const intervalMs = Math.round(step / slowRate * 1000);
         pseudoIntervalRef.current = setInterval(() => {
           const cur = mediaRef.current;
@@ -566,7 +614,7 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
       if (wasPlaying) mediaRef.current?.pause();
       setIsPlaying(wasPlaying);
       if (wasPlaying) {
-        const step = getStepSize(rate);
+        const step = getStepSize(rate, detectedFps ?? 30);
         const intervalMs = Math.round(step / rate * 1000);
         pseudoIntervalRef.current = setInterval(() => {
           const el = mediaRef.current;
@@ -595,7 +643,7 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
   const stepFrame = (dir: 1 | -1) => {
     const el = mediaRef.current;
     if (!el) return;
-    el.currentTime = Math.max(0, el.currentTime + dir * getStepSize(slowRate));
+    el.currentTime = Math.max(0, el.currentTime + dir * getStepSize(slowRate, detectedFps ?? 30));
   };
 
   const startStep = (dir: 1 | -1) => {
@@ -1042,10 +1090,10 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
         <div className={styles.ctrlRow}>
           <span className={styles.ctrlLabel}>Loop</span>
           <button className={styles.loopBtn} onClick={() => markLoop('start')}>
-            {loopStart !== null ? `A: ${formatTime(loopStart)}` : 'A 点'}
+            {loopStart !== null ? `A: ${formatTimeMs(loopStart)}` : 'A 点'}
           </button>
           <button className={styles.loopBtn} onClick={() => markLoop('end')}>
-            {loopEnd !== null ? `B: ${formatTime(loopEnd)}` : 'B 点'}
+            {loopEnd !== null ? `B: ${formatTimeMs(loopEnd)}` : 'B 点'}
           </button>
           {(loopStart !== null || loopEnd !== null) && (
             <button className={styles.loopClear} onClick={clearLoop}>✕</button>

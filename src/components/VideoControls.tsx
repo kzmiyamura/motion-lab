@@ -6,7 +6,7 @@ import styles from './VideoControls.module.css';
 
 function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
-  const s = (sec % 60).toFixed(1).padStart(4, '0');
+  const s = (sec % 60).toFixed(3).padStart(6, '0');
   return `${m}:${s}`;
 }
 

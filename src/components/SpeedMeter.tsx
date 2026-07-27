@@ -30,7 +30,7 @@ export function SpeedMeter({ loopStart, loopEnd }: Props) {
         onChange={e => setDistanceInput(e.target.value)}
       />
       {durationSec !== null && (
-        <span className={styles.duration}>{durationSec.toFixed(2)}秒</span>
+        <span className={styles.duration}>{durationSec.toFixed(3)}秒</span>
       )}
       {speedKmh !== null ? (
         <span className={styles.speedValue}>{speedKmh.toFixed(1)} km/h</span>

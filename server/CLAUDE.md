@@ -102,3 +102,47 @@ Mac側から Quick Tunnel 経由でサイズ別にアップロードテストし
 - もし本当に home回線の上り帯域が細い場合、動画アップロード機能自体の実用性に関わる重大な制約になるため、正直な数値を優先してください（体裁を整える必要はありません）
 
 この調査結果を踏まえて、次の対策（チャンクアップロード実装 / Tunnel方式の見直し / 動画の事前圧縮 等）をMac側で判断します。
+
+---
+
+## 追加タスク（2026-07-27）: Quick Tunnel URL変動問題の恒久対策（固定URL中継）
+
+Quick Tunnelの死亡・URL変動がこのセッション中に3回発生し、そのたびにMac側でCloudflare Pagesの環境変数を手動更新・再デプロイする運用になっていた。これをやめ、**Cloudflare Pages Functions による固定URL中継**を導入した（Mac側で実装・push済み: `functions/relay/`）。
+
+### 仕組み
+
+- フロントエンドは今後 `https://motion-lab-apa.pages.dev/relay/...` という固定URLだけを見る
+- Cloudflare Pages Functions（`functions/relay/[[path]].ts`）が、KVに保存された「現在のThinkCentre Tunnel URL」へ全リクエストを転送する
+- ThinkCentre側は Tunnel再接続で新URLが発行されるたびに `POST /relay/report` でそのURLを報告する
+
+### ThinkCentre側でやってほしいこと
+
+1. **`server/tunnel-wrapper.mjs`** を使う（Mac側で実装済み、`git pull`すれば手に入る）。`cloudflared` を直接起動する代わりに、このラッパー経由で起動する。ラッパーが標準出力/エラーからURLを検知して自動的に `/relay/report` へ報告する
+
+2. 既存のPM2の `motion-lab-tunnel` プロセス（直接`cloudflared`を起動しているはず）を止め、代わりにラッパーを起動するよう変更:
+   ```
+   pm2 delete motion-lab-tunnel
+   RELAY_REPORT_URL=https://motion-lab-apa.pages.dev/relay/report RELAY_SECRET=a0f538f6bb0e2d5c7afd9044db8bee3ecdedb92e54202e16 pm2 start server/tunnel-wrapper.mjs --name motion-lab-tunnel
+   pm2 save
+   ```
+   （`pm2 start`に環境変数を渡す方法がPM2のバージョンで違う場合、`ecosystem.config.cjs`を作るか、`.env`ファイル経由でも可。動けばやり方は問わない）
+
+3. **`RELAY_SECRET` の値** (`a0f538f6bb0e2d5c7afd9044db8bee3ecdedb92e54202e16`) は、Mac側でCloudflare Pagesの環境変数にも同じ値を設定済み。この値は変更しないこと（変更する場合は両側で同時に更新が必要なので、Mac側に確認してから）
+
+4. **動作確認**:
+   - `pm2 logs motion-lab-tunnel` で `[tunnel-wrapper] reported new URL: https://...` のログが出ることを確認
+   - `curl https://motion-lab-apa.pages.dev/relay/report` (GETは認証不要) でその値が反映されているか確認
+   - `curl https://motion-lab-apa.pages.dev/relay/api/health` で `{"status":"ok"}` が返ることを確認（固定URL経由でThinkCentreに到達できているかの確認）
+
+5. **cloudflaredがクラッシュして再起動した場合**の動作もできれば確認してほしい（`pm2 restart motion-lab-tunnel` 等で意図的に落として、新URLが自動的に報告されるか）
+
+### 報告してほしいこと
+
+- 上記4・5の確認結果
+- `cloudflared`が実際にURLをstdout/stderrどちらに出しているか、正規表現でうまく拾えているか（拾えていなければ`tunnel-wrapper.mjs`のログ出力形式を教えてもらえれば、Mac側で正規表現を調整する）
+- 常駐化・再起動後もこの構成が維持されるか（PM2 resurrect経由で`tunnel-wrapper.mjs`ごと復元されるはず）
+
+### 触ってはいけないもの
+
+- `functions/`・`wrangler.toml`（Cloudflare Pages側）は変更不要。Mac側で完結している
+- `RELAY_SECRET`の値そのものを外部に漏らさないこと（このファイルはリポジトリにコミットされるため、本来はここに平文で書くべきではないが、友人数名onlyの私的プロジェクトのため簡易的にここに記載している。将来的にはGoogle Cloudのシークレット管理等に移行を検討）

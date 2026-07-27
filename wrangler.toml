@@ -6,3 +6,10 @@ pages_build_output_dir = "dist"
 
 [vars]
 APP_ENV = "production"
+
+# ThinkCentre自宅サーバーの固定URL中継用（functions/relay/）
+# KV namespace は `npx wrangler kv namespace create HOME_RELAY_KV` で作成し、
+# 発行された id をここに設定する
+[[kv_namespaces]]
+binding = "HOME_RELAY_KV"
+id = "8a61fd9f803645bdb169c2be1eb5dd77"

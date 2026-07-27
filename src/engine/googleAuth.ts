@@ -42,23 +42,36 @@ const GSI_SCRIPT_ID = 'gsi-client';
 // ── トークンのローカル永続化 ─────────────────────────────────────────────
 const LS_TOKEN  = 'gd_access_token';
 const LS_EXPIRY = 'gd_token_expiry';
+const LS_SCOPE  = 'gd_token_scope';
 const MARGIN_MS = 120_000; // 期限2分前に「期限切れ」とみなす
 
-function saveToken(token: string, expiresIn: number): void {
+function saveToken(token: string, expiresIn: number, scope: string): void {
   localStorage.setItem(LS_TOKEN,  token);
   localStorage.setItem(LS_EXPIRY, String(Date.now() + expiresIn * 1000));
+  localStorage.setItem(LS_SCOPE,  scope);
 }
 
-function loadToken(): string | null {
+/**
+ * キャッシュ済みトークンを返す。requiredScope を渡した場合、
+ * キャッシュされたスコープが要求スコープを全て含んでいなければ null を返す
+ * （読み取り専用トークンが書き込み操作に誤って再利用されるのを防ぐ）
+ */
+function loadToken(requiredScope?: string): string | null {
   const token  = localStorage.getItem(LS_TOKEN);
   const expiry = Number(localStorage.getItem(LS_EXPIRY) ?? '0');
-  if (token && expiry - MARGIN_MS > Date.now()) return token;
-  return null;
+  if (!token || expiry - MARGIN_MS <= Date.now()) return null;
+  if (requiredScope) {
+    const cachedScopes = new Set((localStorage.getItem(LS_SCOPE) ?? '').split(' '));
+    const hasAll = requiredScope.split(' ').every(s => cachedScopes.has(s));
+    if (!hasAll) return null;
+  }
+  return token;
 }
 
 export function clearStoredToken(): void {
   localStorage.removeItem(LS_TOKEN);
   localStorage.removeItem(LS_EXPIRY);
+  localStorage.removeItem(LS_SCOPE);
 }
 
 /** localStorage に有効なトークンがあればそれを返す（なければ null） */
@@ -104,8 +117,8 @@ export async function requestDriveWriteToken(clientId: string): Promise<string> 
 }
 
 async function _requestToken(clientId: string, scope: string): Promise<string> {
-  // キャッシュが有効なら即返す（ボタン操作不要）
-  const cached = loadToken();
+  // キャッシュが要求スコープを満たしていれば即返す（ボタン操作不要）
+  const cached = loadToken(scope);
   if (cached) return cached;
 
   await loadGsiScript();
@@ -116,7 +129,7 @@ async function _requestToken(clientId: string, scope: string): Promise<string> {
       callback: (res) => {
         if (res.error) { reject(new Error(res.error)); return; }
         // 取得したトークンを localStorage に保存
-        saveToken(res.access_token, res.expires_in);
+        saveToken(res.access_token, res.expires_in, scope);
         resolve(res.access_token);
       },
       error_callback: (err) => reject(new Error(err.type)),

@@ -692,24 +692,23 @@ export function FilePlayer({ bpm, onBpmChange }: Props) {
     setUploadError('');
     setUploadStats(null);
 
-    // 未認証なら認証を挟む
-    let uploadToken = token;
-    if (!uploadToken) {
-      if (!CLIENT_ID) {
-        setUploadError('VITE_GOOGLE_CLIENT_ID が設定されていません。');
-        setUploadStatus('error');
-        return;
-      }
-      setUploadStatus('authing');
-      try {
-        const { requestDriveWriteToken } = await import('../engine/googleAuth');
-        uploadToken = await requestDriveWriteToken(CLIENT_ID);
-        setToken(uploadToken);
-      } catch {
-        setUploadError('Google 認証に失敗しました。ポップアップがブロックされていないか確認してください。');
-        setUploadStatus('error');
-        return;
-      }
+    // 書き込み権限トークンを取得（読み取り専用トークンが混入していても
+    // googleAuth 側のスコープチェックで弾かれ、必要なら再認証される）
+    if (!CLIENT_ID) {
+      setUploadError('VITE_GOOGLE_CLIENT_ID が設定されていません。');
+      setUploadStatus('error');
+      return;
+    }
+    setUploadStatus('authing');
+    let uploadToken: string;
+    try {
+      const { requestDriveWriteToken } = await import('../engine/googleAuth');
+      uploadToken = await requestDriveWriteToken(CLIENT_ID);
+      setToken(uploadToken);
+    } catch {
+      setUploadError('Google 認証に失敗しました。ポップアップがブロックされていないか確認してください。');
+      setUploadStatus('error');
+      return;
     }
 
     // フォルダ取得 or 作成

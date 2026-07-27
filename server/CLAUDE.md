@@ -146,3 +146,27 @@ Quick Tunnelの死亡・URL変動がこのセッション中に3回発生し、�
 
 - `functions/`・`wrangler.toml`（Cloudflare Pages側）は変更不要。Mac側で完結している
 - `RELAY_SECRET`の値そのものを外部に漏らさないこと（このファイルはリポジトリにコミットされるため、本来はここに平文で書くべきではないが、友人数名onlyの私的プロジェクトのため簡易的にここに記載している。将来的にはGoogle Cloudのシークレット管理等に移行を検討）
+
+---
+
+## 追加タスク（2026-07-27・その2）: 削除・改名・フォルダ機能への対応（コード取り込みのみ）
+
+Mac側で `server/` に以下を追加・変更済み（コミット `9789bec`）。ThinkCentre側は **`git pull` して `pm2 restart motion-lab-server` するだけ** でよい。
+
+### 変更内容
+- `videos` テーブルに `folder_id` 列を追加（`db.ts` で起動時に自動マイグレーション、既存データは無事）
+- `DELETE /api/videos/:id` — 動画削除（DB行 + originals/hls/thumbnailsのファイル一式も削除）
+- `PATCH /api/videos/:id` — タイトル変更・フォルダ移動（body: `{ title?, folderId? }`）
+- `GET/POST /api/folders`, `DELETE /api/folders/:id` — フォルダ管理（1階層のみ）
+- `express.json()` ミドルウェアを追加（PATCH/POSTのJSONボディを受けるため）
+- node:sqlite移行時からあった型エラー（`as unknown` 経由キャストが必要だった）も修正済み
+
+### やってほしいこと
+1. `git pull`
+2. `cd server && npm install`（依存追加はないはずだが念のため）
+3. `pm2 restart motion-lab-server`
+4. 動作確認: `curl https://motion-lab-apa.pages.dev/relay/api/folders` が `{"folders":[]}` を返すこと
+5. 起動時ログにマイグレーションエラーが出ていないか `pm2 logs motion-lab-server --lines 50` で確認
+
+### 報告してほしいこと
+- 上記4・5の結果のみ。問題なければ「対応完了」の一言でOK

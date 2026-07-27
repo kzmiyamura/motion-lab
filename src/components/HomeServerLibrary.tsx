@@ -127,7 +127,7 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
           className={`${styles.folderChip} ${activeFolderId === null ? styles.folderChipActive : ''}`}
           onClick={() => setActiveFolderId(null)}
         >
-          全て
+          フォルダの外
         </button>
         {folders.map(f => (
           <button

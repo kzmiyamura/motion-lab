@@ -1,6 +1,7 @@
 import { useRef, useCallback } from 'react';
 import { SLOW_RATES, ZOOM_PRESETS } from '../hooks/useVideoTraining';
 import type { SlowRate, ZoomPresetId } from '../hooks/useVideoTraining';
+import { SpeedMeter } from './SpeedMeter';
 import styles from './VideoControls.module.css';
 
 function fmtTime(sec: number): string {
@@ -127,6 +128,9 @@ export function VideoControls({
           {isLooping ? '⟳ ON' : '⟳ OFF'}
         </button>
       </div>
+
+      {/* ── 速度計測 ── */}
+      <SpeedMeter loopStart={loopStart} loopEnd={loopEnd} />
 
       {/* ── ズームプリセット ── */}
       <div className={styles.row}>

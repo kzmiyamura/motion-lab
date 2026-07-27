@@ -13,6 +13,7 @@ import { loadModelV2, modelFromJson, type RoleModel } from '../engine/poseClassi
 import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SequenceView } from './SequenceView';
+import { SpeedMeter } from './SpeedMeter';
 import styles from './FilePlayer.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -1057,6 +1058,11 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
             {isLooping ? '⟳ ON' : '⟳ OFF'}
           </button>
         </div>
+      )}
+
+      {/* Row 2.5: 速度計測（A-B区間の距離から km/h を算出） */}
+      {fileViewMode === 'video' && (
+        <SpeedMeter loopStart={loopStart} loopEnd={loopEnd} />
       )}
 
       {/* Row 3: Zoom presets（動画モード × 動画ファイルのみ） */}

@@ -170,3 +170,21 @@ Mac側で `server/` に以下を追加・変更済み（コミット `9789bec`�
 
 ### 報告してほしいこと
 - 上記4・5の結果のみ。問題なければ「対応完了」の一言でOK
+
+---
+
+## 追加タスク（2026-07-28）: Tunnelがまた落ちている（`motion-lab-tunnel`の復旧）
+
+`/relay/report` で確認したところ、ThinkCentreから最後にURLが報告されたのは前日13:43で止まっている。`motion-lab-tunnel`（`tunnel-wrapper.mjs`経由のcloudflared）がまた落ちているか、報告に失敗していると思われる。ほぼ1日周期で発生している。
+
+### やってほしいこと
+1. `pm2 list` で `motion-lab-tunnel` の状態を確認（`stopped`/`errored`になっていないか）
+2. `pm2 logs motion-lab-tunnel --lines 100` でクラッシュ理由・エラーを確認
+3. `pm2 restart motion-lab-tunnel` で復旧
+4. 復旧後、`curl https://motion-lab-apa.pages.dev/relay/report` を叩いて `updatedAt` が最新時刻に更新されていることを確認
+5. 可能であれば、なぜ落ちたのか（`cloudflared`自体がクラッシュ？ネットワーク断？）をログから特定してほしい。**これがほぼ毎日発生しているなら、`tunnel-wrapper.mjs`の自動復旧ロジック（プロセスexit時の再spawn）が効いていない可能性がある** ので、そちらの調査も含めて報告してほしい
+
+### 報告してほしいこと
+- 上記1〜5の結果
+- 落ちた原因の所感（cloudflared自体の問題か、ネットワークか、他の要因か）
+- 再発防止のためにできる対策があれば提案してほしい（例: ヘルスチェック用のcronで定期的に`/relay/report`の`updatedAt`と実際の生存確認をして、古ければ`pm2 restart motion-lab-tunnel`を自動実行する、等）

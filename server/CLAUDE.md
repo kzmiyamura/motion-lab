@@ -188,3 +188,69 @@ Mac側で `server/` に以下を追加・変更済み（コミット `9789bec`�
 - 上記1〜5の結果
 - 落ちた原因の所感（cloudflared自体の問題か、ネットワークか、他の要因か）
 - 再発防止のためにできる対策があれば提案してほしい（例: ヘルスチェック用のcronで定期的に`/relay/report`の`updatedAt`と実際の生存確認をして、古ければ`pm2 restart motion-lab-tunnel`を自動実行する、等）
+
+---
+
+## 追加タスク（2026-07-28・その2）: 回転速度解析パイプライン（Python + MediaPipe）の導入
+
+新機能: 動画内の人物の回転速度（RPM）を計測する。CPUのみでも「遅くていいので裏でしっかり解析する」方針のため、リアルタイム性は不要。Mac側でNode.js〜Pythonサブプロセス連携・API・フロントエンドまで実装済み（コミット済み）。ThinkCentre側はPython環境のセットアップと動作確認のみお願いします。
+
+### 背景・設計
+- `server/analysis/analyze_rotation.py` — MediaPipe Pose Landmarker **Heavyモデル**（精度優先、リアルタイム不要なのでHeavyを選択）で動画を1フレームずつ解析し、肩ラインの向き角度（`atan2(dz, dx)`）の時系列をunwrapしながら算出しJSON出力する
+- `server/src/analysisJob.ts` — Node.jsから`child_process.spawn`でこのPythonスクリプトを起動し、完了時にDBへ結果を保存する。メモリ上の`running`フラグで多重実行を防止
+- 解析中は`POST /api/videos`（アップロード）がブロックされる（`409 analysis_in_progress`）。CPU負荷が重なるのを避けるため
+- 新API: `POST /api/videos/:id/analyze`（解析開始）, `GET /api/videos/:id/analysis`（結果取得、フロントはこれをポーリング）
+- モデルファイルは**リポジトリにコミットしていない**（30MB超のバイナリのため）。`.gitignore`で`server/models/`を除外済み
+
+### やってほしいこと
+
+1. **Pythonインストール確認**（無ければ https://www.python.org/downloads/windows/ からインストール、pipも一緒に入るバージョンを選ぶ）
+   ```
+   python --version
+   pip --version
+   ```
+
+2. **依存パッケージインストール**
+   ```
+   cd server/analysis
+   pip install -r requirements.txt
+   ```
+   `mediapipe`・`opencv-python`ともWindows向けビルド済みwheelが配布されているはずなので、`better-sqlite3`の時のようなビルドツール地獄にはならない見込み。**もしビルドが必要というエラーが出たら、無理にビルドツールを入れず、まずMac側に報告してください**（別の対処法を検討します）
+
+3. **Heavyモデルのダウンロード**（PowerShellで実行、`server/models/`ディレクトリに保存）
+   ```powershell
+   New-Item -ItemType Directory -Force -Path server/models
+   Invoke-WebRequest -Uri "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task" -OutFile "server/models/pose_landmarker_heavy.task"
+   ```
+   ダウンロード後、ファイルサイズが30MB前後あることを確認（0KBやHTMLエラーページになっていないか）
+
+4. **環境変数設定**（`server/.env`に追記。`python`がPATHに無ければフルパスを指定）
+   ```
+   PYTHON_BIN=python
+   ```
+
+5. **サーバー再起動**
+   ```
+   pm2 restart motion-lab-server
+   ```
+
+6. **動作確認**（実際に人物が映っている短い動画で。数十秒〜数分かかる想定）
+   ```
+   # 動画IDを控えておく（アップロード済みのものでOK。status:readyであること）
+   curl -X POST http://localhost:4000/api/videos/<動画ID>/analyze
+   # 数秒後、アップロードがブロックされるか確認（409が返ればOK）
+   curl -X POST http://localhost:4000/api/videos -F "file=@dummy.mp4"
+   # 解析完了まで待ってから結果確認（processingの間は繰り返し叩く）
+   curl http://localhost:4000/api/videos/<動画ID>/analysis
+   ```
+   `status: "ready"`になり、`detectedFrames`が0より大きく（＝人物を検出できている）、`samples`に角度の時系列が入っていればOK
+
+### 報告してほしいこと
+- 上記6の結果（特に`detectedFrames`の数字、`fps`、サンプル数）
+- pip installでエラーが出た場合はそのログ
+- 解析1本あたりどれくらい時間がかかったか（動画の長さと合わせて）
+- ローカル（Mac、Apple Silicon）ではPython版MediaPipeがMetal(GPU)を自動的に使っていたが、ThinkCentre（Windows、GPU無し）ではCPUのみでの動作になる見込み。体感の遅さも教えてほしい
+
+### 触ってはいけないもの
+- `functions/`・`wrangler.toml`（Cloudflare Pages側、無関係）
+- モデルファイルの中身（`.task`）は書き換えない

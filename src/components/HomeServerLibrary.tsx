@@ -10,7 +10,7 @@ const HOME_SERVER_URL = (import.meta.env.VITE_HOME_SERVER_URL ?? '') as string;
 
 type Props = {
   /** 動画をタップした時に呼ばれる。Files タブの FilePlayer（スロー・ループ等）で開く */
-  onOpenInPlayer: (name: string, hlsUrl: string) => void;
+  onOpenInPlayer: (id: string, name: string, hlsUrl: string) => void;
 };
 
 export function HomeServerLibrary({ onOpenInPlayer }: Props) {
@@ -44,7 +44,7 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
 
   const handlePlay = (v: HomeServerVideo) => {
     const src = resolveHomeServerUrl(HOME_SERVER_URL, v.hlsUrl);
-    if (src) onOpenInPlayer(v.title, src);
+    if (src) onOpenInPlayer(v.id, v.title, src);
   };
 
   const handleNewFolder = async () => {

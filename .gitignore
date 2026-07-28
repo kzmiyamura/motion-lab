@@ -20,6 +20,12 @@ server/storage/
 server/data/
 server/.env
 
+# 回転速度解析（server/analysis/）: Pythonモデル・仮想環境
+server/models/
+server/analysis/venv/
+server/analysis/__pycache__/
+*.pyc
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

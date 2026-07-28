@@ -30,6 +30,18 @@ db.exec(`
     name TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS rotation_analysis (
+    video_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('processing', 'ready', 'error')),
+    fps REAL,
+    total_frames INTEGER,
+    detected_frames INTEGER,
+    samples_json TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 // 既存DB（folder_id列がまだ無いバージョン）向けマイグレーション
@@ -115,4 +127,45 @@ export function createFolder(id: string, name: string): void {
 export function deleteFolder(id: string): void {
   db.prepare('UPDATE videos SET folder_id = NULL WHERE folder_id = ?').run(id);
   db.prepare('DELETE FROM folders WHERE id = ?').run(id);
+}
+
+export interface RotationAnalysisRow {
+  video_id: string;
+  status: 'processing' | 'ready' | 'error';
+  fps: number | null;
+  total_frames: number | null;
+  detected_frames: number | null;
+  samples_json: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function insertRotationAnalysis(videoId: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO rotation_analysis (video_id, status, created_at, updated_at)
+     VALUES (?, 'processing', ?, ?)
+     ON CONFLICT(video_id) DO UPDATE SET status = 'processing', error_message = NULL, updated_at = excluded.updated_at`,
+  ).run(videoId, now, now);
+}
+
+export function markRotationAnalysisReady(
+  videoId: string,
+  fields: { fps: number; totalFrames: number; detectedFrames: number; samplesJson: string },
+): void {
+  db.prepare(
+    `UPDATE rotation_analysis SET status = 'ready', fps = ?, total_frames = ?, detected_frames = ?,
+     samples_json = ?, updated_at = ? WHERE video_id = ?`,
+  ).run(fields.fps, fields.totalFrames, fields.detectedFrames, fields.samplesJson, new Date().toISOString(), videoId);
+}
+
+export function markRotationAnalysisError(videoId: string, message: string): void {
+  db.prepare(
+    `UPDATE rotation_analysis SET status = 'error', error_message = ?, updated_at = ? WHERE video_id = ?`,
+  ).run(message, new Date().toISOString(), videoId);
+}
+
+export function getRotationAnalysis(videoId: string): RotationAnalysisRow | undefined {
+  return db.prepare('SELECT * FROM rotation_analysis WHERE video_id = ?').get(videoId) as unknown as RotationAnalysisRow | undefined;
 }

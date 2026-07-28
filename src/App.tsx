@@ -42,7 +42,7 @@ function App() {
 
   const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
   const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio' | 'homeserver'>('youtube');
-  const [homeVideoToPlay, setHomeVideoToPlay] = useState<{ name: string; url: string } | null>(null);
+  const [homeVideoToPlay, setHomeVideoToPlay] = useState<{ id: string; name: string; url: string } | null>(null);
   const [ytViewMode, setYtViewMode] = useState<'audio' | 'video'>('video');
 
   useEffect(() => {
@@ -125,8 +125,8 @@ function App() {
       <div className={mainTab === 'homeserver' ? styles.tabPanel : styles.tabPanelHidden}>
         <section className={styles.section}>
           <HomeServerLibrary
-            onOpenInPlayer={(name, url) => {
-              setHomeVideoToPlay({ name, url });
+            onOpenInPlayer={(id, name, url) => {
+              setHomeVideoToPlay({ id, name, url });
               setMainTab('files');
             }}
           />

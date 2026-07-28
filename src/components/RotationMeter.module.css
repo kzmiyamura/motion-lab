@@ -1,0 +1,52 @@
+.row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--color-ui-text-dim);
+  flex-shrink: 0;
+}
+
+.analyzeBtn {
+  padding: 0.28rem 0.6rem;
+  background: var(--color-ui-dark2);
+  border: 1.5px solid var(--color-border2);
+  border-radius: 6px;
+  color: var(--color-fg-dim);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.analyzeBtn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent-light);
+}
+
+.analyzeBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.rpmValue {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.hint {
+  font-size: 0.65rem;
+  color: var(--color-fg-dim);
+}
+
+.error {
+  font-size: 0.65rem;
+  color: #ff6060;
+}

@@ -143,3 +143,35 @@ export async function deleteHomeServerFolder(baseUrl: string, id: string): Promi
   const res = await fetch(`${baseUrl}/api/folders/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new HomeServerApiError(`フォルダ削除に失敗しました: HTTP ${res.status}`);
 }
+
+export interface RotationSample {
+  t: number;
+  angleDeg: number;
+}
+
+export interface RotationAnalysis {
+  status: 'processing' | 'ready' | 'error';
+  fps: number | null;
+  totalFrames: number | null;
+  detectedFrames: number | null;
+  samples: RotationSample[] | null;
+  errorMessage: string | null;
+  updatedAt: string;
+}
+
+/** 回転角度解析を開始する（ThinkCentre上でPythonが実行される。数十秒〜かかる） */
+export async function startRotationAnalysis(baseUrl: string, videoId: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/videos/${videoId}/analyze`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string; message?: string };
+    throw new HomeServerApiError(body.message ?? body.error ?? `解析開始に失敗しました: HTTP ${res.status}`);
+  }
+}
+
+/** null は「まだ一度も解析していない」（404） */
+export async function fetchRotationAnalysis(baseUrl: string, videoId: string): Promise<RotationAnalysis | null> {
+  const res = await fetch(`${baseUrl}/api/videos/${videoId}/analysis`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new HomeServerApiError(`解析結果の取得に失敗しました: HTTP ${res.status}`);
+  return res.json();
+}

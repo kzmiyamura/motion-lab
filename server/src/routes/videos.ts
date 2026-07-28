@@ -2,10 +2,14 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rm } from 'node:fs/promises';
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { convertVideo } from '../converter.js';
-import { deleteVideo, getVideo, insertVideo, listVideos, markVideoError, markVideoReady, updateVideo, type VideoRow } from '../db.js';
+import {
+  deleteVideo, getVideo, insertVideo, listVideos, markVideoError, markVideoReady, updateVideo,
+  getRotationAnalysis, type VideoRow,
+} from '../db.js';
+import { isAnalysisRunning, startRotationAnalysis } from '../analysisJob.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const STORAGE_DIR = path.resolve(__dirname, '../../storage');
@@ -41,6 +45,17 @@ function toPublicVideo(row: VideoRow) {
   };
 }
 
+/** 解析ジョブ実行中はアップロード（ffmpeg変換で重い）を受け付けない */
+function blockIfAnalyzing(_req: Request, res: Response, next: NextFunction) {
+  if (isAnalysisRunning()) {
+    return res.status(409).json({
+      error: 'analysis_in_progress',
+      message: '解析中のためアップロードできません。しばらくしてから再試行してください。',
+    });
+  }
+  next();
+}
+
 export const videosRouter = Router();
 
 videosRouter.get('/', (_req, res) => {
@@ -53,7 +68,7 @@ videosRouter.get('/:id', (req, res) => {
   res.json(toPublicVideo(row));
 });
 
-videosRouter.post('/', upload.single('file'), (req, res) => {
+videosRouter.post('/', blockIfAnalyzing, upload.single('file'), (req, res) => {
   const file = req.file;
   const id = (req as { videoId?: string }).videoId;
   if (!file || !id) return res.status(400).json({ error: 'file is required' });
@@ -99,4 +114,34 @@ videosRouter.delete('/:id', async (req, res) => {
   ]);
   deleteVideo(row.id);
   res.json({ status: 'ok' });
+});
+
+videosRouter.post('/:id/analyze', (req, res) => {
+  const row = getVideo(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  if (row.status !== 'ready') return res.status(400).json({ error: 'video is not ready yet' });
+  if (isAnalysisRunning()) return res.status(409).json({ error: 'analysis_in_progress' });
+
+  const ext = path.extname(row.original_filename) || '.mp4';
+  const videoPath = path.join(ORIGINALS_DIR, `${row.id}${ext}`);
+  try {
+    startRotationAnalysis(row.id, videoPath);
+    res.status(202).json({ status: 'processing' });
+  } catch (e) {
+    res.status(409).json({ error: e instanceof Error ? e.message : 'failed to start analysis' });
+  }
+});
+
+videosRouter.get('/:id/analysis', (req, res) => {
+  const a = getRotationAnalysis(req.params.id);
+  if (!a) return res.status(404).json({ error: 'not found' });
+  res.json({
+    status: a.status,
+    fps: a.fps,
+    totalFrames: a.total_frames,
+    detectedFrames: a.detected_frames,
+    samples: a.samples_json ? JSON.parse(a.samples_json) : null,
+    errorMessage: a.error_message,
+    updatedAt: a.updated_at,
+  });
 });

@@ -14,6 +14,7 @@ import { useBpmMeasure } from '../hooks/useBpmMeasure';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SequenceView } from './SequenceView';
 import { SpeedMeter } from './SpeedMeter';
+import { RotationMeter } from './RotationMeter';
 import styles from './FilePlayer.module.css';
 
 const CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '') as string;
@@ -26,7 +27,7 @@ type Props = {
   bpm: number;
   onBpmChange: (bpm: number) => void;
   /** Home タブから「このThinkCentre動画を開く」と指定された時に渡される */
-  pendingHlsSource?: { name: string; url: string } | null;
+  pendingHlsSource?: { id: string; name: string; url: string } | null;
   onPendingHlsSourceConsumed?: () => void;
 };
 
@@ -92,6 +93,8 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
   const [isMuted, setIsMuted] = useState(false);
   /** requestVideoFrameCallback で実測したフレームレート（未検出時は null、コマ送りは30fps仮定にフォールバック） */
   const [detectedFps, setDetectedFps] = useState<number | null>(null);
+  /** ThinkCentre上の動画ID（回転速度解析の対象を特定するため）。ローカルファイル等では null */
+  const [thinkCentreVideoId, setThinkCentreVideoId] = useState<string | null>(null);
 
   // Training controls
   const [slowRate, setSlowRateState] = useState<SlowRate>(1.0);
@@ -356,6 +359,7 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
     stopPseudoCycle();
     if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
     prevBlobUrl.current = url;
+    setThinkCentreVideoId(null);
     setSource({ name, url, isVideo: mimeType.startsWith('video/') });
     setBaseBpm(bpm);
     setSliderBpm(bpm);
@@ -375,11 +379,12 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
   }, [bpm, unlock, clearSequence, stopPseudoCycle]);
 
   /** ThinkCentre (Home タブ) から渡された HLS ストリームを開く */
-  const openHlsSource = useCallback((name: string, hlsUrl: string) => {
+  const openHlsSource = useCallback((id: string, name: string, hlsUrl: string) => {
     stopPseudoCycle();
     sourceFileRef.current = null; // リモート動画はバックアップ対象外
     setUploadStatus('idle');
     setHomeUploadStatus('idle');
+    setThinkCentreVideoId(id);
     setSource({ name, url: hlsUrl, isVideo: true, isHls: true });
     setBaseBpm(bpm);
     setSliderBpm(bpm);
@@ -399,7 +404,7 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
 
   useEffect(() => {
     if (pendingHlsSource) {
-      openHlsSource(pendingHlsSource.name, pendingHlsSource.url);
+      openHlsSource(pendingHlsSource.id, pendingHlsSource.name, pendingHlsSource.url);
       onPendingHlsSourceConsumed?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1111,6 +1116,11 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
       {/* Row 2.5: 速度計測（A-B区間の距離から km/h を算出） */}
       {fileViewMode === 'video' && (
         <SpeedMeter loopStart={loopStart} loopEnd={loopEnd} />
+      )}
+
+      {/* Row 2.6: 回転速度計測（ThinkCentre動画のみ・サーバー側Python解析結果を利用） */}
+      {fileViewMode === 'video' && (
+        <RotationMeter videoId={thinkCentreVideoId} loopStart={loopStart} loopEnd={loopEnd} />
       )}
 
       {/* Row 3: Zoom presets（動画モード × 動画ファイルのみ） */}

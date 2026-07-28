@@ -210,3 +210,22 @@
   margin: 0;
 }
 
+/* ── 解析ジョブバッジ ── */
+.jobBadge {
+  font-size: 0.6rem;
+  color: var(--color-fg-dim);
+  margin: 0;
+}
+
+.jobBadgeDone {
+  font-size: 0.6rem;
+  color: #4caf7d;
+  margin: 0;
+}
+
+.jobBadgeError {
+  font-size: 0.6rem;
+  color: #ff6060;
+  margin: 0;
+}
+

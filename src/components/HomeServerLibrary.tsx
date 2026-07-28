@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   listHomeServerVideos, resolveHomeServerUrl, deleteHomeServerVideo, updateHomeServerVideo,
   listHomeServerFolders, createHomeServerFolder, deleteHomeServerFolder,
-  type HomeServerVideo, type HomeServerFolder,
+  getFolderSpec, listVideoJobs, reanalyzeVideo,
+  type HomeServerVideo, type HomeServerFolder, type AnalysisJob,
 } from '../engine/homeServer';
+import { SpecEditorModal } from './SpecEditorModal';
 import styles from './HomeServerLibrary.module.css';
 
 const HOME_SERVER_URL = (import.meta.env.VITE_HOME_SERVER_URL ?? '') as string;
@@ -19,6 +21,27 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [specOpen, setSpecOpen] = useState(false);
+  const [activeFolderHasSpec, setActiveFolderHasSpec] = useState(false);
+  // 動画IDごとの最新解析ジョブ（フォルダ所属の動画のみ取得）
+  const [latestJobs, setLatestJobs] = useState<Record<string, AnalysisJob | undefined>>({});
+
+  const loadJobs = useCallback(async (targetVideos: HomeServerVideo[]) => {
+    const withFolder = targetVideos.filter(v => v.folderId != null);
+    if (withFolder.length === 0) {
+      setLatestJobs({});
+      return;
+    }
+    const entries = await Promise.all(withFolder.map(async v => {
+      try {
+        const jobs = await listVideoJobs(HOME_SERVER_URL, v.id);
+        return [v.id, jobs[0]] as const;
+      } catch {
+        return [v.id, undefined] as const;
+      }
+    }));
+    setLatestJobs(Object.fromEntries(entries));
+  }, []);
 
   const load = async () => {
     if (!HOME_SERVER_URL) return;
@@ -31,6 +54,7 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
       ]);
       setVideos(v);
       setFolders(f);
+      void loadJobs(v);
     } catch (e) {
       setError(e instanceof Error ? e.message : '一覧の取得に失敗しました。');
     } finally {
@@ -41,6 +65,27 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
   useEffect(() => {
     load();
   }, []);
+
+  // アクティブフォルダの指示書有無（📝ラベル・🔄表示の判定）
+  useEffect(() => {
+    if (!activeFolderId || !HOME_SERVER_URL) {
+      setActiveFolderHasSpec(false);
+      return;
+    }
+    let cancelled = false;
+    getFolderSpec(HOME_SERVER_URL, activeFolderId)
+      .then(spec => { if (!cancelled) setActiveFolderHasSpec(spec !== null); })
+      .catch(() => { if (!cancelled) setActiveFolderHasSpec(false); });
+    return () => { cancelled = true; };
+  }, [activeFolderId, specOpen]);
+
+  // queued / running のジョブがある間だけ10秒間隔でポーリング
+  useEffect(() => {
+    const active = Object.values(latestJobs).some(j => j && (j.status === 'queued' || j.status === 'running'));
+    if (!active) return;
+    const timer = setInterval(() => { void loadJobs(videos); }, 10_000);
+    return () => clearInterval(timer);
+  }, [latestJobs, videos, loadJobs]);
 
   const handlePlay = (v: HomeServerVideo) => {
     const src = resolveHomeServerUrl(HOME_SERVER_URL, v.hlsUrl);
@@ -88,6 +133,15 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
       await load();
     } catch (e) {
       alert(e instanceof Error ? e.message : '移動に失敗しました。');
+    }
+  };
+
+  const handleReanalyze = async (v: HomeServerVideo) => {
+    try {
+      await reanalyzeVideo(HOME_SERVER_URL, v.id);
+      await loadJobs(videos);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '再解析の開始に失敗しました。');
     }
   };
 
@@ -140,6 +194,15 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
         ))}
         <button className={styles.folderChip} onClick={handleNewFolder}>+ 新規フォルダ</button>
         {activeFolderId && (
+          <button
+            className={styles.folderChip}
+            onClick={() => setSpecOpen(true)}
+            title="このフォルダの解析指示書を編集"
+          >
+            📝 解析設定{activeFolderHasSpec ? '' : '（未設定）'}
+          </button>
+        )}
+        {activeFolderId && (
           <button className={styles.folderDeleteBtn} onClick={handleDeleteFolder} title="このフォルダを削除">
             🗑 フォルダ削除
           </button>
@@ -181,6 +244,14 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
                 {v.status === 'error' && (
                   <p className={styles.cardError}>{v.errorMessage ?? '変換に失敗しました'}</p>
                 )}
+                {(() => {
+                  const j = latestJobs[v.id];
+                  if (!j) return null;
+                  if (j.status === 'queued') return <p className={styles.jobBadge}>⏳ 解析待ち</p>;
+                  if (j.status === 'running') return <p className={styles.jobBadge}>🔬 解析中…</p>;
+                  if (j.status === 'done') return <p className={styles.jobBadgeDone}>✅ 解析済み</p>;
+                  return <p className={styles.jobBadgeError} title={j.errorMessage ?? undefined}>⚠ 解析失敗</p>;
+                })()}
               </div>
             </button>
             <div className={styles.cardActions}>
@@ -195,12 +266,25 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
                   <option key={f.id} value={f.id}>{f.name}</option>
                 ))}
               </select>
+              {activeFolderHasSpec && v.status === 'ready' && (
+                <button className={styles.cardActionBtn} onClick={() => handleReanalyze(v)} title="この動画を再解析">🔄</button>
+              )}
               <button className={styles.cardActionBtn} onClick={() => handleRename(v)} title="名前変更">✏️</button>
               <button className={styles.cardActionBtn} onClick={() => handleDelete(v)} title="削除">🗑</button>
             </div>
           </div>
         ))}
       </div>
+
+      {specOpen && activeFolderId && (
+        <SpecEditorModal
+          folderId={activeFolderId}
+          folderName={folders.find(f => f.id === activeFolderId)?.name ?? ''}
+          baseUrl={HOME_SERVER_URL}
+          onClose={() => setSpecOpen(false)}
+          onSaved={() => { void loadJobs(videos); }}
+        />
+      )}
     </div>
   );
 }

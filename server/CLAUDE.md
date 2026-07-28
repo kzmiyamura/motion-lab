@@ -254,3 +254,39 @@ Mac側で `server/` に以下を追加・変更済み（コミット `9789bec`�
 ### 触ってはいけないもの
 - `functions/`・`wrangler.toml`（Cloudflare Pages側、無関係）
 - モデルファイルの中身（`.task`）は書き換えない
+
+---
+
+## 追加タスク（2026-07-29）: フォルダ別MD解析パイプライン P0（配管）の取り込み
+
+Mac側で「フォルダごとに解析指示書（MD）を持たせ、動画投入で自動解析する」パイプラインの配管（P0）を実装した。設計は `docs/folder-analysis-design.md`（基本）と `docs/folder-analysis-detailed-design.md`（詳細）を参照。**P0 は配管の疎通のみで、CV解析（P1）・Claude判断（P2）は未配線**。ThinkCentre側は取り込みと動作確認のみお願いします。
+
+### やってほしいこと
+
+1. `git pull` && `cd server && npm install`（依存追加は無いはずだが念のため）
+2. `.env` に以下を追記（`.env.example` 参照）:
+   ```
+   API_WRITE_TOKEN=<Mac側と相談して決めた値。当面は空でもよい（無認証素通し）>
+   JOB_TIMEOUT_MS=3600000
+   JOB_MAX_RETRY=3
+   ```
+3. `pm2 restart motion-lab-server`
+4. 起動ログに `[jobWorker] started` が出ることを確認
+5. 動作確認（配管E2E）:
+   ```
+   # フォルダ作成 → 指示書保存
+   curl -X POST -H "Content-Type: application/json" -d '{"name":"解析テスト"}' http://localhost:4000/api/folders
+   curl -X PUT -H "Content-Type: application/json" \
+     -d '{"markdown":"---\npreset: salsa-pair\nversion: 1\n---\n\n# テスト"}' \
+     http://localhost:4000/api/folders/<フォルダID>/spec
+   # ready済みの適当な動画をフォルダへ移動（これがエンキューのトリガー）
+   curl -X PATCH -H "Content-Type: application/json" -d '{"folderId":"<フォルダID>"}' \
+     http://localhost:4000/api/videos/<動画ID>
+   # 15秒待ってからジョブ確認（status: done、report_md に「配管テスト」が入っていればOK）
+   curl http://localhost:4000/api/videos/<動画ID>/jobs
+   ```
+6. `curl http://localhost:4000/api/health` に `claude` フィールドが追加されている（現時点では `unavailable` か `unchecked` で正常。claude CLI のインストールは P2 で実施予定なので**今はまだ不要**）
+
+### 報告してほしいこと
+- 上記4〜6の結果。問題なければ「P0対応完了」の一言でOK
+- `storage/specs/` と `storage/analysis-jobs/` が作成されているか

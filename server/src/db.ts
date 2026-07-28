@@ -42,6 +42,25 @@ db.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS analysis_jobs (
+    id            TEXT PRIMARY KEY,
+    video_id      TEXT NOT NULL,
+    folder_id     TEXT NOT NULL,
+    preset        TEXT NOT NULL,
+    spec_snapshot TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('queued', 'running', 'done', 'error')),
+    retry_count   INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT,
+    result_json   TEXT,
+    report_md     TEXT,
+    error_message TEXT,
+    created_at    TEXT NOT NULL,
+    started_at    TEXT,
+    finished_at   TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_jobs_status ON analysis_jobs (status, created_at);
+  CREATE INDEX IF NOT EXISTS idx_jobs_video ON analysis_jobs (video_id, created_at);
 `);
 
 // 既存DB（folder_id列がまだ無いバージョン）向けマイグレーション
@@ -71,12 +90,12 @@ export interface FolderRow {
   created_at: string;
 }
 
-export function insertVideo(row: Pick<VideoRow, 'id' | 'title' | 'original_filename'>): void {
+export function insertVideo(row: Pick<VideoRow, 'id' | 'title' | 'original_filename'> & { folder_id?: string | null }): void {
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO videos (id, title, original_filename, status, created_at, updated_at)
-     VALUES (?, ?, ?, 'processing', ?, ?)`,
-  ).run(row.id, row.title, row.original_filename, now, now);
+    `INSERT INTO videos (id, title, original_filename, status, folder_id, created_at, updated_at)
+     VALUES (?, ?, ?, 'processing', ?, ?, ?)`,
+  ).run(row.id, row.title, row.original_filename, row.folder_id ?? null, now, now);
 }
 
 export function markVideoReady(id: string, durationSec: number, thumbnailPath: string, hlsPlaylistPath: string): void {
@@ -168,4 +187,105 @@ export function markRotationAnalysisError(videoId: string, message: string): voi
 
 export function getRotationAnalysis(videoId: string): RotationAnalysisRow | undefined {
   return db.prepare('SELECT * FROM rotation_analysis WHERE video_id = ?').get(videoId) as unknown as RotationAnalysisRow | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// analysis_jobs — フォルダ別MD解析指示書パイプラインのジョブキュー
+// docs/folder-analysis-detailed-design.md §1 参照
+// ---------------------------------------------------------------------------
+
+export interface AnalysisJobRow {
+  id: string;
+  video_id: string;
+  folder_id: string;
+  preset: string;
+  spec_snapshot: string;
+  status: 'queued' | 'running' | 'done' | 'error';
+  retry_count: number;
+  next_retry_at: string | null;
+  result_json: string | null;
+  report_md: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** ジョブを積む。同一videoの既存queuedジョブがあれば重複させず既存idを返す */
+export function enqueueAnalysisJob(videoId: string, folderId: string, preset: string, specSnapshot: string): string {
+  const existing = db.prepare(
+    `SELECT id FROM analysis_jobs WHERE video_id = ? AND status = 'queued' LIMIT 1`,
+  ).get(videoId) as unknown as { id: string } | undefined;
+  if (existing) return existing.id;
+
+  const id = crypto.randomUUID();
+  db.prepare(
+    `INSERT INTO analysis_jobs (id, video_id, folder_id, preset, spec_snapshot, status, created_at)
+     VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
+  ).run(id, videoId, folderId, preset, specSnapshot, new Date().toISOString());
+  return id;
+}
+
+/** queued かつリトライ待機が明けている最古1件を running にして返す。無ければ undefined */
+export function claimNextJob(): AnalysisJobRow | undefined {
+  const now = new Date().toISOString();
+  const row = db.prepare(
+    `SELECT * FROM analysis_jobs
+     WHERE status = 'queued' AND (next_retry_at IS NULL OR next_retry_at <= ?)
+     ORDER BY created_at ASC LIMIT 1`,
+  ).get(now) as unknown as AnalysisJobRow | undefined;
+  if (!row) return undefined;
+
+  // Node直列実行だが、statusガード付きUPDATEで保険をかける
+  const result = db.prepare(
+    `UPDATE analysis_jobs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'`,
+  ).run(now, row.id);
+  if (result.changes === 0) return undefined;
+  return { ...row, status: 'running', started_at: now };
+}
+
+export function markJobDone(id: string, resultJson: string, reportMd: string): void {
+  db.prepare(
+    `UPDATE analysis_jobs SET status = 'done', result_json = ?, report_md = ?, error_message = NULL, finished_at = ?
+     WHERE id = ?`,
+  ).run(resultJson, reportMd, new Date().toISOString(), id);
+}
+
+export function markJobError(id: string, message: string): void {
+  db.prepare(
+    `UPDATE analysis_jobs SET status = 'error', error_message = ?, finished_at = ? WHERE id = ?`,
+  ).run(message, new Date().toISOString(), id);
+}
+
+/** レート制限等の一時失敗。queuedに戻し retry_count++ / next_retry_at を設定 */
+export function requeueJobForRetry(id: string, nextRetryAt: string): void {
+  db.prepare(
+    `UPDATE analysis_jobs SET status = 'queued', retry_count = retry_count + 1, next_retry_at = ?, started_at = NULL
+     WHERE id = ?`,
+  ).run(nextRetryAt, id);
+}
+
+export function getJob(id: string): AnalysisJobRow | undefined {
+  return db.prepare('SELECT * FROM analysis_jobs WHERE id = ?').get(id) as unknown as AnalysisJobRow | undefined;
+}
+
+export function listJobsByVideo(videoId: string): AnalysisJobRow[] {
+  return db.prepare(
+    'SELECT * FROM analysis_jobs WHERE video_id = ? ORDER BY created_at DESC',
+  ).all(videoId) as unknown as AnalysisJobRow[];
+}
+
+/** 動画削除時のカスケード。削除したjob idの配列を返す（成果物ディレクトリ掃除用） */
+export function deleteJobsByVideo(videoId: string): string[] {
+  const rows = db.prepare('SELECT id FROM analysis_jobs WHERE video_id = ?').all(videoId) as unknown as { id: string }[];
+  db.prepare('DELETE FROM analysis_jobs WHERE video_id = ?').run(videoId);
+  return rows.map(r => r.id);
+}
+
+/** サーバー起動時リカバリ: running を全て queued に戻す。戻した件数を返す */
+export function recoverStaleRunningJobs(): number {
+  const result = db.prepare(
+    `UPDATE analysis_jobs SET status = 'queued', started_at = NULL WHERE status = 'running'`,
+  ).run();
+  return Number(result.changes);
 }

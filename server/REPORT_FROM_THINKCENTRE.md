@@ -165,3 +165,59 @@ powercfg /change standby-timeout-ac 0
 2. **watchdog**（保険）→ 万一トンネルだけ失効しても90秒で自動復旧
 
 Quick Tunnel の「復旧のたびURLが変わる」仕様は残るが、固定URL中継でフロント側の手動更新は不要。恒久安定を突き詰めるなら独自ドメイン＋名前付きTunnel（別途判断）。
+
+---
+
+# ThinkCentre側 作業報告（2026-07-29）: P0配管 / 回転解析env / P1(CV計測) 実動画検証
+
+`server/CLAUDE.md` の追加タスク3件をまとめて対応。
+
+## P0（フォルダ別MD解析・配管）— 対応完了
+
+- `pm2 restart motion-lab-server` 後、起動ログに `[jobWorker] started (poll=15000ms, timeout=3600000ms)` を確認。
+- 配管E2E（フォルダ作成 → spec保存 → ready動画をフォルダ移動 → ジョブ確認）: ジョブ `status: done`、`report_md` に「配管テスト」文言を確認。
+- `GET /api/health` に `"claude":"unavailable"` フィールドが追加されているのを確認（claude CLI未導入=P2予定なので正常）。
+- `storage/specs/` と `storage/analysis-jobs/` が生成されたことを確認。
+- `.env` に `API_WRITE_TOKEN=`（空・無認証素通し）, `JOB_TIMEOUT_MS=3600000`, `JOB_MAX_RETRY=3`, `CLAUDE_BIN=claude` を追記。
+
+## 回転解析env（2026-07-28・その2）
+
+### 環境
+- **Python は既にインストール済みだった**（`C:\Users\admin\AppData\Local\Programs\Python\Python312\python.exe`、3.12.10）。ただし **PATHに通っておらず** `python` 直呼びは Microsoft Store エイリアスに吸われる。→ `.env` の `PYTHON_BIN` に**フルパス**を指定して解決。
+- `pip install --user -r requirements.txt` 成功。**mediapipe 1.0.0 / opencv-python 5.0.0**。指示書の予想通りビルド地獄なし（Windows向けwheelがそのまま入った）。
+- Heavyモデル `pose_landmarker_heavy.task` をDL、**29.2MB**（正常）。
+
+### 実動画検証（video=2fda2815, 31.5秒）
+- `POST /api/videos/:id/analyze` → `{"status":"processing"}`。解析中に `POST /api/videos`（アップロード）が **409 でブロック**されることを確認。
+- 結果: `status: ready`、**detectedFrames 1246 / totalFrames 1324（検出率94%）**、`fps ≈ 42`、角度サンプル 1246点。
+- **所要時間: 約2分20秒**（31.5秒動画に対し ≈ 実時間の4.4倍。CPUのみ・Heavyモデル）。
+- 体感: リアルタイムには程遠いが「裏でしっかり」の方針なら許容範囲。GPU無しのぶんMac(Metal)より明確に遅い。
+
+## P1（CV計測・2026-07-29・その2）実動画検証
+
+- 検証動画: **2fda2815**（中身は実際のサルサペア動画＝Lewis Barr の On2 partnerwork のスマホ画面録画）。salsa-pair指示書付きフォルダへ移動してエンキュー。
+- ジョブ `status: done`、**所要 約76秒**（うちCV実行 ~40-60秒、31.5秒動画の ~1.5-2倍。回転解析より速いのは10fps間引きのため）。
+- **計測結果**:
+  - slot0 SHR平均 **1.6318**（120サンプル）
+  - slot1 SHR平均 **1.5904**（226サンプル）
+  - Leader判定: **拮抗（null / confidence 0.5）**
+  - contested区間 **2つ**（0:01〜0:04, 0:05〜0:27、いずれも occlusion）＝**動画のほぼ全域**
+  - キーフレーム **JPEG 6枚**を `out/keyframes/` に書き出し確認（+ `measurements.json` 38KB）。
+
+### 答え合わせ（人間の目 / キーフレーム目視）
+- キーフレーム（例: `000016.6_contested.jpg`）を確認 → **確かに判定困難な瞬間**（2人が腕を組み密着・オクルージョン）が的確に切り出されている。
+- 地上の真実: **男性が右（グレーシャツ・肩幅広）＝Leader、女性が左（白トップ）**。本来なら男性のSHRが明確に高いはず。
+- しかし計測は **slot0=1.63 / slot1=1.59 とほぼ同値で拮抗**＝**実質ミス（Leaderを決められず）**。まさに P2（Claude裁定）が要る難ケース。
+- **判定が難しかった原因（この動画の特徴）**:
+  1. 動画のほぼ全域が**腕を組む密着オクルージョン**（contestedが0:05〜0:27で全体の約7割）
+  2. **背景の鏡に第三者（撮影者）が写り込んでいる** → 2人スロット検出を汚染しうる（slot0とslot1のサンプル数が120 vs 226と偏っているのもこの影響の可能性）
+  3. 結果として両者のSHRがともに ~1.6 と高止まりし差が出なかった
+
+### 所感
+- パイプライン（P0配管→P1 CV計測→成果物出力）は**設計通り完動**。
+- ただし今回の実動画は「オクルージョン多め＋背景に第三者」という**ルールベースSHRが苦手な典型**で、Leaderを決められなかった。P2のClaude裁定・またはより見通しの良い動画での再検証が有効。
+- より単独ペアが明瞭に映る動画（背景に人がいない・オクルージョン少なめ）でも1本試すと、SHR判定の素の精度が見える。
+
+## 状態・触れていないもの
+- 検証で **video=2fda2815 を「P1検証」フォルダに入れたまま**にしている（指示のE2Eの結果状態。戻す指示があれば戻す）。
+- `functions/`・`wrangler.toml`・`RELAY_SECRET`・モデルファイル中身は無変更。

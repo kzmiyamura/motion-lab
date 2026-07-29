@@ -142,17 +142,39 @@ def apply_roi_mask(frame, roi):
     return out
 
 
+# ブラウザ実装（usePoseEstimation.ts）と同じカラーコーディング: Leader=青, Follower=ピンク
+# OpenCV は BGR 順なので注意
+COLOR_LEADER = (255, 102, 0)     # 青 (#0066ff)
+COLOR_FOLLOWER = (204, 0, 255)   # ピンク (#ff00cc)
+COLOR_NEUTRAL = (0, 220, 0)      # 緑: 1人のみ検出などロール不明
+COLOR_EXCLUDED = (160, 160, 160)  # グレー: 見切れ等で verdict 母集団から除外
+COLOR_REJECTED = (0, 0, 255)     # 赤: 背景人物として除外
+
+
 def draw_debug(frame, roi, kept, rejected):
-    """デバッグ動画用: ROI枠（金）・採用ペア（緑）・除外候補（赤）を描画"""
+    """デバッグ動画用: ROI枠（金）を描画し、採用ペアはフレーム内 SHR 比較で
+    高い側=Leader候補（青）/ 低い側=Follower候補（ピンク）に塗り分ける。
+    見切れフレーム（verdict 不使用）はグレー、背景の除外候補は赤。
+    ※ 青/ピンクは「そのフレームの SHR 比較」であり確定ロールではない。
+    交差時にチラつくのは per-frame 計測ノイズの正直な可視化"""
     h, w = frame.shape[:2]
     vis = frame.copy()
     if roi is not None:
         cv2.rectangle(vis, (int(roi[0] * w), int(roi[1] * h)), (int(roi[2] * w), int(roi[3] * h)), (0, 200, 255), 2)
-    for p, color in [(p, (0, 220, 0)) for p in kept] + [(p, (0, 0, 255)) for p in rejected]:
+
+    pairs = []
+    if len(kept) == 2 and not any(p["edgeClipped"] for p in kept):
+        hi, lo = (kept[0], kept[1]) if kept[0]["shr2d"] >= kept[1]["shr2d"] else (kept[1], kept[0])
+        pairs = [(hi, COLOR_LEADER, "L?"), (lo, COLOR_FOLLOWER, "F?")]
+    else:
+        pairs = [(p, COLOR_EXCLUDED if p["edgeClipped"] else COLOR_NEUTRAL, "") for p in kept]
+
+    for p, color, tag in pairs + [(p, COLOR_REJECTED, "") for p in rejected]:
         b = p["bbox"]
         cv2.rectangle(vis, (int(b[0] * w), int(b[1] * h)), (int(b[2] * w), int(b[3] * h)), color, 2)
-        cv2.putText(vis, f"SHR {p['shr2d']:.2f} c{p['conf']:.2f}", (int(b[0] * w), max(12, int(b[1] * h) - 4)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+        label = f"{tag} SHR {p['shr2d']:.2f}".strip()
+        cv2.putText(vis, label, (int(b[0] * w), max(12, int(b[1] * h) - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 2)
     return vis
 
 

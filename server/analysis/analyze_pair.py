@@ -15,6 +15,10 @@ docs/folder-analysis-detailed-design.md §8.1 参照
   （ブラウザ実装 usePoseEstimation.ts と同じ考え方）
 - verdict 用の SHR 平均はオクルージョンフレームを除外した「クリーンフレーム」のみから算出
   （密着姿勢で計測が崩れたフレームの混入を防ぐ。申し送り#2）
+- verdict はスロット別平均ではなく「フレーム内で SHR が高い側 / 低い側」の分離で判定
+  （スロット番号は人物IDではなく、CBL等の交差でNNトラッキングが入れ替わると
+  スロット平均に両者が混ざり符号が反転し得るため。申し送り#8 提案A。
+  スロット別サマリは参考情報として残すが、同一性リークがあり得る点に注意）
 
 出力: measurements.json（スキーマは詳細設計 §8.1）
 
@@ -218,9 +222,13 @@ def main():
     prev_slots = [None, None]
     person_frames = []   # persons 配列（出力用）
     contest_frames = []  # contested 抽出用の軽量列
-    # スロット別サマリ集計。verdict にはクリーン（非オクルージョン）のみ使う
+    # スロット別サマリ集計（参考情報。同一性リークがあり得るため verdict には使わない）
     clean_stats = [{"sum": 0.0, "sumsq": 0.0, "n": 0} for _ in range(2)]
     all_stats = [{"sum": 0.0, "sumsq": 0.0, "n": 0} for _ in range(2)]
+    # verdict 用: フレーム内の SHR 高い側 / 低い側の集計（人物追跡に依存しない）
+    # 各要素: {"high": shr, "low": shr, "highSide": "left"|"right", "t": sec}
+    pair_clean = []
+    pair_all = []
 
     with PoseLandmarker.create_from_options(options) as landmarker:
         while True:
@@ -264,6 +272,16 @@ def main():
             shr_diff = None
             if both:
                 shr_diff = abs(slots[0]["shr3d"] - slots[1]["shr3d"])
+                hi, lo = (slots[0], slots[1]) if slots[0]["shr3d"] >= slots[1]["shr3d"] else (slots[1], slots[0])
+                pair = {
+                    "high": hi["shr3d"],
+                    "low": lo["shr3d"],
+                    "highSide": "left" if hi["hipX"] < lo["hipX"] else "right",
+                    "t": t_sec,
+                }
+                pair_all.append(pair)
+                if not occluded:
+                    pair_clean.append(pair)
             for i in range(2):
                 if slots[i] is not None:
                     all_stats[i]["sum"] += slots[i]["shr3d"]
@@ -299,36 +317,60 @@ def main():
         var = max(0.0, s["sumsq"] / s["n"] - mean ** 2)
         return {"shrMean": round(mean, 4), "shrStd": round(math.sqrt(var), 4), "samples": s["n"]}
 
-    # verdict はクリーンフレーム優先。不足時は全フレームにフォールバック（basisで明示）
+    # スロット別サマリ（参考情報のみ。同一性リークがあり得るため verdict には使わない）
     clean0, clean1 = slot_summary(clean_stats[0]), slot_summary(clean_stats[1])
     all0, all1 = slot_summary(all_stats[0]), slot_summary(all_stats[1])
-    use_clean = clean0["samples"] >= MIN_CLEAN_SAMPLES and clean1["samples"] >= MIN_CLEAN_SAMPLES
-    v0, v1 = (clean0, clean1) if use_clean else (all0, all1)
+    sum0 = {**clean0, "samplesAll": all0["samples"]}
+    sum1 = {**clean1, "samplesAll": all1["samples"]}
+
+    # verdict: フレーム内 high/low の分離（人物追跡に依存しない）。クリーン優先、不足時フォールバック
+    use_clean = len(pair_clean) >= MIN_CLEAN_SAMPLES
+    pairs = pair_clean if use_clean else pair_all
     basis = "clean" if use_clean else "all_frames_fallback"
 
-    if v0["shrMean"] is not None and v1["shrMean"] is not None:
-        diff = v0["shrMean"] - v1["shrMean"]
-        if abs(diff) >= SHR_DIFF_THRESHOLD:
-            verdict = {
-                "leader": 0 if diff > 0 else 1,
-                "confidence": round(min(0.95, 0.5 + abs(diff) * 5), 2),
-                "basis": basis,
-            }
-        else:
-            verdict = {"leader": None, "confidence": 0.5, "basis": basis}
+    if pairs:
+        high_mean = sum(p["high"] for p in pairs) / len(pairs)
+        low_mean = sum(p["low"] for p in pairs) / len(pairs)
+        separation = high_mean - low_mean
+        leader_exists = separation >= SHR_DIFF_THRESHOLD
+        # 開始時に SHR 高い側がどちらにいたか（最初の5ペアフレームの多数決）
+        first = pairs[:5]
+        left_votes = sum(1 for p in first if p["highSide"] == "left")
+        leader_at_start = {
+            "side": "left" if left_votes * 2 > len(first) else "right",
+            "t": round(first[0]["t"], 2),
+        }
+        # high側が同じ側に居続けた割合（1に近い＝交差が少なく位置でも追える。参考指標）
+        left_ratio = sum(1 for p in pairs if p["highSide"] == "left") / len(pairs)
+        verdict = {
+            "leaderExists": leader_exists,
+            "separation": round(separation, 4),
+            "highMean": round(high_mean, 4),
+            "lowMean": round(low_mean, 4),
+            "confidence": round(min(0.95, 0.5 + separation * 5), 2) if leader_exists else 0.5,
+            "basis": basis,
+            "leaderAtStart": leader_at_start,
+            "highSideConsistency": round(max(left_ratio, 1 - left_ratio), 3),
+        }
     else:
-        verdict = {"leader": None, "confidence": 0.0, "basis": basis}
+        verdict = {
+            "leaderExists": False, "separation": None, "highMean": None, "lowMean": None,
+            "confidence": 0.0, "basis": basis, "leaderAtStart": None, "highSideConsistency": None,
+        }
 
-    # 出力の slot サマリは verdict に使った側（クリーン優先）。全フレーム値は samplesAll で併記
-    sum0 = {**v0, "samplesAll": all0["samples"]}
-    sum1 = {**v1, "samplesAll": all1["samples"]}
+    # 機械可読の信頼度指標（申し送り#9。P2/UI が「ルールベースが当てになるか」を即判断できる）
+    reliability = {
+        "cleanPairFrames": len(pair_clean),
+        "allPairFrames": len(pair_all),
+        "cleanRatio": round(len(pair_clean) / len(pair_all), 3) if pair_all else 0.0,
+    }
 
     contested, dropped = extract_contested(contest_frames, effective_fps)
-    # 全体拮抗（平均差が閾値未満）なら、区間に関係なく全編が判定困難であることを明示
-    if verdict["leader"] is None and sum0["samples"] > 0 and sum1["samples"] > 0:
+    # 全体拮抗（分離が閾値未満）なら、区間に関係なく全編が判定困難であることを明示
+    if not verdict["leaderExists"] and pairs:
         if not contested:
             total_t = contest_frames[-1]["t"] if contest_frames else 0.0
-            contested = [{"from": 0.0, "to": round(total_t, 2), "reason": "shr_mean_diff<threshold"}]
+            contested = [{"from": 0.0, "to": round(total_t, 2), "reason": "shr_separation<threshold"}]
 
     with open(output_path, "w") as f:
         json.dump({
@@ -341,6 +383,7 @@ def main():
                 "slot0": sum0,
                 "slot1": sum1,
                 "verdictByRule": verdict,
+                "reliability": reliability,
                 "contested": contested,
                 "contestedDropped": dropped,
             },
@@ -348,8 +391,7 @@ def main():
 
     print(
         f"done: {sampled}/{frame_idx} frames sampled, "
-        f"slot0 shr={sum0['shrMean']} (n={sum0['samples']}), "
-        f"slot1 shr={sum1['shrMean']} (n={sum1['samples']}), "
+        f"pairFrames clean={reliability['cleanPairFrames']}/all={reliability['allPairFrames']}, "
         f"verdict={verdict}, contested={len(contested)} (+{dropped} dropped)",
         file=sys.stderr,
     )

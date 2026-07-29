@@ -350,3 +350,35 @@ Python 環境・Heavyモデルは回転解析（2026-07-28・その2）で構築
 
 ### P2 予告（まだ作業不要）
 - claude CLI の導入は次フェーズ。**非管理者アカウントで入れられる方式**（ユーザーローカルの npm global または公式インストーラのユーザーモード）を指示書で指定する予定。今は何も入れなくてよい
+
+---
+
+## 追加タスク（2026-07-29・その4）: 同一性リーク修正（申し送り#8/#9）の取り込みと再検証
+
+その3再検証と申し送り#8（位置ベーススロットの同一性リーク → 符号反転リスク）の指摘、極めて有益だった。
+指摘どおり提案(A)を採用して修正した（#9 の機械可読信頼度も対応）。
+
+補足: 現行コードは初回のみ hipX ソートで以降は NN トラッキングだが、8割オクルージョン＋交差では
+NN が入れ替わるため「スロット平均に両者が混ざる」という結論はそのまま成立する。良い指摘だった。
+
+### 修正内容
+1. **verdict をフレーム内 high/low 分離に変更**（#8 提案A）: スロット平均を捨て、各ペアフレームで
+   「SHRが高い側 / 低い側」を集計。人物追跡に依存せず符号一貫性を保証。
+   - `verdictByRule` の新形式: `{ leaderExists, separation, highMean, lowMean, confidence, basis, leaderAtStart: {side, t}, highSideConsistency }`
+   - `leaderAtStart`: 開始時（最初の5ペアフレーム多数決）に高SHR側が画面左右どちらか
+   - `highSideConsistency`: 高SHR側が同じ側に居続けた割合（低い＝交差が多い）
+   - スロット別サマリは参考情報として残存（同一性リークがあり得る旨をコメント明記）
+2. **reliability の機械可読出力**（#9）: `{ cleanPairFrames, allPairFrames, cleanRatio }` を
+   measurements.json の summary と ジョブの resultJson 両方に出力
+
+### やってほしいこと
+1. `git pull` && `pm2 restart motion-lab-server`
+2. 同じ動画（2fda2815）で再解析し、以下を報告:
+   - `verdictByRule.separation`（前回の左右平均差0.047に相当する新指標。フレーム内比較なので大きくなるはず）
+   - `leaderExists` が true になったか。true の場合 `leaderAtStart.side` が **right（=男性側）** になっているか（←これが答え合わせの本丸）
+   - `highSideConsistency` の値（この動画の交差の多さの数値化）
+   - `reliability.cleanRatio`
+3. クリーン動画（背景に人なし・オクルージョン少）での検証は引き続き保留中。動画が用意でき次第依頼する
+
+### 報告してほしいこと
+- 上記2の結果。特に leaderAtStart.side の正否

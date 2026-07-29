@@ -147,7 +147,17 @@ interface ContestedSeg { from: number; to: number; reason: string }
 interface MeasurementsSummary {
   slot0?: { shrMean: number | null; shrStd: number | null; samples: number; samplesAll?: number };
   slot1?: { shrMean: number | null; shrStd: number | null; samples: number; samplesAll?: number };
-  verdictByRule?: { leader: 0 | 1 | null; confidence: number; basis?: string };
+  verdictByRule?: {
+    leaderExists: boolean;
+    separation: number | null;
+    highMean: number | null;
+    lowMean: number | null;
+    confidence: number;
+    basis: string;
+    leaderAtStart: { side: 'left' | 'right'; t: number } | null;
+    highSideConsistency: number | null;
+  };
+  reliability?: { cleanPairFrames: number; allPairFrames: number; cleanRatio: number };
   contested?: ContestedSeg[];
   contestedDropped?: number;
 }
@@ -191,12 +201,13 @@ function buildCvOnlyReport(job: AnalysisJobRow, cvStepCount: number, measurement
 
   const verdict = summary.verdictByRule;
   const contested = summary.contested ?? [];
-  const noDetection = (summary.slot0?.samples ?? 0) === 0 && (summary.slot1?.samples ?? 0) === 0;
-  const leaderLabel = noDetection
-    ? '判定不可（人物を検出できませんでした）'
-    : verdict?.leader === null || verdict?.leader === undefined
-      ? '判定できず（拮抗）'
-      : `スロット${verdict.leader}（画面${verdict.leader === 0 ? '左' : '右'}スタート側）`;
+  const rel = summary.reliability;
+  const noPairs = (rel?.allPairFrames ?? 0) === 0;
+  const leaderLabel = noPairs
+    ? '判定不可（2人同時に検出できたフレームがありません）'
+    : verdict?.leaderExists
+      ? `SHRが高い側（分離 ${verdict.separation}、開始時は画面${verdict.leaderAtStart?.side === 'left' ? '左' : '右'}の人物）`
+      : '判定できず（拮抗 — SHR分離が閾値未満）';
 
   const lines = [
     `# 解析レポート（CV計測のみ・LLM判断はP2で有効化）`,
@@ -205,9 +216,10 @@ function buildCvOnlyReport(job: AnalysisJobRow, cvStepCount: number, measurement
     ``,
     `- **Leader（ルールベースSHR判定）**: ${leaderLabel}`,
     `- 自信度: ${verdict ? Math.round(verdict.confidence * 100) : 0}%`,
-    `- 判定母集団: ${verdict?.basis === 'clean' ? 'クリーンフレームのみ（オクルージョン除外）' : verdict?.basis === 'all_frames_fallback' ? '全フレーム（クリーンフレーム不足のためフォールバック）' : '—'}`,
-    `- slot0 SHR平均: ${summary.slot0?.shrMean ?? '—'}（${summary.slot0?.samples ?? 0}サンプル / 全${summary.slot0?.samplesAll ?? summary.slot0?.samples ?? 0}検出）`,
-    `- slot1 SHR平均: ${summary.slot1?.shrMean ?? '—'}（${summary.slot1?.samples ?? 0}サンプル / 全${summary.slot1?.samplesAll ?? summary.slot1?.samples ?? 0}検出）`,
+    `- SHR: 高い側 ${verdict?.highMean ?? '—'} / 低い側 ${verdict?.lowMean ?? '—'}（フレーム内比較 — 人物追跡に依存しない）`,
+    `- 判定母集団: ${verdict?.basis === 'clean' ? `クリーンフレームのみ（${rel?.cleanPairFrames ?? 0}フレーム、オクルージョン除外）` : verdict?.basis === 'all_frames_fallback' ? `全フレーム（クリーン不足のためフォールバック、${rel?.allPairFrames ?? 0}フレーム）` : '—'}`,
+    `- クリーン率: ${rel ? Math.round(rel.cleanRatio * 100) : 0}%（低いほどオクルージョンが多くルールベースの信頼度が下がる）`,
+    `- 高SHR側の位置一貫性: ${verdict?.highSideConsistency != null ? Math.round(verdict.highSideConsistency * 100) + '%' : '—'}（低い＝交差が多い動画）`,
     ``,
   ];
   if (contested.length > 0) {
@@ -219,14 +231,20 @@ function buildCvOnlyReport(job: AnalysisJobRow, cvStepCount: number, measurement
       lines.push(``, `※ 他に ${summary.contestedDropped} 区間が上限超過で省略されています`);
     }
     lines.push(``, `キーフレームは out/keyframes/ に書き出し済み。P2 で Claude が裁定します。`);
-  } else if (noDetection) {
-    lines.push(`人物を検出できなかったため判定できません。動画に2人が映っているか確認してください。`);
+  } else if (noPairs) {
+    lines.push(`2人を同時に検出できなかったため判定できません。動画にペアが映っているか確認してください。`);
   } else {
     lines.push(`拮抗区間はありませんでした（ルールベース判定のみで確定）。`);
   }
 
   return {
-    resultJson: JSON.stringify({ pipeline: 'p1-cv', preset: job.preset, verdictByRule: verdict ?? null, contested }),
+    resultJson: JSON.stringify({
+      pipeline: 'p1-cv',
+      preset: job.preset,
+      verdictByRule: verdict ?? null,
+      reliability: rel ?? null,
+      contested,
+    }),
     reportMd: lines.join('\n'),
   };
 }

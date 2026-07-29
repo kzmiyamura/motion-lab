@@ -324,3 +324,36 @@ Quick Tunnel の「復旧のたびURLが変わる」仕様は残るが、固定U
 - **その7の残り**: デバッグ動画の色分け（青=Leader/ピンク=Follower が全編一貫か）の**人間による目視確認**のみ。上記URLで確認可能
 - Claude 裁定は Max サブスクの使用量を消費する。連続再解析の頻度には注意（レート制限時は15分×Nバックオフが動く設計）
 - 検証動画 2fda2815 は引き続き「P1検証」フォルダに配置したまま
+
+---
+
+# ThinkCentre側 作業報告（2026-07-30・その2）: その7 P2（Claude裁定）有効化 — 完了
+
+`server/CLAUDE.md`「追加タスク 2026-07-29・その7」の全項目が完了した。
+大半はその6の再解析（ジョブ `70f2f577`）で既に検証済みだったため、本報告はチェックリストの消し込みが中心。
+
+## チェックリスト消し込み
+
+| その7の手順 | 結果 |
+|---|---|
+| 1. git pull && npm install | ✅ `server/` 依存は `up to date`（追加依存なし） |
+| 2. claude CLI 導入（非管理者方式） | ✅ **導入不要だった** — このPCは Claude Code 常用機のため `claude 2.1.220` が既にユーザーローカル npm（`C:\Users\admin\AppData\Roaming\npm\claude.ps1`、非管理者）に導入・**ログイン済み**。指示書の npm-global prefix 変更・PATH追加は実施していない（既存構成で動作するため） |
+| 3. `.env` の `CLAUDE_BIN` | ✅ **`CLAUDE_BIN=claude` のままで pm2 経由でも動作確認済み**（claudeRunner が win32 で `shell: true` 起動するため PATH シムを解決できる。フルパス設定は不要だった） |
+| 4. pm2 restart → health `claude:"ok"` | ✅ `{"status":"ok","claude":"ok"}`（※前報のとおり index.ts の疎通チェックに Windows 偽陰性バグがあり修正済み・コミット `21db8ff`） |
+| 5. 2fda2815 再解析（Claude裁定まで） | ✅ その6のジョブ `70f2f577` がフルP2パスで完走（git pull 時点でその6/その7のコードが同時に入っていたため） |
+
+## 報告事項（その7の「報告してほしいこと」）
+
+- **health の `claude`**: `"ok"`
+- **reportMd**: Claude 自筆のレポートが生成された。要旨「開始時点で画面右側の人物が Leader、自信度 0.85。contested 0件のためキーフレーム裁定は不要。冒頭の見切れと序盤の SHR 入れ替わり（t=1.81/1.905 は左が高SHR）を考慮し、ルールの confidence 0.95 から 0.85 に割り引いた」— **裁定として妥当な内容**
+- **result.json**: 新スキーマどおり生成。`{ specVersion: 1, leader: { side: "right", confidence: 0.85, basis: "rule" }, contestedResolutions: [], notes: "..." }`
+- **Claude裁定の所要時間**: **約2分**（CV 90秒 → 動画変換16秒 → 裁定119秒、ジョブ全体約4分）
+- **デバッグ動画の色分け**: PCの持ち主が目視確認し「**完璧**」との評価。青=Leader（男性）/ピンク=Follower/赤=背景除外の色分けが全編で機能
+  https://motion-lab-apa.pages.dev/relay/analysis-output/70f2f577-f888-458d-9e49-70463de11fb7/out/debug_roi.mp4
+- **claude CLI 導入で詰まった点**: なし（導入自体が不要だった）
+
+## 補足・所感
+
+- **P0→P1→P2 の全フェーズが実機で完動**。フォルダに動画を入れるだけで CV計測 → Claude裁定 → レポート生成まで自動で走る状態になった
+- 注意点として、このPCの claude ログインセッションは Claude Code 対話利用と共用。ログアウトや認証失効が起きるとジョブが `[CLAUDE]` エラーになる（auth エラーは即 error 設計なので `pm2 logs` と `/api/health` で気付ける）
+- レート制限も同様に共用消費。対話セッションでの大量利用中に解析ジョブを積むとバックオフが発生し得る

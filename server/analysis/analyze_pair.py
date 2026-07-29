@@ -1,51 +1,56 @@
 #!/usr/bin/env python3
 """
-サルサペア動画から MediaPipe Pose Landmarker (Heavy, num_poses=2) で
-2人分の骨格を計測し、SHR（3D肩腰比）に基づく Leader/Follower の一次判定と
+サルサペア動画から YOLOv8-pose で2人分の骨格を計測し、
+SHR（2D肩腰比）に基づく Leader/Follower の一次判定と
 「判定が難しい区間（contested）」を抽出する。
 
 docs/folder-analysis-detailed-design.md §8.1 参照
 
-- 10fps 相当に間引き（Heavy×CPUの処理時間を抑える。男女判定に30fpsは不要）
-- num_poses=4 で候補を多めに検出し、bbox面積の大きい上位2人をペアとして採用
-  （背景の鏡・通行人など第三者がスロットを汚染するのを防ぐ。ThinkCentre実機検証の申し送り#1）
+検出器の変遷: MediaPipe Heavy (num_poses=4) は密着オクルージョンでペアを1人に潰し、
+検証動画で2人同時検出 4% だった。YOLOv8s-pose は同条件で 89% を達成したため全面移行した
+（docs/HANDOFF-2026-07-29.md §3）。COCO 17キーポイントには z が無いため SHR は 2D になるが、
+検出率の価値が圧倒的に上回る。横向きで精度が落ちる場合は YOLO bbox → MediaPipe crop の
+ハイブリッド（選択肢B）を検討する。
+
+- 10fps 相当に間引き（CPU処理時間を抑える。男女判定に30fpsは不要）
+- 検出候補から bbox 面積の大きい上位2人をペアとして採用
+  （背景の鏡・通行人など第三者がスロットを汚染するのを防ぐ）
 - ROIマスク: 前フレームで確定したペアの bbox+マージンの外側をグレーで塗りつぶしてから検出
-  （背景人物を検出器の視野から物理的に排除する。フレームを切り抜かずマスクするのは
-  座標系を保つため — cropすると x だけスケールされ z との比が歪み SHR が壊れる。
-  検出が2人未満になったらマージンを拡大して再試行→全画面フォールバックの安全弁付き）
+  （背景人物を検出器の視野から物理的に排除する。crop でなくマスクなのは座標系を保つため。
+  検出が2人未満になったらマージンを拡大して維持→0人2連続で全画面フォールバックの安全弁付き）
 - スロット割り当ては前フレームの腰位置との Nearest Neighbor（オフライン処理
   なので速度予測は持たない。1フレーム欠けても次フレームで復帰できれば十分）
-- SHR = 3D肩幅 / 3D腰幅。hypot(dx, dz) により横向き時も骨格の厚みから計測
-  （ブラウザ実装 usePoseEstimation.ts と同じ考え方）
+- SHR = 2D肩幅 / 2D腰幅（ピクセル座標。肩・腰とも概ね水平な線分なのでアスペクト比の影響は相殺）
+  肩(5,6)・腰(11,12) の keypoint confidence が閾値未満の人物は計測から除外
 - verdict 用の SHR 平均はオクルージョンフレームを除外した「クリーンフレーム」のみから算出
-  （密着姿勢で計測が崩れたフレームの混入を防ぐ。申し送り#2）
+  （密着姿勢で計測が崩れたフレームの混入を防ぐ）
 - verdict はスロット別平均ではなく「フレーム内で SHR が高い側 / 低い側」の分離で判定
   （スロット番号は人物IDではなく、CBL等の交差でNNトラッキングが入れ替わると
-  スロット平均に両者が混ざり符号が反転し得るため。申し送り#8 提案A。
+  スロット平均に両者が混ざり符号が反転し得るため。
   スロット別サマリは参考情報として残すが、同一性リークがあり得る点に注意）
 
-出力: measurements.json（スキーマは詳細設計 §8.1）
+出力: measurements.json（スキーマは詳細設計 §8.1。shr3d → shr2d に改名済み）
      [debug_video_path 指定時] マスク適用後フレーム+検出枠のデバッグ動画（mp4v。
      ブラウザ再生用の H.264 変換は Node 側（jobWorker）が ffmpeg で行う）
 
-Usage: python analyze_pair.py <video_path> <model_path> <output_json_path> [debug_video_path]
+Usage: python analyze_pair.py <video_path> <yolo_model_path> <output_json_path> [debug_video_path]
 """
 import sys
 import json
 import math
 import cv2
 import numpy as np
-import mediapipe as mp
-from mediapipe.tasks.python import BaseOptions
-from mediapipe.tasks.python.vision import PoseLandmarker, PoseLandmarkerOptions, RunningMode
+from ultralytics import YOLO
 
-LEFT_SHOULDER = 11
-RIGHT_SHOULDER = 12
-LEFT_HIP = 23
-RIGHT_HIP = 24
+# COCO 17 keypoints
+LEFT_SHOULDER = 5
+RIGHT_SHOULDER = 6
+LEFT_HIP = 11
+RIGHT_HIP = 12
 
 TARGET_FPS = 10.0          # 間引き後の実効fps
-NUM_POSES = 4              # 検出候補数（上位2人をbbox面積で選別するため多めに取る）
+BOX_CONF = 0.4             # 人物 bbox の最小信頼度
+KP_CONF = 0.3              # 肩・腰 keypoint の最小信頼度（未満は計測に使わない）
 SHR_DIFF_THRESHOLD = 0.05  # これ未満は「拮抗」
 CONTESTED_MIN_SEC = 3.0    # 拮抗が続いたら contested とみなす最小長
 OCCLUSION_DIST = 0.10      # 腰中点間の正規化距離がこれ未満ならオクルージョン
@@ -54,37 +59,57 @@ SMOOTH_WINDOW = 20         # SHR差の移動平均窓（10fpsで2秒）
 MIN_CLEAN_SAMPLES = 10     # verdict をクリーンフレームから出すのに必要な最小サンプル数
 ROI_MARGIN = 0.15          # ペアbboxに足すマージン（正規化座標）
 ROI_GRAY = 128             # マスクの塗りつぶし色
+EDGE_MARGIN = 0.01         # bbox がこの距離以内で画面左右端に接していたら「見切れ」扱い
 
 
-def hypot3d_xz(a, b):
-    """X-Z平面での距離（横向きでも骨格の厚みが取れる）"""
-    return math.hypot(a.x - b.x, (a.z or 0.0) - (b.z or 0.0))
+def measure_person(box_xyxyn, kps_xy, kps_conf, det_conf, frame_w, frame_h):
+    """1人分の検出結果から計測値を返す。肩・腰が低信頼なら None
 
-
-def measure_person(lm):
-    """1人分のランドマークから計測値を返す。取れなければ None"""
-    try:
-        sl, sr = lm[LEFT_SHOULDER], lm[RIGHT_SHOULDER]
-        hl, hr = lm[LEFT_HIP], lm[RIGHT_HIP]
-    except IndexError:
+    位置系（hipX/hipY/bbox）は正規化座標（既存の閾値・ROIロジックと互換）、
+    幅系（肩幅・腰幅）はピクセル座標（比を取るので単位は相殺される）
+    """
+    need = (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
+    if any(kps_conf[i] < KP_CONF for i in need):
         return None
-    shoulder_w = hypot3d_xz(sl, sr)
-    hip_w = hypot3d_xz(hl, hr)
-    if hip_w < 1e-6:
+    sl, sr = kps_xy[LEFT_SHOULDER], kps_xy[RIGHT_SHOULDER]
+    hl, hr = kps_xy[LEFT_HIP], kps_xy[RIGHT_HIP]
+    shoulder_w = float(np.linalg.norm(sl - sr))
+    hip_w = float(np.linalg.norm(hl - hr))
+    if hip_w < 1.0:  # 1px 未満は計測不能
         return None
-    # bbox（全ランドマークのx/yスパン）: 面積は第三者フィルタ、範囲はROIマスクに使う
-    xs = [p.x for p in lm]
-    ys = [p.y for p in lm]
-    bbox = (min(xs), min(ys), max(xs), max(ys))
-    bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+    x0, y0, x1, y1 = (float(v) for v in box_xyxyn)
     return {
-        "hipX": round((hl.x + hr.x) / 2, 4),
-        "hipY": round((hl.y + hr.y) / 2, 4),
-        "shr3d": round(shoulder_w / hip_w, 4),
-        "shoulderW": round(shoulder_w, 4),
-        "bboxArea": round(bbox_area, 5),
-        "bbox": bbox,
+        "hipX": round(float(hl[0] + hr[0]) / 2 / frame_w, 4),
+        "hipY": round(float(hl[1] + hr[1]) / 2 / frame_h, 4),
+        "shr2d": round(shoulder_w / hip_w, 4),
+        "shoulderW": round(shoulder_w, 1),
+        "bboxArea": round((x1 - x0) * (y1 - y0), 5),
+        "bbox": (x0, y0, x1, y1),
+        "conf": round(float(det_conf), 3),
+        # 画面左右端で体が見切れていると肩・腰が切れて SHR が崩れる（検証動画の冒頭で
+        # 男性が右端に見切れて SHR 0.73 に潰れ、leaderAtStart を誤らせた実績あり）。
+        # 追跡・ROI には使うが verdict 母集団からは除外する
+        "edgeClipped": x0 <= EDGE_MARGIN or x1 >= 1.0 - EDGE_MARGIN,
     }
+
+
+def detect_persons(model, frame):
+    """YOLO で人物を検出し、計測可能な人物のリストを返す"""
+    res = model(frame, verbose=False, conf=BOX_CONF)[0]
+    persons = []
+    if res.keypoints is None or res.boxes is None or len(res.boxes) == 0:
+        return persons
+    h, w = frame.shape[:2]
+    kps_xy = res.keypoints.xy.cpu().numpy()
+    kps_conf = res.keypoints.conf
+    kps_conf = kps_conf.cpu().numpy() if kps_conf is not None else np.zeros(kps_xy.shape[:2])
+    boxes_n = res.boxes.xyxyn.cpu().numpy()
+    confs = res.boxes.conf.cpu().numpy()
+    for i in range(len(boxes_n)):
+        m = measure_person(boxes_n[i], kps_xy[i], kps_conf[i], confs[i], w, h)
+        if m is not None:
+            persons.append(m)
+    return persons
 
 
 def pick_main_pair(persons):
@@ -126,7 +151,7 @@ def draw_debug(frame, roi, kept, rejected):
     for p, color in [(p, (0, 220, 0)) for p in kept] + [(p, (0, 0, 255)) for p in rejected]:
         b = p["bbox"]
         cv2.rectangle(vis, (int(b[0] * w), int(b[1] * h)), (int(b[2] * w), int(b[3] * h)), color, 2)
-        cv2.putText(vis, f"SHR {p['shr3d']:.2f}", (int(b[0] * w), max(12, int(b[1] * h) - 4)),
+        cv2.putText(vis, f"SHR {p['shr2d']:.2f} c{p['conf']:.2f}", (int(b[0] * w), max(12, int(b[1] * h) - 4)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
     return vis
 
@@ -241,17 +266,13 @@ def extract_contested(frames, effective_fps):
 
 def main():
     if len(sys.argv) not in (4, 5):
-        print("Usage: analyze_pair.py <video_path> <model_path> <output_json_path> [debug_video_path]", file=sys.stderr)
+        print("Usage: analyze_pair.py <video_path> <yolo_model_path> <output_json_path> [debug_video_path]", file=sys.stderr)
         sys.exit(1)
 
     video_path, model_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
     debug_video_path = sys.argv[4] if len(sys.argv) == 5 else None
 
-    options = PoseLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=model_path),
-        running_mode=RunningMode.VIDEO,
-        num_poses=NUM_POSES,
-    )
+    model = YOLO(model_path)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -279,116 +300,115 @@ def main():
     roi_miss = 0        # ROI内で誰も検出できなかった連続回数
     roi_masked_frames = 0
     roi_resets = 0
+    edge_clipped_frames = 0  # 見切れにより verdict から除外したペアフレーム数
     debug_writer = None
 
-    with PoseLandmarker.create_from_options(options) as landmarker:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if frame_idx % frame_interval != 0:
-                frame_idx += 1
-                continue
-
-            t_sec = frame_idx / fps
-            t_ms = int(t_sec * 1000)
-
-            # ROIマスク: 前フレームのペア位置の外側を塗りつぶして背景人物を視野から排除
-            work = apply_roi_mask(frame, roi) if roi is not None else frame
-            if roi is not None:
-                roi_masked_frames += 1
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(work, cv2.COLOR_BGR2RGB))
-            result = landmarker.detect_for_video(mp_image, t_ms)
-
-            candidates = []
-            for lm in (result.pose_landmarks or []):
-                m = measure_person(lm)
-                if m is not None:
-                    candidates.append(m)
-            persons = pick_main_pair(candidates)  # 背景の第三者を弾く（ROI内に紛れた場合の保険）
-            rejected = [c for c in candidates if c not in persons]
-
-            # ROI更新:
-            #  - 2人検出: ペアのbbox合併+マージンで追従
-            #  - 1人検出: オクルージョン中の可能性が高い。マージンを広げて維持（全画面に戻すと
-            #    背景人物が「2人目」として拾われる汚染が起きるため戻さない）
-            #  - 0人が2回連続: ペアを見失ったとみなし全画面へフォールバック
-            if len(persons) >= 2:
-                roi = roi_from_persons(persons, ROI_MARGIN)
-                roi_miss = 0
-            elif len(persons) == 1:
-                roi = roi_from_persons(persons, ROI_MARGIN * 2)
-                roi_miss = 0
-            else:
-                roi_miss += 1
-                if roi is not None and roi_miss >= 2:
-                    roi = None
-                    roi_resets += 1
-
-            if debug_video_path is not None:
-                if debug_writer is None:
-                    h0, w0 = frame.shape[:2]
-                    debug_writer = cv2.VideoWriter(
-                        debug_video_path, cv2.VideoWriter_fourcc(*"mp4v"),
-                        max(1.0, effective_fps), (w0, h0),
-                    )
-                debug_writer.write(draw_debug(work, roi, persons, rejected))
-
-            slots = assign_slots(persons, prev_slots)
-            # 検出できたスロットのみ prev を更新（欠けたスロットは位置を保持して復帰を待つ）
-            for i in range(2):
-                if slots[i] is not None:
-                    prev_slots[i] = slots[i]
-
-            both = slots[0] is not None and slots[1] is not None
-            occluded = False
-            if both:
-                d = math.hypot(slots[0]["hipX"] - slots[1]["hipX"], slots[0]["hipY"] - slots[1]["hipY"])
-                occluded = d < OCCLUSION_DIST
-            elif len(persons) == 1 and prev_slots[0] is not None and prev_slots[1] is not None:
-                occluded = True  # 2人いたはずが1人しか検出できない＝重なりの可能性
-
-            z_front = -1
-            if both:
-                z_front = 0 if slots[0]["shoulderW"] >= slots[1]["shoulderW"] else 1
-
-            shr_diff = None
-            if both:
-                shr_diff = abs(slots[0]["shr3d"] - slots[1]["shr3d"])
-                hi, lo = (slots[0], slots[1]) if slots[0]["shr3d"] >= slots[1]["shr3d"] else (slots[1], slots[0])
-                pair = {
-                    "high": hi["shr3d"],
-                    "low": lo["shr3d"],
-                    "highSide": "left" if hi["hipX"] < lo["hipX"] else "right",
-                    "t": t_sec,
-                }
-                pair_all.append(pair)
-                if not occluded:
-                    pair_clean.append(pair)
-            for i in range(2):
-                if slots[i] is not None:
-                    all_stats[i]["sum"] += slots[i]["shr3d"]
-                    all_stats[i]["sumsq"] += slots[i]["shr3d"] ** 2
-                    all_stats[i]["n"] += 1
-                    # 密着姿勢では肩・腰の3D計測が崩れるため verdict 母集団から除外
-                    if not occluded:
-                        clean_stats[i]["sum"] += slots[i]["shr3d"]
-                        clean_stats[i]["sumsq"] += slots[i]["shr3d"] ** 2
-                        clean_stats[i]["n"] += 1
-
-            person_frames.append({
-                "t": round(t_sec, 3),
-                "slots": [
-                    ({**{k: slots[i][k] for k in ("hipX", "hipY", "shr3d")}, "occluded": occluded}
-                     if slots[i] is not None else None)
-                    for i in range(2)
-                ],
-                "zFront": z_front,
-            })
-            contest_frames.append({"t": t_sec, "shrDiff": shr_diff, "occluded": occluded})
-
-            sampled += 1
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame_idx % frame_interval != 0:
             frame_idx += 1
+            continue
+
+        t_sec = frame_idx / fps
+
+        # ROIマスク: 前フレームのペア位置の外側を塗りつぶして背景人物を視野から排除
+        work = apply_roi_mask(frame, roi) if roi is not None else frame
+        if roi is not None:
+            roi_masked_frames += 1
+
+        candidates = detect_persons(model, work)
+        persons = pick_main_pair(candidates)  # 背景の第三者を弾く（ROI内に紛れた場合の保険）
+        rejected = [c for c in candidates if c not in persons]
+
+        # ROI更新:
+        #  - 2人検出: ペアのbbox合併+マージンで追従
+        #  - 1人検出: オクルージョン中の可能性が高い。マージンを広げて維持（全画面に戻すと
+        #    背景人物が「2人目」として拾われる汚染が起きるため戻さない）
+        #  - 0人が2回連続: ペアを見失ったとみなし全画面へフォールバック
+        if len(persons) >= 2:
+            roi = roi_from_persons(persons, ROI_MARGIN)
+            roi_miss = 0
+        elif len(persons) == 1:
+            roi = roi_from_persons(persons, ROI_MARGIN * 2)
+            roi_miss = 0
+        else:
+            roi_miss += 1
+            if roi is not None and roi_miss >= 2:
+                roi = None
+                roi_resets += 1
+
+        if debug_video_path is not None:
+            if debug_writer is None:
+                h0, w0 = frame.shape[:2]
+                debug_writer = cv2.VideoWriter(
+                    debug_video_path, cv2.VideoWriter_fourcc(*"mp4v"),
+                    max(1.0, effective_fps), (w0, h0),
+                )
+            debug_writer.write(draw_debug(work, roi, persons, rejected))
+
+        slots = assign_slots(persons, prev_slots)
+        # 検出できたスロットのみ prev を更新（欠けたスロットは位置を保持して復帰を待つ）
+        for i in range(2):
+            if slots[i] is not None:
+                prev_slots[i] = slots[i]
+
+        both = slots[0] is not None and slots[1] is not None
+        occluded = False
+        if both:
+            d = math.hypot(slots[0]["hipX"] - slots[1]["hipX"], slots[0]["hipY"] - slots[1]["hipY"])
+            occluded = d < OCCLUSION_DIST
+        elif len(persons) == 1 and prev_slots[0] is not None and prev_slots[1] is not None:
+            occluded = True  # 2人いたはずが1人しか検出できない＝重なりの可能性
+
+        z_front = -1
+        if both:
+            z_front = 0 if slots[0]["shoulderW"] >= slots[1]["shoulderW"] else 1
+
+        # どちらかが画面端で見切れているフレームは SHR 計測が信用できないため
+        # verdict 母集団・拮抗判定から外す（shrDiff=None は直前値補間される）
+        edge_clipped = both and (slots[0]["edgeClipped"] or slots[1]["edgeClipped"])
+        if edge_clipped:
+            edge_clipped_frames += 1
+
+        shr_diff = None
+        if both and not edge_clipped:
+            shr_diff = abs(slots[0]["shr2d"] - slots[1]["shr2d"])
+            hi, lo = (slots[0], slots[1]) if slots[0]["shr2d"] >= slots[1]["shr2d"] else (slots[1], slots[0])
+            pair = {
+                "high": hi["shr2d"],
+                "low": lo["shr2d"],
+                "highSide": "left" if hi["hipX"] < lo["hipX"] else "right",
+                "t": t_sec,
+            }
+            pair_all.append(pair)
+            if not occluded:
+                pair_clean.append(pair)
+        for i in range(2):
+            if slots[i] is not None:
+                all_stats[i]["sum"] += slots[i]["shr2d"]
+                all_stats[i]["sumsq"] += slots[i]["shr2d"] ** 2
+                all_stats[i]["n"] += 1
+                # 密着姿勢・見切れでは肩・腰の計測が崩れるためクリーン集計から除外
+                if not occluded and not slots[i]["edgeClipped"]:
+                    clean_stats[i]["sum"] += slots[i]["shr2d"]
+                    clean_stats[i]["sumsq"] += slots[i]["shr2d"] ** 2
+                    clean_stats[i]["n"] += 1
+
+        person_frames.append({
+            "t": round(t_sec, 3),
+            "slots": [
+                ({**{k: slots[i][k] for k in ("hipX", "hipY", "shr2d")}, "occluded": occluded}
+                 if slots[i] is not None else None)
+                for i in range(2)
+            ],
+            "zFront": z_front,
+        })
+        contest_frames.append({"t": t_sec, "shrDiff": shr_diff, "occluded": occluded})
+
+        sampled += 1
+        frame_idx += 1
 
     cap.release()
     if debug_writer is not None:
@@ -443,13 +463,14 @@ def main():
             "confidence": 0.0, "basis": basis, "leaderAtStart": None, "highSideConsistency": None,
         }
 
-    # 機械可読の信頼度指標（申し送り#9。P2/UI が「ルールベースが当てになるか」を即判断できる）
+    # 機械可読の信頼度指標（P2/UI が「ルールベースが当てになるか」を即判断できる）
     reliability = {
         "cleanPairFrames": len(pair_clean),
         "allPairFrames": len(pair_all),
         "cleanRatio": round(len(pair_clean) / len(pair_all), 3) if pair_all else 0.0,
         "roiMaskedFrames": roi_masked_frames,
         "roiResets": roi_resets,
+        "edgeClippedPairFrames": edge_clipped_frames,
     }
 
     contested, dropped = extract_contested(contest_frames, effective_fps)
@@ -461,6 +482,8 @@ def main():
 
     with open(output_path, "w") as f:
         json.dump({
+            "detector": "yolov8-pose",
+            "shrMode": "2d",
             "fps": fps,
             "sampledFps": round(effective_fps, 2),
             "totalFrames": frame_idx,

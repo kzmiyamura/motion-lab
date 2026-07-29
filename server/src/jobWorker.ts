@@ -27,8 +27,10 @@ export const JOBS_DIR = path.resolve(__dirname, '../storage/analysis-jobs');
 const ffmpegPath = ffmpegPathImport as unknown as string | null;
 
 const PYTHON_BIN = process.env.PYTHON_BIN ?? 'python3';
-const MODEL_PATH = process.env.POSE_MODEL_PATH
-  ?? path.resolve(__dirname, '../models/pose_landmarker_heavy.task');
+// analyze_pair.py は YOLOv8-pose に移行済み（MediaPipe Heavy は密着オクルージョンで
+// 2人同時検出4%だったため。POSE_MODEL_PATH は回転解析 analysisJob.ts が引き続き使用）
+const MODEL_PATH = process.env.YOLO_MODEL_PATH
+  ?? path.resolve(__dirname, '../models/yolov8s-pose.pt');
 const POLL_INTERVAL_MS = 15_000;
 const JOB_TIMEOUT_MS = Number(process.env.JOB_TIMEOUT_MS ?? 60 * 60 * 1000);
 
@@ -132,7 +134,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
 
   // 3. CVパス実行（直列）
   if (preset.cvSteps.length > 0 && !existsSync(MODEL_PATH)) {
-    markJobError(job.id, `[CV] pose model not found: ${MODEL_PATH}。server/CLAUDE.md の手順でダウンロードしてください`);
+    markJobError(job.id, `[CV] YOLO pose model not found: ${MODEL_PATH}。server/CLAUDE.md（その6）の手順でダウンロードしてください`);
     return;
   }
   try {

@@ -410,3 +410,77 @@ NN が入れ替わるため「スロット平均に両者が混ざる」とい�
 
 ### 報告してほしいこと
 - 上記2・3。特にデバッグ動画URLは必須（人間が目視確認する）
+
+---
+
+## 追加タスク（2026-07-29・その6）: ペア解析の検出器を YOLOv8-pose へ全面移行
+
+**【重要】その4・その5の再検証は未実施のままで構わない（スキップしてよい）。**
+Mac側での実測で MediaPipe Heavy が本質的ボトルネックと判明したため（検証動画 2fda2815 で
+2人同時検出 12/315 フレーム = 4%。YOLOv8s-pose プロトタイプは 283/315 = 89%）、
+MediaPipe 前提だったその4/その5の再検証は意味を失った。このその6の検証がそれを兼ねる。
+
+### 変更内容（git pull で入る）
+1. `analysis/analyze_pair.py` を YOLOv8s-pose ベースに全面書き換え
+   - SHR は 2D（COCO 17キーポイントに z が無いため）。肩=kp5,6 / 腰=kp11,12
+   - ROIマスク・bbox面積上位2人選別・フレーム内high/low分離verdict・contested抽出・
+     デバッグ動画は従来ロジックをそのまま移植（measurements.json のスキーマもほぼ同じ。
+     `shr3d` → `shr2d` に改名、`detector`/`shrMode` フィールド追加）
+   - **見切れガード（新規）**: bbox が画面左右端に接している人物を含むフレームは verdict
+     母集団から除外（`reliability.edgeClippedPairFrames` に件数を出力）。検証動画の冒頭で
+     男性が右端に見切れて SHR が 0.73 に潰れ leaderAtStart を誤る問題を Mac 側で確認・修正済み
+2. `src/jobWorker.ts`: モデルパスを `YOLO_MODEL_PATH`（既定 `server/models/yolov8s-pose.pt`）に変更。
+   回転解析（analyze_rotation.py）は従来どおり MediaPipe Heavy + `POSE_MODEL_PATH` を使う（変更なし）
+3. `analysis/requirements.txt` に `ultralytics` を追加
+
+### やってほしいこと
+1. `git pull`
+2. **ultralytics のインストール**（非管理者でOK。PYTHON_BIN のフルパスと同じ Python に入れること）:
+   ```
+   <PYTHON_BINのフルパス> -m pip install --user ultralytics
+   ```
+   - torch（CPU版）が依存で入る。数百MBのダウンロードになるが CPU 版で問題ない
+   - proxy やビルドエラーが出たら無理をせず、エラーログを添えて報告してほしい
+3. **YOLOモデルのダウンロード**（PowerShell）:
+   ```powershell
+   Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s-pose.pt" -OutFile "server/models/yolov8s-pose.pt"
+   ```
+   - **ダウンロード後に必ずファイルサイズを確認**: 約 22.4MB（23,513,657 bytes）であること。
+     Mac側で「破損DLした .pt を読み込むと謎のハングを起こす」事象を確認済み。
+     サイズが合わなければ削除して再ダウンロードすること
+4. `pm2 restart motion-lab-server`
+5. **同じ動画（2fda2815、「P1検証」フォルダ）で再解析**:
+   ```
+   curl -X POST http://localhost:4000/api/videos/2fda2815-2073-4cd6-94d5-3d9dca9108ce/reanalyze
+   ```
+6. スタンドアロン動作確認が必要なら:
+   ```
+   <PYTHON_BIN> server/analysis/analyze_pair.py <動画パス> server/models/yolov8s-pose.pt out.json debug.mp4
+   ```
+
+### 報告してほしいこと（Mac側ローカル実測との一致確認）
+
+Mac側（Apple Silicon）で同じ動画・同じコードの実測値は以下。ThinkCentre（CPU）でも
+ほぼ同じ数値になるはずなので、大きくズレたらその旨を報告してほしい:
+
+| 指標 | Mac実測 | 意味 |
+|---|---|---|
+| 2人同時検出 | 279/315 (88.6%) | MediaPipe 時代は 4%。移行の本丸 |
+| `reliability.allPairFrames` | 148 | 上記から見切れフレームを除いた verdict 母集団 |
+| `reliability.edgeClippedPairFrames` | 131 | 画面端見切れで除外（この動画は縦画面で見切れ多） |
+| `verdictByRule.leaderExists` | true | |
+| **`leaderAtStart`** | **`{side: right, t: 1.7}`** | **右=男性で正解** |
+| `separation` | 0.3652 | |
+| `highSideConsistency` | 0.594 | 交差（ターン）が多い動画なので低くて正常 |
+| `reliability.cleanRatio` | 0.966 | |
+| 解析所要時間 | 31.5秒動画で約1分30秒 | MediaPipe Heavy より速いはず |
+
+- 解析所要時間（CPU での実測。Mac比でどの程度か）
+- デバッグ動画URL（人間が目視確認する）:
+  `https://motion-lab-apa.pages.dev/relay/analysis-output/<ジョブID>/out/debug_roi.mp4`
+
+### 補足
+- pip install で `--user` が効かない・PATH問題等で詰まったら、venv 方式
+  （`<PYTHON_BIN> -m venv server/analysis/venv` → その python を PYTHON_BIN に設定）でもよい。
+  動けば方式は問わない
+- MediaPipe / Heavy モデルは**削除しないこと**（回転解析で引き続き使用中）

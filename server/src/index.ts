@@ -22,7 +22,8 @@ app.use(express.json());
 let claudeStatus: 'ok' | 'unavailable' | 'unchecked' = 'unchecked';
 function checkClaudeAvailability(): void {
   try {
-    const proc = spawn(CLAUDE_BIN, ['--version']);
+    // claudeRunner.ts と同じ理由: Windows の claude は .cmd シムのため shell 経由でないと ENOENT になる
+    const proc = spawn(CLAUDE_BIN, ['--version'], { shell: process.platform === 'win32' });
     proc.on('error', () => { claudeStatus = 'unavailable'; });
     proc.on('exit', code => { claudeStatus = code === 0 ? 'ok' : 'unavailable'; });
   } catch {

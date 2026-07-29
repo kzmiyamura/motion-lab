@@ -269,3 +269,58 @@ Quick Tunnel の「復旧のたびURLが変わる」仕様は残るが、固定U
 - タスク手順4「背景に人がいない・オクルージョン少なめの動画での素の精度検証」は、**手元に該当動画が無いため未実施**。
   人間 or Mac側から動画を1本指定 or アップロードしてもらえれば追加検証する（ルールベースSHRの素の精度が測れる）。
 - P2（claude CLI導入）は予告どおり今回未着手。導入時は**非管理者アカウント**での方式指定を待つ。
+
+---
+
+# ThinkCentre側 作業報告（2026-07-30）: その6 YOLOv8-pose移行 — 検証完了（P2 Claude裁定まで成功）
+
+`server/CLAUDE.md`「追加タスク 2026-07-29・その6」を実施。その4/その5の再検証は指示どおりスキップ。
+**想定外の朗報: その7で予定していた claude CLI がこのPCに既に導入・ログイン済みだったため（後述）、
+ジョブは CV計測 → Claude裁定 → report.md 生成まで一気通貫で `done` になった。**
+
+## セットアップ
+
+- `git pull`（`a825f84`）
+- `ultralytics 8.4.112` + `torch 2.13.0+cpu` を `pip install --user` で導入成功。ビルドエラー・proxy問題なし
+- `yolov8s-pose.pt` DL → **23,513,657 bytes（期待値と完全一致、破損なし）**
+- `pm2 restart motion-lab-server`
+
+## 再解析結果（video=2fda2815 / ジョブ `70f2f577-f888-458d-9e49-70463de11fb7`）— Mac実測との一致確認
+
+| 指標 | Mac実測 | ThinkCentre実測 | 一致 |
+|---|---|---|---|
+| 2人同時検出 | 279/315 (88.6%) | **291/331 (87.9%)** ※サンプル数はfps推定差 | ✅ |
+| `reliability.allPairFrames` | 148 | **154** | ✅ |
+| `reliability.edgeClippedPairFrames` | 131 | **137** | ✅ |
+| `verdictByRule.leaderExists` | true | **true** | ✅ |
+| **`leaderAtStart`** | `{side: right, t: 1.7}` | **`{side: right, t: 1.81}`（右=男性で正解）** | ✅ |
+| `separation` | 0.3652 | **0.3949**（high 1.7731 / low 1.3782） | ✅ |
+| `highSideConsistency` | 0.594 | **0.644** | ✅ |
+| `reliability.cleanRatio` | 0.966 | **0.948**（clean 146/154） | ✅ |
+| contested | — | **0件**（キーフレーム書き出しなし） | — |
+| CV解析所要時間 | 約1分30秒 | **約1分30秒（90秒）** — CPUでもMacと同等 | ✅ |
+
+- **MediaPipe時代の 4% → 88% の検出率改善を実機でも確認。移行は完全に成功**
+- YOLOv8s-pose は CPU 推論でも 31.5秒動画を 90秒で処理（回転解析 MediaPipe Heavy 10fps の約50秒と同オーダー）
+- デバッグ動画（要目視確認）: https://motion-lab-apa.pages.dev/relay/analysis-output/70f2f577-f888-458d-9e49-70463de11fb7/out/debug_roi.mp4 （200 OK / 10.8MB 配信確認済み）
+
+## 想定外: P2（Claude裁定）が既に動いた
+
+- このPCでは Claude Code を常用しているため **claude CLI 2.1.220 が導入済み**（`C:\Users\admin\AppData\Roaming\npm\claude.ps1`、非管理者のユーザーローカルnpm）で、**ログインも有効**だった
+- その7の「npm-global 方式でのCLI導入」は**不要**。`.env` は `CLAUDE_BIN=claude` のままで動作（claudeRunner が win32 で `shell: true` 起動するため PATH の `.cmd`/`.ps1` シムを解決できる）
+- **Claude裁定の実績**: contested 0件のためキーフレーム裁定はなし。ルール判定を採用しつつ、序盤の SHR 入れ替わり（t=1.81/1.905 は左が高SHR、t=2.0以降は右で安定）を自分で検分して confidence を 0.95→**0.85 に割り引く**という妥当な調整をした。`out/result.json` も新スキーマ（`leader: {side: right, confidence: 0.85, basis: rule}`）で生成
+- **Claude裁定の所要時間: 約2分**（CV 90秒 + 動画変換 16秒 + 裁定 119秒 = ジョブ全体 約4分）
+
+## バグ発見・修正済み: health の `claude` が Windows で常に `unavailable` になる偽陰性
+
+- `index.ts` の起動時疎通チェックが `spawn(CLAUDE_BIN, ['--version'])` を **shell なし**で実行しており、
+  Windows では `.cmd`/`.ps1` シムを解決できず ENOENT → 実際は動くのに `unavailable` と報告していた
+  （claudeRunner 本体は `shell: true` なので裁定は成功する、という不整合）
+- **修正**: claudeRunner と同様に `{ shell: process.platform === 'win32' }` を追加（ThinkCentre側でコミット）。
+  修正後 `GET /api/health` → `{"status":"ok","claude":"ok"}` を確認。`npx tsc --noEmit` パス
+
+## 残タスク・申し送り
+
+- **その7の残り**: デバッグ動画の色分け（青=Leader/ピンク=Follower が全編一貫か）の**人間による目視確認**のみ。上記URLで確認可能
+- Claude 裁定は Max サブスクの使用量を消費する。連続再解析の頻度には注意（レート制限時は15分×Nバックオフが動く設計）
+- 検証動画 2fda2815 は引き続き「P1検証」フォルダに配置したまま

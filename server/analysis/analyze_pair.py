@@ -7,10 +7,14 @@
 docs/folder-analysis-detailed-design.md §8.1 参照
 
 - 10fps 相当に間引き（Heavy×CPUの処理時間を抑える。男女判定に30fpsは不要）
+- num_poses=4 で候補を多めに検出し、bbox面積の大きい上位2人をペアとして採用
+  （背景の鏡・通行人など第三者がスロットを汚染するのを防ぐ。ThinkCentre実機検証の申し送り#1）
 - スロット割り当ては前フレームの腰位置との Nearest Neighbor（オフライン処理
   なので速度予測は持たない。1フレーム欠けても次フレームで復帰できれば十分）
 - SHR = 3D肩幅 / 3D腰幅。hypot(dx, dz) により横向き時も骨格の厚みから計測
   （ブラウザ実装 usePoseEstimation.ts と同じ考え方）
+- verdict 用の SHR 平均はオクルージョンフレームを除外した「クリーンフレーム」のみから算出
+  （密着姿勢で計測が崩れたフレームの混入を防ぐ。申し送り#2）
 
 出力: measurements.json（スキーマは詳細設計 §8.1）
 
@@ -30,11 +34,13 @@ LEFT_HIP = 23
 RIGHT_HIP = 24
 
 TARGET_FPS = 10.0          # 間引き後の実効fps
+NUM_POSES = 4              # 検出候補数（上位2人をbbox面積で選別するため多めに取る）
 SHR_DIFF_THRESHOLD = 0.05  # これ未満は「拮抗」
 CONTESTED_MIN_SEC = 3.0    # 拮抗が続いたら contested とみなす最小長
 OCCLUSION_DIST = 0.10      # 腰中点間の正規化距離がこれ未満ならオクルージョン
 MAX_CONTESTED = 5          # Claude に渡す contested 区間の上限
 SMOOTH_WINDOW = 20         # SHR差の移動平均窓（10fpsで2秒）
+MIN_CLEAN_SAMPLES = 10     # verdict をクリーンフレームから出すのに必要な最小サンプル数
 
 
 def hypot3d_xz(a, b):
@@ -53,12 +59,28 @@ def measure_person(lm):
     hip_w = hypot3d_xz(hl, hr)
     if hip_w < 1e-6:
         return None
+    # bbox面積（全ランドマークのx/yスパン）: 手前の人ほど大きい。第三者フィルタに使う
+    xs = [p.x for p in lm]
+    ys = [p.y for p in lm]
+    bbox_area = (max(xs) - min(xs)) * (max(ys) - min(ys))
     return {
         "hipX": round((hl.x + hr.x) / 2, 4),
         "hipY": round((hl.y + hr.y) / 2, 4),
         "shr3d": round(shoulder_w / hip_w, 4),
         "shoulderW": round(shoulder_w, 4),
+        "bboxArea": round(bbox_area, 5),
     }
+
+
+def pick_main_pair(persons):
+    """検出候補から bbox 面積の大きい上位2人（＝カメラ手前のダンサーペア）を選ぶ。
+
+    背景の鏡・通行人など小さく写る第三者を弾く。3人目が主ペアと同等サイズの
+    場合は選別できないが、その場合はスロットNNトラッキングの連続性に委ねる。
+    """
+    if len(persons) <= 2:
+        return persons
+    return sorted(persons, key=lambda p: p["bboxArea"], reverse=True)[:2]
 
 
 def assign_slots(persons, prev_slots):
@@ -179,7 +201,7 @@ def main():
     options = PoseLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
         running_mode=RunningMode.VIDEO,
-        num_poses=2,
+        num_poses=NUM_POSES,
     )
 
     cap = cv2.VideoCapture(video_path)
@@ -196,8 +218,9 @@ def main():
     prev_slots = [None, None]
     person_frames = []   # persons 配列（出力用）
     contest_frames = []  # contested 抽出用の軽量列
-    # スロット別サマリ集計
-    stats = [{"sum": 0.0, "sumsq": 0.0, "n": 0} for _ in range(2)]
+    # スロット別サマリ集計。verdict にはクリーン（非オクルージョン）のみ使う
+    clean_stats = [{"sum": 0.0, "sumsq": 0.0, "n": 0} for _ in range(2)]
+    all_stats = [{"sum": 0.0, "sumsq": 0.0, "n": 0} for _ in range(2)]
 
     with PoseLandmarker.create_from_options(options) as landmarker:
         while True:
@@ -218,6 +241,7 @@ def main():
                 m = measure_person(lm)
                 if m is not None:
                     persons.append(m)
+            persons = pick_main_pair(persons)  # 背景の第三者を弾く
 
             slots = assign_slots(persons, prev_slots)
             # 検出できたスロットのみ prev を更新（欠けたスロットは位置を保持して復帰を待つ）
@@ -242,9 +266,14 @@ def main():
                 shr_diff = abs(slots[0]["shr3d"] - slots[1]["shr3d"])
             for i in range(2):
                 if slots[i] is not None:
-                    stats[i]["sum"] += slots[i]["shr3d"]
-                    stats[i]["sumsq"] += slots[i]["shr3d"] ** 2
-                    stats[i]["n"] += 1
+                    all_stats[i]["sum"] += slots[i]["shr3d"]
+                    all_stats[i]["sumsq"] += slots[i]["shr3d"] ** 2
+                    all_stats[i]["n"] += 1
+                    # 密着姿勢では肩・腰の3D計測が崩れるため verdict 母集団から除外
+                    if not occluded:
+                        clean_stats[i]["sum"] += slots[i]["shr3d"]
+                        clean_stats[i]["sumsq"] += slots[i]["shr3d"] ** 2
+                        clean_stats[i]["n"] += 1
 
             person_frames.append({
                 "t": round(t_sec, 3),
@@ -270,19 +299,29 @@ def main():
         var = max(0.0, s["sumsq"] / s["n"] - mean ** 2)
         return {"shrMean": round(mean, 4), "shrStd": round(math.sqrt(var), 4), "samples": s["n"]}
 
-    sum0, sum1 = slot_summary(stats[0]), slot_summary(stats[1])
+    # verdict はクリーンフレーム優先。不足時は全フレームにフォールバック（basisで明示）
+    clean0, clean1 = slot_summary(clean_stats[0]), slot_summary(clean_stats[1])
+    all0, all1 = slot_summary(all_stats[0]), slot_summary(all_stats[1])
+    use_clean = clean0["samples"] >= MIN_CLEAN_SAMPLES and clean1["samples"] >= MIN_CLEAN_SAMPLES
+    v0, v1 = (clean0, clean1) if use_clean else (all0, all1)
+    basis = "clean" if use_clean else "all_frames_fallback"
 
-    if sum0["shrMean"] is not None and sum1["shrMean"] is not None:
-        diff = sum0["shrMean"] - sum1["shrMean"]
+    if v0["shrMean"] is not None and v1["shrMean"] is not None:
+        diff = v0["shrMean"] - v1["shrMean"]
         if abs(diff) >= SHR_DIFF_THRESHOLD:
             verdict = {
                 "leader": 0 if diff > 0 else 1,
                 "confidence": round(min(0.95, 0.5 + abs(diff) * 5), 2),
+                "basis": basis,
             }
         else:
-            verdict = {"leader": None, "confidence": 0.5}
+            verdict = {"leader": None, "confidence": 0.5, "basis": basis}
     else:
-        verdict = {"leader": None, "confidence": 0.0}
+        verdict = {"leader": None, "confidence": 0.0, "basis": basis}
+
+    # 出力の slot サマリは verdict に使った側（クリーン優先）。全フレーム値は samplesAll で併記
+    sum0 = {**v0, "samplesAll": all0["samples"]}
+    sum1 = {**v1, "samplesAll": all1["samples"]}
 
     contested, dropped = extract_contested(contest_frames, effective_fps)
     # 全体拮抗（平均差が閾値未満）なら、区間に関係なく全編が判定困難であることを明示

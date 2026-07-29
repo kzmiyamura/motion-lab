@@ -8,6 +8,10 @@
 「一周で360度増減する連続値」として記録する。これにより後段（Node.js側）
 で任意のA-B区間を切り出すだけで平均角速度・RPMを計算できる。
 
+10fps 相当に間引いて処理する（CPU実機での所要時間を抑える。回転角の時系列は
+10fps でも1回転あたり十数サンプル取れるため RPM 計測には十分。
+ThinkCentre実機検証: フルfps処理は31.5秒動画に2分20秒＝実時間4.4倍かかっていた）。
+
 出力: JSON { fps, totalFrames, detectedFrames, samples: [{t, angleDeg}, ...] }
 
 Usage: python analyze_rotation.py <video_path> <model_path> <output_json_path>
@@ -22,6 +26,8 @@ from mediapipe.tasks.python.vision import PoseLandmarker, PoseLandmarkerOptions,
 
 LEFT_SHOULDER = 11
 RIGHT_SHOULDER = 12
+
+TARGET_FPS = 10.0  # 間引き後の実効fps
 
 
 def main():
@@ -43,6 +49,7 @@ def main():
         sys.exit(1)
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frame_interval = max(1, round(fps / TARGET_FPS))
     frame_idx = 0
     samples = []
     prev_angle = None
@@ -54,6 +61,9 @@ def main():
             ret, frame = cap.read()
             if not ret:
                 break
+            if frame_idx % frame_interval != 0:
+                frame_idx += 1
+                continue
             t_sec = frame_idx / fps
             t_ms = int(t_sec * 1000)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))

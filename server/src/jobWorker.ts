@@ -145,9 +145,9 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
 interface ContestedSeg { from: number; to: number; reason: string }
 
 interface MeasurementsSummary {
-  slot0?: { shrMean: number | null; shrStd: number | null; samples: number };
-  slot1?: { shrMean: number | null; shrStd: number | null; samples: number };
-  verdictByRule?: { leader: 0 | 1 | null; confidence: number };
+  slot0?: { shrMean: number | null; shrStd: number | null; samples: number; samplesAll?: number };
+  slot1?: { shrMean: number | null; shrStd: number | null; samples: number; samplesAll?: number };
+  verdictByRule?: { leader: 0 | 1 | null; confidence: number; basis?: string };
   contested?: ContestedSeg[];
   contestedDropped?: number;
 }
@@ -205,8 +205,9 @@ function buildCvOnlyReport(job: AnalysisJobRow, cvStepCount: number, measurement
     ``,
     `- **Leader（ルールベースSHR判定）**: ${leaderLabel}`,
     `- 自信度: ${verdict ? Math.round(verdict.confidence * 100) : 0}%`,
-    `- slot0 SHR平均: ${summary.slot0?.shrMean ?? '—'}（${summary.slot0?.samples ?? 0}サンプル）`,
-    `- slot1 SHR平均: ${summary.slot1?.shrMean ?? '—'}（${summary.slot1?.samples ?? 0}サンプル）`,
+    `- 判定母集団: ${verdict?.basis === 'clean' ? 'クリーンフレームのみ（オクルージョン除外）' : verdict?.basis === 'all_frames_fallback' ? '全フレーム（クリーンフレーム不足のためフォールバック）' : '—'}`,
+    `- slot0 SHR平均: ${summary.slot0?.shrMean ?? '—'}（${summary.slot0?.samples ?? 0}サンプル / 全${summary.slot0?.samplesAll ?? summary.slot0?.samples ?? 0}検出）`,
+    `- slot1 SHR平均: ${summary.slot1?.shrMean ?? '—'}（${summary.slot1?.samples ?? 0}サンプル / 全${summary.slot1?.samplesAll ?? summary.slot1?.samples ?? 0}検出）`,
     ``,
   ];
   if (contested.length > 0) {

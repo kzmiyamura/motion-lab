@@ -33,6 +33,6 @@ export const PRESETS: Record<string, PresetDef> = {
     cvSteps: [
       { script: 'analyze_pair.py', args: ctx => [ctx.videoPath, ctx.modelPath, ctx.measurementsPath, ctx.debugVideoRawPath] },
     ],
-    useClaude: false, // P2 で true に切り替え
+    useClaude: true, // P2: claude CLI 未導入の環境では [CLAUDE] エラーになる（server/CLAUDE.md その7参照）
   },
 };

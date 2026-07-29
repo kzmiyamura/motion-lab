@@ -14,11 +14,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ffmpegPathImport from 'ffmpeg-static';
 import {
-  claimNextJob, getVideo, markJobDone, markJobError, recoverStaleRunningJobs,
+  claimNextJob, getVideo, markJobDone, markJobError, recoverStaleRunningJobs, requeueJobForRetry,
   type AnalysisJobRow,
 } from './db.js';
 import { isAnalysisRunning } from './analysisJob.js';
 import { PRESETS, type JobContext } from './presets.js';
+import { runClaude, ClaudeAuthError, ClaudeRateLimitError } from './claudeRunner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const JOBS_DIR = path.resolve(__dirname, '../storage/analysis-jobs');
@@ -33,6 +34,8 @@ const MODEL_PATH = process.env.YOLO_MODEL_PATH
   ?? path.resolve(__dirname, '../models/yolov8s-pose.pt');
 const POLL_INTERVAL_MS = 15_000;
 const JOB_TIMEOUT_MS = Number(process.env.JOB_TIMEOUT_MS ?? 60 * 60 * 1000);
+const JOB_MAX_RETRY = Number(process.env.JOB_MAX_RETRY ?? 3);
+const RATE_LIMIT_BACKOFF_MS = 15 * 60 * 1000; // レート制限時の初回バックオフ（×retry回数で線形増）
 
 let busy = false;
 
@@ -157,16 +160,75 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     return;
   }
 
-  // 4. Claude 判断（P2 で claudeRunner を配線。P0/P1 は useClaude:false でスキップ）
+  // 4. Claude 判断（詳細設計 §6。CV計測を踏まえて contested を裁定しレポートを書く）
   if (preset.useClaude) {
-    markJobError(job.id, '[CLAUDE] claudeRunner は未実装です（P2 で実装予定）');
+    try {
+      const r = await runClaude(jobDir, job.spec_snapshot, signal);
+      const reportMd = r.reportMd + debugVideoSection(job.id);
+      const resultJson = r.resultJson
+        ?? JSON.stringify({ pipeline: 'p2-claude', preset: job.preset, note: 'result.json 未生成（report.md のみ）' });
+      markJobDone(job.id, resultJson, reportMd);
+      console.log(`[jobWorker] job ${job.id} done (claude)`);
+    } catch (e) {
+      handleClaudeFailure(job, e, signal);
+    }
     return;
   }
 
-  // 5. 完了（P1: CVサマリでレポート生成。P2 で Claude レポートに置き換わる）
+  // 5. 完了（CVのみプリセット用のフォールバックレポート）
   const { resultJson, reportMd } = buildCvOnlyReport(job, preset.cvSteps.length, ctx.measurementsPath);
   markJobDone(job.id, resultJson, reportMd);
   console.log(`[jobWorker] job ${job.id} done`);
+}
+
+/**
+ * Claude 実行失敗の5分岐（詳細設計 §6.2）:
+ * レート制限→バックオフ付きリトライ / 認証失効→即error（人間の介入が必要）/
+ * タイムアウト→リトライ / report未生成・その他→1回だけリトライ→error
+ */
+function handleClaudeFailure(job: AnalysisJobRow, e: unknown, signal: AbortSignal): void {
+  const msg = e instanceof Error ? e.message : String(e);
+
+  if (e instanceof ClaudeAuthError) {
+    markJobError(job.id, `[CLAUDE] ${msg}`);
+    return;
+  }
+  if (e instanceof ClaudeRateLimitError) {
+    if (job.retry_count >= JOB_MAX_RETRY) {
+      markJobError(job.id, `[CLAUDE] レート制限リトライ上限（${JOB_MAX_RETRY}回）に達しました。${msg}`);
+      return;
+    }
+    const backoff = RATE_LIMIT_BACKOFF_MS * (job.retry_count + 1);
+    requeueJobForRetry(job.id, new Date(Date.now() + backoff).toISOString());
+    console.log(`[jobWorker] job ${job.id} rate-limited, retry in ${Math.round(backoff / 60000)}min`);
+    return;
+  }
+  if (signal.aborted) {
+    if (job.retry_count >= 1) {
+      markJobError(job.id, `[TIMEOUT] Claude 実行が2回タイムアウトしました`);
+      return;
+    }
+    requeueJobForRetry(job.id, new Date(Date.now() + 60_000).toISOString());
+    console.log(`[jobWorker] job ${job.id} timed out, retry once`);
+    return;
+  }
+  // report未生成・その他 exit≠0: 一時失敗として1回だけリトライ
+  if (job.retry_count >= 1) {
+    markJobError(job.id, `[CLAUDE] ${msg}`);
+    return;
+  }
+  requeueJobForRetry(job.id, new Date(Date.now() + 60_000).toISOString());
+  console.log(`[jobWorker] job ${job.id} claude failed, retry once: ${msg.slice(0, 200)}`);
+}
+
+/** デバッグ動画が生成されていればレポート末尾に案内を付ける（CV/Claude 両パス共通） */
+function debugVideoSection(jobId: string): string {
+  if (!existsSync(path.join(jobDirOf(jobId), 'out/debug_roi.mp4'))) return '';
+  return [
+    ``, ``, `## デバッグ動画`, ``,
+    `背景マスク（ROI）と検出枠の可視化: [debug_roi.mp4](/analysis-output/${jobId}/out/debug_roi.mp4)`,
+    `（金枠=ROI、青=Leader、ピンク=Follower、赤枠=除外した背景人物。ROI外はグレーで塗りつぶし）`,
+  ].join('\n');
 }
 
 interface ContestedSeg { from: number; to: number; reason: string }

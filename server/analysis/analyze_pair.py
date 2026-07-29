@@ -146,36 +146,128 @@ def apply_roi_mask(frame, roi):
 # OpenCV は BGR 順なので注意
 COLOR_LEADER = (255, 102, 0)     # 青 (#0066ff)
 COLOR_FOLLOWER = (204, 0, 255)   # ピンク (#ff00cc)
-COLOR_NEUTRAL = (0, 220, 0)      # 緑: 1人のみ検出などロール不明
-COLOR_EXCLUDED = (160, 160, 160)  # グレー: 見切れ等で verdict 母集団から除外
+COLOR_NEUTRAL = (0, 220, 0)      # 緑: ロール判定材料なし
 COLOR_REJECTED = (0, 0, 255)     # 赤: 背景人物として除外
 
+TORSO_HIST_REGION = 0.55   # bbox 上部何割をヒストグラム対象にするか（胴体+腕。脚は両者とも黒で無情報）
+APPEARANCE_EMA = 0.1       # 外見リファレンスの更新率（小さいほどオクルージョン混入に頑健）
 
-def draw_debug(frame, roi, kept, rejected):
-    """デバッグ動画用: ROI枠（金）を描画し、採用ペアはフレーム内 SHR 比較で
-    高い側=Leader候補（青）/ 低い側=Follower候補（ピンク）に塗り分ける。
-    見切れフレーム（verdict 不使用）はグレー、背景の除外候補は赤。
-    ※ 青/ピンクは「そのフレームの SHR 比較」であり確定ロールではない。
-    交差時にチラつくのは per-frame 計測ノイズの正直な可視化"""
+
+def torso_hist(frame, bbox):
+    """人物 bbox 上部の HSV 色ヒストグラム（正規化済み64次元）を返す。
+
+    幾何学的特徴（SHR・身長・肩幅）はどれも「体の向き」か「カメラ距離」に
+    敏感で、女性が手前に来るターン区間で3特徴が揃って誤投票する実測があった。
+    服装・肌の色分布は向きにも距離にもほぼ不変なので、人物の同一性の追跡に使う
+    """
     h, w = frame.shape[:2]
-    vis = frame.copy()
+    x0, x1 = int(max(0.0, bbox[0]) * w), int(min(1.0, bbox[2]) * w)
+    y0 = int(max(0.0, bbox[1]) * h)
+    y1 = int(min(1.0, bbox[1] + (bbox[3] - bbox[1]) * TORSO_HIST_REGION) * h)
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return None
+    hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])
+    cv2.normalize(hist, hist, 1.0, 0.0, cv2.NORM_L1)
+    return hist.flatten()
+
+
+def hist_dist(a, b):
+    return float(np.abs(a - b).sum())
+
+
+def assign_appearance_ids(draw_frames):
+    """外見（色ヒストグラム）で全検出を2人分のクラスタに分け、Leader クラスタを決める。
+
+    - 各フレームの検出を、リファレンスヒストグラム（EMA更新）との距離で
+      人物ID 0/1 に割り当てる（2人同時のときはペア割り当てコストの小さい方）
+    - Leader は「クラスタ単位の SHR 平均」が高い方（フレーム単位の勝負ではないので
+      横向きの一瞬に色が乗っ取られない）
+    - 各 kept エントリに "pid" を書き込み、Leader の pid を返す（判定不能なら None）
+    """
+    refs = [None, None]
+    for df in draw_frames:
+        ks = [p for p in df["kept"] if p.get("hist") is not None]
+        if refs[0] is None:
+            if len(ks) == 2:
+                refs[0], refs[1] = ks[0]["hist"].copy(), ks[1]["hist"].copy()
+                ks[0]["pid"], ks[1]["pid"] = 0, 1
+            continue
+        if len(ks) == 2:
+            direct = hist_dist(ks[0]["hist"], refs[0]) + hist_dist(ks[1]["hist"], refs[1])
+            swapped = hist_dist(ks[0]["hist"], refs[1]) + hist_dist(ks[1]["hist"], refs[0])
+            pids = (0, 1) if direct <= swapped else (1, 0)
+        elif len(ks) == 1:
+            pids = (0,) if hist_dist(ks[0]["hist"], refs[0]) <= hist_dist(ks[0]["hist"], refs[1]) else (1,)
+        else:
+            continue
+        for p, pid in zip(ks, pids):
+            p["pid"] = pid
+            refs[pid] = (1.0 - APPEARANCE_EMA) * refs[pid] + APPEARANCE_EMA * p["hist"]
+
+    # Leader クラスタ = クリーンなペアフレームでの SHR 平均が高い方
+    sums = {0: [0.0, 0], 1: [0.0, 0]}
+    for df in draw_frames:
+        ks = [p for p in df["kept"] if p.get("pid") is not None]
+        if len(ks) == 2 and ks[0]["pid"] != ks[1]["pid"] and not any(p["edgeClipped"] for p in ks):
+            for p in ks:
+                sums[p["pid"]][0] += p["shr2d"]
+                sums[p["pid"]][1] += 1
+    if sums[0][1] == 0 or sums[1][1] == 0:
+        return None
+    return 0 if sums[0][0] / sums[0][1] >= sums[1][0] / sums[1][1] else 1
+
+
+def draw_debug(frame, mask_roi, roi, kept, rejected, leader_pid):
+    """デバッグ動画用（2パス目）: ROI枠（金）を描画し、採用ペアを外見クラスタの
+    ロール（Leader=青 / Follower=ピンク）で塗り分ける。
+    ロール不明フレームは緑、背景の除外候補は赤"""
+    h, w = frame.shape[:2]
+    vis = apply_roi_mask(frame, mask_roi) if mask_roi is not None else frame.copy()
     if roi is not None:
         cv2.rectangle(vis, (int(roi[0] * w), int(roi[1] * h)), (int(roi[2] * w), int(roi[3] * h)), (0, 200, 255), 2)
 
-    pairs = []
-    if len(kept) == 2 and not any(p["edgeClipped"] for p in kept):
-        hi, lo = (kept[0], kept[1]) if kept[0]["shr2d"] >= kept[1]["shr2d"] else (kept[1], kept[0])
-        pairs = [(hi, COLOR_LEADER, "L?"), (lo, COLOR_FOLLOWER, "F?")]
-    else:
-        pairs = [(p, COLOR_EXCLUDED if p["edgeClipped"] else COLOR_NEUTRAL, "") for p in kept]
+    persons = []
+    for p in kept:
+        if leader_pid is None or p.get("pid") is None:
+            persons.append((p, COLOR_NEUTRAL, ""))
+        elif p["pid"] == leader_pid:
+            persons.append((p, COLOR_LEADER, "L"))
+        else:
+            persons.append((p, COLOR_FOLLOWER, "F"))
 
-    for p, color, tag in pairs + [(p, COLOR_REJECTED, "") for p in rejected]:
+    for p, color, tag in persons + [(p, COLOR_REJECTED, "") for p in rejected]:
         b = p["bbox"]
         cv2.rectangle(vis, (int(b[0] * w), int(b[1] * h)), (int(b[2] * w), int(b[3] * h)), color, 2)
         label = f"{tag} SHR {p['shr2d']:.2f}".strip()
         cv2.putText(vis, label, (int(b[0] * w), max(12, int(b[1] * h) - 4)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 2)
     return vis
+
+
+def render_debug_video(video_path, debug_video_path, draw_frames, leader_pid, effective_fps):
+    """2パス目: 動画を再読して計測済みの描画データで色を塗る（推論なし・デコードのみ）"""
+    by_idx = {df["frameIdx"]: df for df in draw_frames}
+    cap = cv2.VideoCapture(video_path)
+    writer = None
+    frame_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        df = by_idx.get(frame_idx)
+        if df is not None:
+            if writer is None:
+                h0, w0 = frame.shape[:2]
+                writer = cv2.VideoWriter(
+                    debug_video_path, cv2.VideoWriter_fourcc(*"mp4v"),
+                    max(1.0, effective_fps), (w0, h0),
+                )
+            writer.write(draw_debug(frame, df["maskRoi"], df["roi"], df["kept"], df["rejected"], leader_pid))
+        frame_idx += 1
+    cap.release()
+    if writer is not None:
+        writer.release()
 
 
 def assign_slots(persons, prev_slots):
@@ -323,7 +415,7 @@ def main():
     roi_masked_frames = 0
     roi_resets = 0
     edge_clipped_frames = 0  # 見切れにより verdict から除外したペアフレーム数
-    debug_writer = None
+    draw_frames = []    # デバッグ動画用の描画データ（2パス目で色を塗る）
 
     while True:
         ret, frame = cap.read()
@@ -336,6 +428,7 @@ def main():
         t_sec = frame_idx / fps
 
         # ROIマスク: 前フレームのペア位置の外側を塗りつぶして背景人物を視野から排除
+        mask_roi = roi  # デバッグ動画の2パス目で同じマスクを再現するために控える
         work = apply_roi_mask(frame, roi) if roi is not None else frame
         if roi is not None:
             roi_masked_frames += 1
@@ -361,20 +454,23 @@ def main():
                 roi = None
                 roi_resets += 1
 
-        if debug_video_path is not None:
-            if debug_writer is None:
-                h0, w0 = frame.shape[:2]
-                debug_writer = cv2.VideoWriter(
-                    debug_video_path, cv2.VideoWriter_fourcc(*"mp4v"),
-                    max(1.0, effective_fps), (w0, h0),
-                )
-            debug_writer.write(draw_debug(work, roi, persons, rejected))
-
         slots = assign_slots(persons, prev_slots)
         # 検出できたスロットのみ prev を更新（欠けたスロットは位置を保持して復帰を待つ）
         for i in range(2):
             if slots[i] is not None:
                 prev_slots[i] = slots[i]
+
+        if debug_video_path is not None:
+            draw_frames.append({
+                "frameIdx": frame_idx,
+                "maskRoi": mask_roi,  # このフレームの検出に実際に使ったマスク
+                "roi": roi,           # 検出結果で更新した後のROI（次フレームで使われる枠）
+                "kept": [{"bbox": p["bbox"], "shr2d": p["shr2d"],
+                          "edgeClipped": p["edgeClipped"],
+                          "hist": torso_hist(frame, p["bbox"])}  # 外見ID用（マスク前の生フレームから）
+                         for p in persons],
+                "rejected": [{"bbox": p["bbox"], "shr2d": p["shr2d"]} for p in rejected],
+            })
 
         both = slots[0] is not None and slots[1] is not None
         occluded = False
@@ -433,8 +529,11 @@ def main():
         frame_idx += 1
 
     cap.release()
-    if debug_writer is not None:
-        debug_writer.release()
+
+    # デバッグ動画（2パス目）: 全編の計測を踏まえた平滑化ロールで色を塗る
+    if debug_video_path is not None and draw_frames:
+        leader_pid = assign_appearance_ids(draw_frames)
+        render_debug_video(video_path, debug_video_path, draw_frames, leader_pid, effective_fps)
 
     # サマリ
     def slot_summary(s):

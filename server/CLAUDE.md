@@ -484,3 +484,52 @@ Mac側（Apple Silicon）で同じ動画・同じコードの実測値は以下�
   （`<PYTHON_BIN> -m venv server/analysis/venv` → その python を PYTHON_BIN に設定）でもよい。
   動けば方式は問わない
 - MediaPipe / Heavy モデルは**削除しないこと**（回転解析で引き続き使用中）
+
+---
+
+## 追加タスク（2026-07-29・その7）: P2（Claude裁定）の有効化 + デバッグ動画の色分け改善の取り込み
+
+P2 を実装した。`salsa-pair` プリセットは今後 CV計測 → **claude CLI によるヘッドレス裁定** → レポート生成まで自動で行う。**claude CLI が未導入のままだとジョブが `[CLAUDE]` エラーで止まる**ので、その6（YOLO移行）とまとめて以下を実施してほしい。
+
+### 変更内容（git pull で入る）
+1. `src/claudeRunner.ts` — ジョブ作業ディレクトリで `claude -p` をヘッドレス実行（プロンプトは stdin 渡し、`--allowedTools "Bash(python*) Read Write"`、`--output-format json`）
+2. `src/jobWorker.ts` — Claude 失敗の5分岐（レート制限→バックオフ付きリトライ / ログイン失効→即エラー / タイムアウト・その他→1回リトライ）
+3. `prompts/runner-prompt.md` — 裁定プロンプト（result.json スキーマは「開始時点の左右」方式）
+4. `src/presets.ts` — `salsa-pair` の `useClaude: true` に切り替え済み
+5. **デバッグ動画の色分け改善**（analyze_pair.py）: 服装・肌の色ヒストグラムで人物を追跡し、
+   動画全体の SHR 集計で決めた Leader=青 / Follower=ピンク を全編一貫して塗る
+   （従来のフレーム毎 SHR 勝負は横向きで色がチラつく問題があった。Mac側で全編検証済み）
+
+### やってほしいこと
+
+1. `git pull` && `cd server && npm install`
+2. **claude CLI の導入（非管理者アカウントで可能な方式）**:
+   ```powershell
+   # npm のグローバル先をユーザーローカルに変更（管理者権限不要にする）
+   npm config set prefix "$env:USERPROFILE\.npm-global"
+   npm install -g @anthropic-ai/claude-code
+   # PATH にユーザー環境変数として追加（PowerShell。既存PATHは壊さないこと）
+   [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\.npm-global", "User")
+   ```
+   - 新しいターミナルで `claude --version` が通ることを確認
+   - `claude` を**対話起動して初回ログイン**（Anthropic アカウント。Max サブスクの認証情報は PC の持ち主に確認）
+3. `.env` に `CLAUDE_BIN` を設定（PATH が pm2 経由で通らない場合に備えフルパス推奨）:
+   ```
+   CLAUDE_BIN=C:\Users\<ユーザー名>\.npm-global\claude.cmd
+   ```
+4. `pm2 restart motion-lab-server` → `curl http://localhost:4000/api/health` の `claude` が `"ok"` になることを確認
+5. 同じ動画（2fda2815）で再解析。今回は Claude 裁定まで走る:
+   ```
+   curl -X POST http://localhost:4000/api/videos/2fda2815-2073-4cd6-94d5-3d9dca9108ce/reanalyze
+   ```
+
+### 報告してほしいこと
+- health の `claude` フィールドの値
+- ジョブの reportMd（Claude が書いたレポート）と `out/result.json` の中身
+- Claude 裁定パートの所要時間（CV計測と別に）
+- デバッグ動画URL（色分けが全編で正しいか人間が目視確認する）
+- claude CLI 導入で詰まった場合はその状況（管理者権限を要求された等）を正直に
+
+### 注意
+- `RELAY_SECRET` と同様、Claude のログインセッションはこの PC 固有。`claude` の認証情報をリポジトリにコミットしないこと
+- レート制限（Max サブスクの使用量上限）に当たるとジョブは自動で15分×N のバックオフ再試行になる。`pm2 logs` に `rate-limited` が出ていたら異常ではない

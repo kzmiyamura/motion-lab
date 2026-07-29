@@ -9,6 +9,10 @@ docs/folder-analysis-detailed-design.md §8.1 参照
 - 10fps 相当に間引き（Heavy×CPUの処理時間を抑える。男女判定に30fpsは不要）
 - num_poses=4 で候補を多めに検出し、bbox面積の大きい上位2人をペアとして採用
   （背景の鏡・通行人など第三者がスロットを汚染するのを防ぐ。ThinkCentre実機検証の申し送り#1）
+- ROIマスク: 前フレームで確定したペアの bbox+マージンの外側をグレーで塗りつぶしてから検出
+  （背景人物を検出器の視野から物理的に排除する。フレームを切り抜かずマスクするのは
+  座標系を保つため — cropすると x だけスケールされ z との比が歪み SHR が壊れる。
+  検出が2人未満になったらマージンを拡大して再試行→全画面フォールバックの安全弁付き）
 - スロット割り当ては前フレームの腰位置との Nearest Neighbor（オフライン処理
   なので速度予測は持たない。1フレーム欠けても次フレームで復帰できれば十分）
 - SHR = 3D肩幅 / 3D腰幅。hypot(dx, dz) により横向き時も骨格の厚みから計測
@@ -21,13 +25,16 @@ docs/folder-analysis-detailed-design.md §8.1 参照
   スロット別サマリは参考情報として残すが、同一性リークがあり得る点に注意）
 
 出力: measurements.json（スキーマは詳細設計 §8.1）
+     [debug_video_path 指定時] マスク適用後フレーム+検出枠のデバッグ動画（mp4v。
+     ブラウザ再生用の H.264 変換は Node 側（jobWorker）が ffmpeg で行う）
 
-Usage: python analyze_pair.py <video_path> <model_path> <output_json_path>
+Usage: python analyze_pair.py <video_path> <model_path> <output_json_path> [debug_video_path]
 """
 import sys
 import json
 import math
 import cv2
+import numpy as np
 import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import PoseLandmarker, PoseLandmarkerOptions, RunningMode
@@ -45,6 +52,8 @@ OCCLUSION_DIST = 0.10      # 腰中点間の正規化距離がこれ未満なら
 MAX_CONTESTED = 5          # Claude に渡す contested 区間の上限
 SMOOTH_WINDOW = 20         # SHR差の移動平均窓（10fpsで2秒）
 MIN_CLEAN_SAMPLES = 10     # verdict をクリーンフレームから出すのに必要な最小サンプル数
+ROI_MARGIN = 0.15          # ペアbboxに足すマージン（正規化座標）
+ROI_GRAY = 128             # マスクの塗りつぶし色
 
 
 def hypot3d_xz(a, b):
@@ -63,16 +72,18 @@ def measure_person(lm):
     hip_w = hypot3d_xz(hl, hr)
     if hip_w < 1e-6:
         return None
-    # bbox面積（全ランドマークのx/yスパン）: 手前の人ほど大きい。第三者フィルタに使う
+    # bbox（全ランドマークのx/yスパン）: 面積は第三者フィルタ、範囲はROIマスクに使う
     xs = [p.x for p in lm]
     ys = [p.y for p in lm]
-    bbox_area = (max(xs) - min(xs)) * (max(ys) - min(ys))
+    bbox = (min(xs), min(ys), max(xs), max(ys))
+    bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
     return {
         "hipX": round((hl.x + hr.x) / 2, 4),
         "hipY": round((hl.y + hr.y) / 2, 4),
         "shr3d": round(shoulder_w / hip_w, 4),
         "shoulderW": round(shoulder_w, 4),
         "bboxArea": round(bbox_area, 5),
+        "bbox": bbox,
     }
 
 
@@ -85,6 +96,39 @@ def pick_main_pair(persons):
     if len(persons) <= 2:
         return persons
     return sorted(persons, key=lambda p: p["bboxArea"], reverse=True)[:2]
+
+
+def roi_from_persons(persons, margin):
+    """ペアの bbox の合併 + マージンを ROI（正規化座標）として返す"""
+    x0 = min(p["bbox"][0] for p in persons) - margin
+    y0 = min(p["bbox"][1] for p in persons) - margin
+    x1 = max(p["bbox"][2] for p in persons) + margin
+    y1 = max(p["bbox"][3] for p in persons) + margin
+    return (max(0.0, x0), max(0.0, y0), min(1.0, x1), min(1.0, y1))
+
+
+def apply_roi_mask(frame, roi):
+    """ROI の外側をグレーで塗りつぶしたフレームを返す（座標系は保たれる）"""
+    h, w = frame.shape[:2]
+    x0, y0 = max(0, int(roi[0] * w)), max(0, int(roi[1] * h))
+    x1, y1 = min(w, int(roi[2] * w)), min(h, int(roi[3] * h))
+    out = np.full_like(frame, ROI_GRAY)
+    out[y0:y1, x0:x1] = frame[y0:y1, x0:x1]
+    return out
+
+
+def draw_debug(frame, roi, kept, rejected):
+    """デバッグ動画用: ROI枠（金）・採用ペア（緑）・除外候補（赤）を描画"""
+    h, w = frame.shape[:2]
+    vis = frame.copy()
+    if roi is not None:
+        cv2.rectangle(vis, (int(roi[0] * w), int(roi[1] * h)), (int(roi[2] * w), int(roi[3] * h)), (0, 200, 255), 2)
+    for p, color in [(p, (0, 220, 0)) for p in kept] + [(p, (0, 0, 255)) for p in rejected]:
+        b = p["bbox"]
+        cv2.rectangle(vis, (int(b[0] * w), int(b[1] * h)), (int(b[2] * w), int(b[3] * h)), color, 2)
+        cv2.putText(vis, f"SHR {p['shr3d']:.2f}", (int(b[0] * w), max(12, int(b[1] * h) - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+    return vis
 
 
 def assign_slots(persons, prev_slots):
@@ -196,11 +240,12 @@ def extract_contested(frames, effective_fps):
 
 
 def main():
-    if len(sys.argv) != 4:
-        print("Usage: analyze_pair.py <video_path> <model_path> <output_json_path>", file=sys.stderr)
+    if len(sys.argv) not in (4, 5):
+        print("Usage: analyze_pair.py <video_path> <model_path> <output_json_path> [debug_video_path]", file=sys.stderr)
         sys.exit(1)
 
     video_path, model_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
+    debug_video_path = sys.argv[4] if len(sys.argv) == 5 else None
 
     options = PoseLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
@@ -229,6 +274,12 @@ def main():
     # 各要素: {"high": shr, "low": shr, "highSide": "left"|"right", "t": sec}
     pair_clean = []
     pair_all = []
+    # ROIマスク状態
+    roi = None          # (x0,y0,x1,y1) 正規化。None=全画面
+    roi_miss = 0        # ROI内で誰も検出できなかった連続回数
+    roi_masked_frames = 0
+    roi_resets = 0
+    debug_writer = None
 
     with PoseLandmarker.create_from_options(options) as landmarker:
         while True:
@@ -241,15 +292,47 @@ def main():
 
             t_sec = frame_idx / fps
             t_ms = int(t_sec * 1000)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+            # ROIマスク: 前フレームのペア位置の外側を塗りつぶして背景人物を視野から排除
+            work = apply_roi_mask(frame, roi) if roi is not None else frame
+            if roi is not None:
+                roi_masked_frames += 1
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(work, cv2.COLOR_BGR2RGB))
             result = landmarker.detect_for_video(mp_image, t_ms)
 
-            persons = []
+            candidates = []
             for lm in (result.pose_landmarks or []):
                 m = measure_person(lm)
                 if m is not None:
-                    persons.append(m)
-            persons = pick_main_pair(persons)  # 背景の第三者を弾く
+                    candidates.append(m)
+            persons = pick_main_pair(candidates)  # 背景の第三者を弾く（ROI内に紛れた場合の保険）
+            rejected = [c for c in candidates if c not in persons]
+
+            # ROI更新:
+            #  - 2人検出: ペアのbbox合併+マージンで追従
+            #  - 1人検出: オクルージョン中の可能性が高い。マージンを広げて維持（全画面に戻すと
+            #    背景人物が「2人目」として拾われる汚染が起きるため戻さない）
+            #  - 0人が2回連続: ペアを見失ったとみなし全画面へフォールバック
+            if len(persons) >= 2:
+                roi = roi_from_persons(persons, ROI_MARGIN)
+                roi_miss = 0
+            elif len(persons) == 1:
+                roi = roi_from_persons(persons, ROI_MARGIN * 2)
+                roi_miss = 0
+            else:
+                roi_miss += 1
+                if roi is not None and roi_miss >= 2:
+                    roi = None
+                    roi_resets += 1
+
+            if debug_video_path is not None:
+                if debug_writer is None:
+                    h0, w0 = frame.shape[:2]
+                    debug_writer = cv2.VideoWriter(
+                        debug_video_path, cv2.VideoWriter_fourcc(*"mp4v"),
+                        max(1.0, effective_fps), (w0, h0),
+                    )
+                debug_writer.write(draw_debug(work, roi, persons, rejected))
 
             slots = assign_slots(persons, prev_slots)
             # 検出できたスロットのみ prev を更新（欠けたスロットは位置を保持して復帰を待つ）
@@ -308,6 +391,8 @@ def main():
             frame_idx += 1
 
     cap.release()
+    if debug_writer is not None:
+        debug_writer.release()
 
     # サマリ
     def slot_summary(s):
@@ -363,6 +448,8 @@ def main():
         "cleanPairFrames": len(pair_clean),
         "allPairFrames": len(pair_all),
         "cleanRatio": round(len(pair_clean) / len(pair_all), 3) if pair_all else 0.0,
+        "roiMaskedFrames": roi_masked_frames,
+        "roiResets": roi_resets,
     }
 
     contested, dropped = extract_contested(contest_frames, effective_fps)

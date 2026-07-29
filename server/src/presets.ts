@@ -12,6 +12,8 @@ export interface JobContext {
   modelPath: string;
   jobDir: string;
   measurementsPath: string;
+  /** ROIマスク可視化のデバッグ動画（mp4v生出力。jobWorkerがH.264へ変換して配信） */
+  debugVideoRawPath: string;
 }
 
 export interface PresetDef {
@@ -29,7 +31,7 @@ export const PRESETS: Record<string, PresetDef> = {
   'salsa-pair': {
     name: 'salsa-pair',
     cvSteps: [
-      { script: 'analyze_pair.py', args: ctx => [ctx.videoPath, ctx.modelPath, ctx.measurementsPath] },
+      { script: 'analyze_pair.py', args: ctx => [ctx.videoPath, ctx.modelPath, ctx.measurementsPath, ctx.debugVideoRawPath] },
     ],
     useClaude: false, // P2 で true に切り替え
   },

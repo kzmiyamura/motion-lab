@@ -5,7 +5,7 @@ import express from 'express';
 import { HLS_DIR, ORIGINALS_DIR, THUMBNAILS_DIR, videosRouter } from './routes/videos.js';
 import { foldersRouter } from './routes/folders.js';
 import { jobsRouter } from './routes/jobs.js';
-import { startJobWorker } from './jobWorker.js';
+import { JOBS_DIR, startJobWorker } from './jobWorker.js';
 
 const PORT = Number(process.env.PORT ?? 4000);
 const CORS_ORIGIN = (process.env.CORS_ORIGIN ?? 'http://localhost:5173')
@@ -39,6 +39,8 @@ app.use('/api/folders', foldersRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/hls', express.static(HLS_DIR));
 app.use('/thumbnails', express.static(THUMBNAILS_DIR));
+// 解析成果物（デバッグ動画・キーフレーム等）: /analysis-output/<jobId>/out/debug_roi.mp4
+app.use('/analysis-output', express.static(JOBS_DIR));
 
 app.listen(PORT, () => {
   console.log(`[motion-lab-home-server] listening on :${PORT}`);

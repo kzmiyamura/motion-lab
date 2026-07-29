@@ -382,3 +382,31 @@ NN が入れ替わるため「スロット平均に両者が混ざる」とい�
 
 ### 報告してほしいこと
 - 上記2の結果。特に leaderAtStart.side の正否
+
+---
+
+## 追加タスク（2026-07-29・その5）: ROIマスク（背景の物理排除）の取り込みと再検証
+
+クリーン動画が用意できないため、**CV側で背景を消す**方針を採った（ロードマップ⑦の前倒し）。
+前フレームで確定したペアの bbox+マージンの外側をグレーで塗りつぶしてから検出することで、
+鏡の第三者を検出器の視野から物理的に排除する。
+
+### 実装内容
+1. **ROIマスク**（analyze_pair.py）: ペア追従ROI。crop でなくマスク方式（座標系保持のため）。
+   1人検出（オクルージョン中）はマージン2倍で維持、0人が2連続で全画面フォールバック
+2. **デバッグ動画**: マスク適用後フレーム+検出枠（金=ROI、緑=採用ペア、赤=除外人物）を
+   `out/debug_roi.mp4` に出力（jobWorker が H.264 変換）。`/analysis-output/<jobId>/out/debug_roi.mp4` で配信
+3. reliability に `roiMaskedFrames` / `roiResets` を追加
+
+### やってほしいこと
+1. `git pull` && `cd server && npm install`（依存追加なしのはずだが念のため）&& `pm2 restart motion-lab-server`
+2. 同じ動画（2fda2815）で再解析し、報告:
+   - その4の指標（leaderAtStart.side の正否・separation・highSideConsistency・cleanRatio）
+   - `reliability.roiMaskedFrames`（ROIが効いたフレーム数）と `roiResets`
+   - 検出サンプルの偏り（前回124:214）が改善したか（鏡の第三者が消えたか）
+3. **デバッグ動画のURLを報告**（人間がブラウザで見て背景マスクを確認したいとのこと）:
+   `https://motion-lab-apa.pages.dev/relay/analysis-output/<ジョブID>/out/debug_roi.mp4`
+   が再生できることを確認して、このURLをそのまま報告に書く
+
+### 報告してほしいこと
+- 上記2・3。特にデバッグ動画URLは必須（人間が目視確認する）

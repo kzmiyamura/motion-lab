@@ -9,9 +9,10 @@
  * - P0: preset の cvSteps が空 & useClaude:false のためダミー完了する（配管の疎通確認用）
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ffmpegPathImport from 'ffmpeg-static';
 import {
   claimNextJob, getVideo, markJobDone, markJobError, recoverStaleRunningJobs,
   type AnalysisJobRow,
@@ -21,6 +22,9 @@ import { PRESETS, type JobContext } from './presets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const JOBS_DIR = path.resolve(__dirname, '../storage/analysis-jobs');
+
+// converter.ts と同じ理由のキャスト（CJSモジュールのdefault export型解決）
+const ffmpegPath = ffmpegPathImport as unknown as string | null;
 
 const PYTHON_BIN = process.env.PYTHON_BIN ?? 'python3';
 const MODEL_PATH = process.env.POSE_MODEL_PATH
@@ -58,6 +62,24 @@ async function tick(): Promise<void> {
     markJobError(job.id, `[WORKER] ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     busy = false;
+  }
+}
+
+/**
+ * ROIデバッグ動画（OpenCV の mp4v はブラウザで再生不可）を H.264 へ変換する。
+ * 変換成功時は生ファイルを削除。デバッグ用途なので失敗しても警告のみでジョブは止めない。
+ */
+async function transcodeDebugVideo(rawPath: string, outPath: string, signal: AbortSignal): Promise<void> {
+  if (!existsSync(rawPath) || !ffmpegPath) return;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpegPath, ['-y', '-i', rawPath, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', outPath], { signal });
+      proc.on('error', reject);
+      proc.on('exit', code => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited with ${code}`))));
+    });
+    rmSync(rawPath, { force: true });
+  } catch (e) {
+    console.warn(`[jobWorker] debug video transcode failed: ${e instanceof Error ? e.message : e}`);
   }
 }
 
@@ -105,6 +127,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     modelPath: MODEL_PATH,
     jobDir,
     measurementsPath: path.join(outDir, 'measurements.json'),
+    debugVideoRawPath: path.join(outDir, 'debug_roi_raw.mp4'),
   };
 
   // 3. CVパス実行（直列）
@@ -124,6 +147,8 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
       const scriptPath = path.resolve(__dirname, '../analysis/extract_keyframes.py');
       await runPython([scriptPath, ctx.videoPath, keyframesDir, ...times.map(t => t.toFixed(2))], signal);
     }
+    // ROIデバッグ動画（mp4v）をブラウザ再生可能な H.264 へ変換
+    await transcodeDebugVideo(ctx.debugVideoRawPath, path.join(outDir, 'debug_roi.mp4'), signal);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     markJobError(job.id, signal.aborted ? `[TIMEOUT] CVパスがタイムアウトしました` : `[CV] ${msg}`);
@@ -235,6 +260,12 @@ function buildCvOnlyReport(job: AnalysisJobRow, cvStepCount: number, measurement
     lines.push(`2人を同時に検出できなかったため判定できません。動画にペアが映っているか確認してください。`);
   } else {
     lines.push(`拮抗区間はありませんでした（ルールベース判定のみで確定）。`);
+  }
+
+  if (existsSync(path.join(jobDirOf(job.id), 'out/debug_roi.mp4'))) {
+    lines.push(``, `## デバッグ動画`, ``,
+      `背景マスク（ROI）と検出枠の可視化: [debug_roi.mp4](/analysis-output/${job.id}/out/debug_roi.mp4)`,
+      `（金枠=ROI、緑枠=採用ペア、赤枠=除外した背景人物。ROI外はグレーで塗りつぶし）`);
   }
 
   return {

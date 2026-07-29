@@ -29,8 +29,8 @@ export const PRESETS: Record<string, PresetDef> = {
   'salsa-pair': {
     name: 'salsa-pair',
     cvSteps: [
-      // P1 で配線: { script: 'analyze_pair.py', args: ctx => [ctx.videoPath, ctx.modelPath, ctx.measurementsPath] },
+      { script: 'analyze_pair.py', args: ctx => [ctx.videoPath, ctx.modelPath, ctx.measurementsPath] },
     ],
-    useClaude: false,
+    useClaude: false, // P2 で true に切り替え
   },
 };

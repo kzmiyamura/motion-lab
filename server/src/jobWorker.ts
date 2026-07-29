@@ -108,10 +108,21 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
   };
 
   // 3. CVパス実行（直列）
+  if (preset.cvSteps.length > 0 && !existsSync(MODEL_PATH)) {
+    markJobError(job.id, `[CV] pose model not found: ${MODEL_PATH}。server/CLAUDE.md の手順でダウンロードしてください`);
+    return;
+  }
   try {
     for (const step of preset.cvSteps) {
       const scriptPath = path.resolve(__dirname, '../analysis', step.script);
       await runPython([scriptPath, ...step.args(ctx)], signal);
+    }
+    // contested 区間があれば各区間の {始点・中間・終点} のキーフレームを書き出す（Claude 裁定用）
+    const contested = readContested(ctx.measurementsPath);
+    if (contested.length > 0) {
+      const times = contested.flatMap(seg => [seg.from, (seg.from + seg.to) / 2, seg.to]);
+      const scriptPath = path.resolve(__dirname, '../analysis/extract_keyframes.py');
+      await runPython([scriptPath, ctx.videoPath, keyframesDir, ...times.map(t => t.toFixed(2))], signal);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -125,29 +136,98 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     return;
   }
 
-  // 5. 完了（P0/P1: CV結果 or ダミーで done）
-  const measurements = existsSync(ctx.measurementsPath)
-    ? readFileSync(ctx.measurementsPath, 'utf-8')
-    : null;
-  const resultJson = JSON.stringify({
-    pipeline: 'p0-plumbing',
-    preset: job.preset,
-    cvSteps: preset.cvSteps.length,
-    hasMeasurements: measurements !== null,
-  });
-  const reportMd = [
-    `# 解析レポート（配管テスト）`,
-    ``,
-    `- ジョブID: ${job.id}`,
-    `- preset: ${job.preset}`,
-    `- 実行したCVステップ数: ${preset.cvSteps.length}`,
-    ``,
-    measurements !== null
-      ? `CV計測は完了しています（measurements.json あり）。LLM判断は P2 で有効化されます。`
-      : `このジョブはパイプライン配管の疎通確認です。CV解析（P1）・LLM判断（P2）は未配線です。`,
-  ].join('\n');
+  // 5. 完了（P1: CVサマリでレポート生成。P2 で Claude レポートに置き換わる）
+  const { resultJson, reportMd } = buildCvOnlyReport(job, preset.cvSteps.length, ctx.measurementsPath);
   markJobDone(job.id, resultJson, reportMd);
   console.log(`[jobWorker] job ${job.id} done`);
+}
+
+interface ContestedSeg { from: number; to: number; reason: string }
+
+interface MeasurementsSummary {
+  slot0?: { shrMean: number | null; shrStd: number | null; samples: number };
+  slot1?: { shrMean: number | null; shrStd: number | null; samples: number };
+  verdictByRule?: { leader: 0 | 1 | null; confidence: number };
+  contested?: ContestedSeg[];
+  contestedDropped?: number;
+}
+
+function readContested(measurementsPath: string): ContestedSeg[] {
+  try {
+    const data = JSON.parse(readFileSync(measurementsPath, 'utf-8')) as { summary?: MeasurementsSummary };
+    return data.summary?.contested ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function fmtTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** CV計測のみのレポート（useClaude:false のプリセット用） */
+function buildCvOnlyReport(job: AnalysisJobRow, cvStepCount: number, measurementsPath: string): { resultJson: string; reportMd: string } {
+  if (cvStepCount === 0 || !existsSync(measurementsPath)) {
+    // 配管テスト（CV未配線プリセット）
+    return {
+      resultJson: JSON.stringify({ pipeline: 'p0-plumbing', preset: job.preset, cvSteps: cvStepCount, hasMeasurements: false }),
+      reportMd: [
+        `# 解析レポート（配管テスト）`,
+        ``,
+        `- ジョブID: ${job.id}`,
+        `- preset: ${job.preset}`,
+        ``,
+        `このジョブはパイプライン配管の疎通確認です。CV解析・LLM判断は未配線です。`,
+      ].join('\n'),
+    };
+  }
+
+  let summary: MeasurementsSummary = {};
+  try {
+    summary = (JSON.parse(readFileSync(measurementsPath, 'utf-8')) as { summary?: MeasurementsSummary }).summary ?? {};
+  } catch { /* 壊れていても素のレポートを出す */ }
+
+  const verdict = summary.verdictByRule;
+  const contested = summary.contested ?? [];
+  const noDetection = (summary.slot0?.samples ?? 0) === 0 && (summary.slot1?.samples ?? 0) === 0;
+  const leaderLabel = noDetection
+    ? '判定不可（人物を検出できませんでした）'
+    : verdict?.leader === null || verdict?.leader === undefined
+      ? '判定できず（拮抗）'
+      : `スロット${verdict.leader}（画面${verdict.leader === 0 ? '左' : '右'}スタート側）`;
+
+  const lines = [
+    `# 解析レポート（CV計測のみ・LLM判断はP2で有効化）`,
+    ``,
+    `## サマリ`,
+    ``,
+    `- **Leader（ルールベースSHR判定）**: ${leaderLabel}`,
+    `- 自信度: ${verdict ? Math.round(verdict.confidence * 100) : 0}%`,
+    `- slot0 SHR平均: ${summary.slot0?.shrMean ?? '—'}（${summary.slot0?.samples ?? 0}サンプル）`,
+    `- slot1 SHR平均: ${summary.slot1?.shrMean ?? '—'}（${summary.slot1?.samples ?? 0}サンプル）`,
+    ``,
+  ];
+  if (contested.length > 0) {
+    lines.push(`## 判定が難しかった区間（contested）`, ``, `| 区間 | 理由 |`, `|---|---|`);
+    for (const seg of contested) {
+      lines.push(`| ${fmtTime(seg.from)}〜${fmtTime(seg.to)} | ${seg.reason} |`);
+    }
+    if (summary.contestedDropped) {
+      lines.push(``, `※ 他に ${summary.contestedDropped} 区間が上限超過で省略されています`);
+    }
+    lines.push(``, `キーフレームは out/keyframes/ に書き出し済み。P2 で Claude が裁定します。`);
+  } else if (noDetection) {
+    lines.push(`人物を検出できなかったため判定できません。動画に2人が映っているか確認してください。`);
+  } else {
+    lines.push(`拮抗区間はありませんでした（ルールベース判定のみで確定）。`);
+  }
+
+  return {
+    resultJson: JSON.stringify({ pipeline: 'p1-cv', preset: job.preset, verdictByRule: verdict ?? null, contested }),
+    reportMd: lines.join('\n'),
+  };
 }
 
 /** originals ディレクトリから動画ファイルの実パスを解決する（拡張子はDBの original_filename 由来） */

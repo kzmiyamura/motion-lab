@@ -290,3 +290,32 @@ Mac側で「フォルダごとに解析指示書（MD）を持たせ、動画投
 ### 報告してほしいこと
 - 上記4〜6の結果。問題なければ「P0対応完了」の一言でOK
 - `storage/specs/` と `storage/analysis-jobs/` が作成されているか
+
+---
+
+## 追加タスク（2026-07-29・その2）: P1（CV計測）の取り込みと実動画検証
+
+P1 として `analysis/analyze_pair.py`（2人分の骨格計測・SHR判定・contested区間抽出）と
+`analysis/extract_keyframes.py`（contested区間のJPEG書き出し）を追加した。
+preset `salsa-pair` に配線済みのため、**取り込むだけで解析ジョブが実際にCV計測を行うようになる**。
+Python 環境・Heavyモデルは回転解析（2026-07-28・その2）で構築済みのものをそのまま使う。
+
+### やってほしいこと
+
+1. `git pull` && `pm2 restart motion-lab-server`
+2. **実動画検証（重要）**: サルサペアが映っている ready 済み動画を、指示書を保存したフォルダに移動（または UI/curl で再解析）
+   ```
+   curl -X POST http://localhost:4000/api/videos/<動画ID>/reanalyze
+   # 完了まで待つ（動画長の数倍かかる想定。10fps間引き済み）
+   curl http://localhost:4000/api/videos/<動画ID>/jobs
+   curl http://localhost:4000/api/jobs/<ジョブID>
+   ```
+3. レポート（reportMd）を確認:
+   - Leader 判定（スロット0/1）と SHR 平均値が出ているか
+   - contested 区間がある場合、`storage/analysis-jobs/<ジョブID>/out/keyframes/` に JPEG が書き出されているか
+
+### 報告してほしいこと
+- 実動画1本あたりの解析所要時間（動画の長さと合わせて）
+- slot0/slot1 の SHR 平均値と、**その判定が実際の男女と合っているか**（人間の目で答え合わせ）
+- contested 区間の数と、キーフレーム JPEG が人間の目で見て「確かに判定が難しい瞬間」か
+- 判定が間違っている場合はその動画の特徴（体格差・向き・オクルージョンの多さ等）

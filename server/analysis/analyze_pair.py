@@ -35,6 +35,7 @@ docs/folder-analysis-detailed-design.md §8.1 参照
 
 Usage: python analyze_pair.py <video_path> <yolo_model_path> <output_json_path> [debug_video_path]
 """
+import os
 import sys
 import json
 import math
@@ -998,6 +999,25 @@ def main():
         if not contested:
             total_t = contest_frames[-1]["t"] if contest_frames else 0.0
             contested = [{"from": 0.0, "to": round(total_t, 2), "reason": "shr_separation<threshold"}]
+
+    # tracks.json: 解析済みの「原盤」（骨格+人物ID+イベント）。これがあれば以降の
+    # 技検出ルールの調整・骨格動画の再生成・新検出器の遡及適用は YOLO を回さず数秒で済む
+    # （重い知覚は動画1本につき1回だけ、という方針。ユーザー発案）
+    tracks_path = os.path.join(os.path.dirname(os.path.abspath(output_path)), "tracks.json")
+    with open(tracks_path, "w") as f:
+        json.dump({
+            "version": 1,
+            "video": os.path.basename(video_path),
+            "fps": fps,
+            "sampledFps": round(effective_fps, 2),
+            "leaderPid": leader_pid,
+            "frames": [
+                {k: v for k, v in df.items() if k != "kept"} | {
+                    "kept": [{k: v for k, v in p.items() if k != "hist"} for p in df["kept"]],
+                }
+                for df in draw_frames
+            ],
+        }, f)
 
     with open(output_path, "w") as f:
         json.dump({

@@ -145,6 +145,25 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
       const scriptPath = path.resolve(__dirname, '../analysis', step.script);
       await runPython([scriptPath, ...step.args(ctx)], signal);
     }
+    // ビート格子（ロードマップ③）: 音声を WAV 化して BPM・拍時刻を推定し、
+    // measurements.json に beatGrid と各イベントの拍情報を書き加える。
+    // 無音・リズム不明瞭でも解析全体は止めない（beatGrid: null になるだけ）
+    if (ffmpegPath && existsSync(ctx.measurementsPath)) {
+      const audioPath = path.join(outDir, 'audio.wav');
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const proc = spawn(ffmpegPath, ['-y', '-i', ctx.videoPath, '-ac', '1', '-ar', '22050', audioPath], { signal });
+          proc.on('error', reject);
+          proc.on('exit', code => (code === 0 ? resolve() : reject(new Error(`ffmpeg audio exited ${code}`))));
+        });
+        await runPython([path.resolve(__dirname, '../analysis/analyze_beats.py'), audioPath, ctx.measurementsPath], signal);
+      } catch (e) {
+        console.warn(`[jobWorker] beat grid skipped: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        rmSync(audioPath, { force: true });
+      }
+    }
+
     const extractScript = path.resolve(__dirname, '../analysis/extract_keyframes.py');
     // contested 区間があれば各区間の {始点・中間・終点} のキーフレームを書き出す（Claude 裁定用）
     const contested = readContested(ctx.measurementsPath);

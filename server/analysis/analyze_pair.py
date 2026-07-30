@@ -62,6 +62,8 @@ MIN_CLEAN_SAMPLES = 10     # verdict をクリーンフレームから出すの�
 ROI_MARGIN = 0.15          # ペアbboxに足すマージン（正規化座標）
 ROI_GRAY = 128             # マスクの塗りつぶし色
 EDGE_MARGIN = 0.01         # bbox がこの距離以内で画面左右端に接していたら「見切れ」扱い
+SPECTATOR_AREA_RATIO = 0.45  # ペアの典型bbox面積のこの割合未満は観客とみなし候補から除外
+SPECTATOR_AREA_EMA = 0.05    # 典型面積の更新率
 
 
 def measure_person(box_xyxyn, kps_xy, kps_conf, det_conf, frame_w, frame_h):
@@ -168,8 +170,10 @@ def render_skeleton_video(skeleton_video_path, draw_frames, leader_pid, effectiv
         for p in df["kept"]:
             if "kps" not in p:
                 continue
-            if leader_pid is None or p.get("pid") is None:
+            if leader_pid is None:
                 color = COLOR_NEUTRAL
+            elif p.get("pid") is None:
+                continue  # ダンサーと同定できない人物（観客等）は骨格人形に出さない
             elif p["pid"] == leader_pid:
                 color = COLOR_LEADER
             else:
@@ -232,6 +236,7 @@ COLOR_REJECTED = (0, 0, 255)     # 赤: 背景人物として除外
 
 TORSO_HIST_REGION = 0.55   # bbox 上部何割をヒストグラム対象にするか（胴体+腕。脚は両者とも黒で無情報）
 APPEARANCE_EMA = 0.1       # 外見リファレンスの更新率（小さいほどオクルージョン混入に頑健）
+APPEARANCE_MAX_DIST = 1.2  # どちらのダンサーの外見にも似ていない人物にはIDを与えない（観客の保険）
 
 
 def torso_hist(frame, bbox):
@@ -283,6 +288,9 @@ def assign_appearance_ids(draw_frames):
         else:
             continue
         for p, pid in zip(ks, pids):
+            # どちらのダンサーにも似ていない外見（観客等）にはIDを与えない
+            if hist_dist(p["hist"], refs[pid]) > APPEARANCE_MAX_DIST:
+                continue
             p["pid"] = pid
             refs[pid] = (1.0 - APPEARANCE_EMA) * refs[pid] + APPEARANCE_EMA * p["hist"]
 
@@ -733,6 +741,7 @@ def main():
     roi_masked_frames = 0
     roi_resets = 0
     edge_clipped_frames = 0  # 見切れにより verdict から除外したペアフレーム数
+    typical_area = None  # ペアの典型bbox面積（観客フィルタの基準。小さい方のダンサーのEMA）
     draw_frames = []    # デバッグ動画用の描画データ（2パス目で色を塗る）
 
     while True:
@@ -752,8 +761,20 @@ def main():
             roi_masked_frames += 1
 
         candidates = detect_persons(model, work)
+        # 観客フィルタ: ペアの典型体格より明らかに小さい人物は候補にすら入れない。
+        # 片方のダンサーが完全に隠れた瞬間に、面積上位2人ルールで鏡の撮影者等が
+        # 「2人目」に昇格してしまう問題への対策（骨格人形動画に観客が急に出現した実測）
+        if typical_area is not None:
+            spectators = [c for c in candidates if c["bboxArea"] < SPECTATOR_AREA_RATIO * typical_area]
+            candidates = [c for c in candidates if c not in spectators]
+        else:
+            spectators = []
         persons = pick_main_pair(candidates)  # 背景の第三者を弾く（ROI内に紛れた場合の保険）
-        rejected = [c for c in candidates if c not in persons]
+        rejected = spectators + [c for c in candidates if c not in persons]
+        if len(persons) == 2:
+            smaller = min(p["bboxArea"] for p in persons)
+            typical_area = smaller if typical_area is None \
+                else (1 - SPECTATOR_AREA_EMA) * typical_area + SPECTATOR_AREA_EMA * smaller
 
         # ROI更新:
         #  - 2人検出: ペアのbbox合併+マージンで追従

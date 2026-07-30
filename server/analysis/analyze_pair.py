@@ -168,7 +168,9 @@ def render_skeleton_video(skeleton_video_path, draw_frames, leader_pid, effectiv
         canvas = np.full((h, w, 3), 24, dtype=np.uint8)  # ほぼ黒の背景
         # 床のガイド線（空間の感覚を残す）
         cv2.line(canvas, (0, int(h * 0.92)), (w, int(h * 0.92)), (60, 60, 60), 2)
-        for p in df["kept"]:
+        # 奥行き順に描画（画家のアルゴリズム）: 足元（bbox下端）が画面上で高い=遠い人を先に、
+        # 低い=カメラに近い人を後に描く → 重なったとき手前の人が正しく上に乗る
+        for p in sorted(df["kept"], key=lambda q: q["bbox"][3]):
             if "kps" not in p:
                 continue
             if leader_pid is None:

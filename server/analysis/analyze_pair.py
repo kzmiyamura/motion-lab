@@ -336,6 +336,62 @@ def detect_cbl(draw_frames):
 
 HOLD_DIST = 0.07       # 手首間の正規化距離がこれ未満なら「つないでいる」
 HOLD_WINDOW_SEC = 0.35  # イベント時刻の前後この範囲でホールドを判定
+HOLD_SEG_MIN_SEC = 0.5  # ホールドタイムラインに載せる区間の最小長
+HOLD_MISS_TOLERANCE = 3  # 区間を切らずに許容する連続取りこぼしサンプル数（10fpsで0.3秒）
+
+
+def nearest_hold_pair(df, leader_pid):
+    """1フレームの最近接手首ペアを返す: ("L-R"等, 距離) or None"""
+    by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
+    if leader_pid not in by_pid or (1 - leader_pid) not in by_pid:
+        return None
+    lw = by_pid[leader_pid]["wrists"]
+    fw = by_pid[1 - leader_pid]["wrists"]
+    best = None
+    for lk in ("L", "R"):
+        for fk in ("L", "R"):
+            if lw[lk] is None or fw[fk] is None:
+                continue
+            d = math.hypot(lw[lk][0] - fw[fk][0], lw[lk][1] - fw[fk][1])
+            if best is None or d < best[1]:
+                best = (f"{lk}-{fk}", d)
+    return best
+
+
+def hold_label_jp(pair):
+    jp = {"L": "左手", "R": "右手"}
+    lk, fk = pair.split("-")
+    return f"リーダー{jp[lk]}×フォロワー{jp[fk]}"
+
+
+def build_hold_timeline(draw_frames, leader_pid):
+    """全編のホールド（手のつなぎ）区間: [{from, to, hold}]
+
+    技の瞬間だけでなく「技と技の間でどう手を持ち替えたか」を Claude が
+    レポートの連鎖記述に使う。1サンプルの欠落（オクルージョン等）は無視して繋ぐ
+    """
+    if leader_pid is None:
+        return []
+    samples = []  # (t, pair or None)
+    for df in draw_frames:
+        best = nearest_hold_pair(df, leader_pid)
+        samples.append((df["t"], best[0] if best is not None and best[1] < HOLD_DIST else None))
+
+    segs = []
+    cur, start, last_t, miss = None, None, None, 0
+    def flush():
+        if cur is not None and start is not None and last_t - start >= HOLD_SEG_MIN_SEC:
+            segs.append({"from": round(start, 2), "to": round(last_t, 2), "hold": hold_label_jp(cur)})
+    for t, p in samples:
+        if p == cur:
+            last_t, miss = t, 0
+        elif p is None and miss < HOLD_MISS_TOLERANCE:
+            miss += 1  # 手首の取りこぼし（頭上・オクルージョン）は少しの間なら区間を切らない
+        else:
+            flush()
+            cur, start, last_t, miss = p, t, t, 0
+    flush()
+    return [s for s in segs]
 
 
 def detect_hold(draw_frames, t_center, leader_pid):
@@ -352,27 +408,12 @@ def detect_hold(draw_frames, t_center, leader_pid):
     for df in draw_frames:
         if abs(df["t"] - t_center) > HOLD_WINDOW_SEC:
             continue
-        by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
-        if leader_pid not in by_pid or (1 - leader_pid) not in by_pid:
-            continue
-        lw = by_pid[leader_pid]["wrists"]
-        fw = by_pid[1 - leader_pid]["wrists"]
-        best = None
-        for lk in ("L", "R"):
-            for fk in ("L", "R"):
-                if lw[lk] is None or fw[fk] is None:
-                    continue
-                d = math.hypot(lw[lk][0] - fw[fk][0], lw[lk][1] - fw[fk][1])
-                if best is None or d < best[0]:
-                    best = (d, f"{lk}-{fk}")
-        if best is not None and best[0] < HOLD_DIST:
-            votes[best[1]] = votes.get(best[1], 0) + 1
+        best = nearest_hold_pair(df, leader_pid)
+        if best is not None and best[1] < HOLD_DIST:
+            votes[best[0]] = votes.get(best[0], 0) + 1
     if not votes:
         return None
-    pair = max(votes, key=lambda k: votes[k])
-    jp = {"L": "左手", "R": "右手"}
-    lk, fk = pair.split("-")
-    return f"リーダー{jp[lk]}×フォロワー{jp[fk]}"
+    return hold_label_jp(max(votes, key=lambda k: votes[k]))
 
 
 def detect_events(draw_frames, leader_pid):
@@ -739,9 +780,10 @@ def main():
 
     cap.release()
 
-    # 外見IDの割り当て → 技イベント検出（Turn/CBL。デバッグ動画の有無に関わらず実行）
+    # 外見IDの割り当て → 技イベント検出（Turn/CBL）+ ホールドタイムライン（デバッグ動画の有無に関わらず実行）
     leader_pid = assign_appearance_ids(draw_frames) if draw_frames else None
     events = detect_events(draw_frames, leader_pid) if draw_frames else []
+    hold_timeline = build_hold_timeline(draw_frames, leader_pid) if draw_frames else []
 
     # デバッグ動画（2パス目）: 全編の計測を踏まえたロールで色を塗り、イベントラベルを焼き込む
     if debug_video_path is not None and draw_frames:
@@ -831,6 +873,8 @@ def main():
                 "contestedDropped": dropped,
                 # 技イベント候補（ルールベース検出。採用可否は P2 の Claude が裁定）
                 "events": events,
+                # 手のつなぎの全編タイムライン（技間の持ち替えを連鎖記述に使う）
+                "holdTimeline": hold_timeline,
             },
         }, f)
 

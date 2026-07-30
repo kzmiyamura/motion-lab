@@ -152,17 +152,18 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
       const times = contested.flatMap(seg => [seg.from, (seg.from + seg.to) / 2, seg.to]);
       await runPython([extractScript, ctx.videoPath, keyframesDir, 'contested', ...times.map(t => t.toFixed(2))], signal);
     }
-    // 技イベント毎に「技の最中」のキーフレームを書き出す（Claude が回転方向・手のつなぎ・
-    // 入り/出口を目視して再現可能な記述を書くための材料。上限あり — Max 枠の画像消費を抑える）
+    // 技イベント毎に「入り・最中・出口」の3枚のキーフレームを書き出す（Claude が回転方向・
+    // 手のつなぎ・技の流れを目視して再現可能な連鎖記述を書くための材料）。
+    // 上限超過時は先頭からの切り捨てではなく均等サンプリング（終盤の技が丸ごと消える実測バグの修正）
     const events = readEvents(ctx.measurementsPath);
-    const capped = events.slice(0, MAX_EVENT_KEYFRAMES);
+    const capped = sampleEvenly(events, MAX_EVENT_KEYFRAMES);
     if (events.length > capped.length) {
-      console.log(`[jobWorker] event keyframes capped: ${capped.length}/${events.length}`);
+      console.log(`[jobWorker] event keyframes sampled: ${capped.length}/${events.length}`);
     }
     const byType = new Map<string, number[]>();
     for (const e of capped) {
       const arr = byType.get(e.type.toLowerCase()) ?? [];
-      arr.push(e.t + 0.3);
+      arr.push(Math.max(0, e.t - 0.3), e.t + 0.3, e.t + 0.9);
       byType.set(e.type.toLowerCase(), arr);
     }
     for (const [label, times] of byType) {
@@ -247,7 +248,17 @@ function debugVideoSection(jobId: string): string {
   ].join('\n');
 }
 
-const MAX_EVENT_KEYFRAMES = 12;
+const MAX_EVENT_KEYFRAMES = 8; // キーフレームを書き出す技イベント数の上限（各3枚 = 最大24枚）
+
+/** 配列を先頭・末尾を含む均等間隔で最大 max 件に間引く */
+function sampleEvenly<T>(items: T[], max: number): T[] {
+  if (items.length <= max) return items;
+  const out: T[] = [];
+  for (let i = 0; i < max; i++) {
+    out.push(items[Math.round((i * (items.length - 1)) / (max - 1))]);
+  }
+  return out;
+}
 
 interface ContestedSeg { from: number; to: number; reason: string }
 

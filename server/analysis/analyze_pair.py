@@ -83,6 +83,9 @@ def measure_person(box_xyxyn, kps_xy, kps_conf, det_conf, frame_w, frame_h):
         "hipY": round(float(hl[1] + hr[1]) / 2 / frame_h, 4),
         "shr2d": round(shoulder_w / hip_w, 4),
         "shoulderW": round(shoulder_w, 1),
+        # 左肩と右肩の画面X差（正規化・符号付き）。符号 = 体の向き（正面/背面）の指標。
+        # ターン検出は「この符号の反転回数」で行う（幅の収縮より直接的）
+        "shDx": round(float(sl[0] - sr[0]) / frame_w, 4),
         "bboxHpx": round((y1 - y0) * frame_h, 1),
         "bboxArea": round((x1 - x0) * (y1 - y0), 5),
         "bbox": (x0, y0, x1, y1),
@@ -223,47 +226,57 @@ def assign_appearance_ids(draw_frames):
 # ブラウザ版 usePoseEstimation.ts の runPatternDetection() を、オフライン+外見ID前提で強化移植。
 # あくまで「候補」であり誤検出があり得る。最終的な採用可否・命名は P2 の Claude が裁定する
 
-TURN_RATIO = 0.5          # 肩幅（対身長比）がベースラインのこの割合を下回ったらターン姿勢（横→後ろ向き）
-TURN_MIN_SAMPLES = 3      # 連続サンプル数（10fpsで0.3秒）
-TURN_BASELINE_WIN = 30    # ベースライン（直近中央値）の窓（10fpsで3秒）
-TURN_BASELINE_MIN = 10    # ベースライン計算に必要な最小サンプル
-CBL_MIN_SEP = 0.08        # 交差前後で必要な左右分離（正規化X。ジッタの往復を弾く）
-CBL_WINDOW_SEC = 2.0      # 交差の前後この秒数内に十分な分離があること
-EVENT_COOLDOWN_SEC = 2.5  # 同種イベントの最小間隔
-
-
-def median_of(values):
-    s = sorted(values)
-    return s[len(s) // 2]
+TURN_FLIP_WINDOW = 1.5     # この秒数以内に向き反転が2回 = 一回転（360°）
+TURN_FLIP_MARGIN = 0.015   # 左右肩のX分離がこれ未満（真横向き）は向き不定として無視
+TURN_SWEEP_MIN = 0.04      # 反転の前後で要求する肩分離の振り幅（しっかり正面/背面まで回ったこと）
+TURN_PRE_SEC = 1.0         # 1回目の反転前にこの秒数以内で旧向きの振り幅があること
+CBL_MIN_SEP = 0.08         # 交差前後で必要な左右分離（正規化X。ジッタの往復を弾く）
+CBL_WINDOW_SEC = 2.0       # 交差の前後この秒数内に十分な分離があること
+CBL_PIVOT_SUPPRESS_SEC = 1.2  # CBLの±この秒数内のリーダーのターンはCBLのピボット動作として棄却
+EVENT_COOLDOWN_SEC = 2.5   # 同種イベントの最小間隔
 
 
 def detect_turns(draw_frames, pid):
     """指定人物のターン候補時刻を返す。
 
-    肩幅は正面で最大・横/後ろ向きで潰れるため、「肩幅（身長で正規化）が
-    直近ベースラインの半分未満に落ちる状態が連続」を回転とみなす。
-    身長で割るのはカメラとの距離変化（近づくと肩幅ピクセルも太る）の相殺
+    COCO キーポイントは左肩(5)と右肩(6)を区別するため、画面上での左右肩の
+    並び順（shDx の符号）は体が正面向きか背面向きかを直接表す。
+    回転すると 90°/270° を跨ぐたびに符号が反転する = 一回転で2回反転。
+    「TURN_FLIP_WINDOW 秒以内の2回反転」かつ「反転の前・間でしっかり
+    正面/背面まで振れた（TURN_SWEEP_MIN 以上）」をターンとして検出する。
+    振り幅の条件が無いと、際どい向きでのジッタ反転を大量に誤検出する（実測）。
+    （初版の「肩幅の収縮」方式は横向きポーズや相手の動きでも誤発火したため廃止）
     """
-    series = []
+    series = []  # (t, shDx) 向きが確定できるサンプルのみ
     for df in draw_frames:
         for p in df["kept"]:
-            if p.get("pid") == pid and p["bboxHpx"] > 1:
-                series.append({"t": df["t"], "swn": p["shoulderW"] / p["bboxHpx"]})
+            if p.get("pid") == pid and abs(p["shDx"]) >= TURN_FLIP_MARGIN:
+                series.append((df["t"], p["shDx"]))
+    flips = []  # (時刻, 反転前の符号)
+    for (t0, d0), (t1, d1) in zip(series, series[1:]):
+        if (d0 > 0) != (d1 > 0):
+            flips.append((t1, 1 if d0 > 0 else -1))
+
+    def sweep_ok(t_from, t_to, sign):
+        """区間内に sign 向きで TURN_SWEEP_MIN 以上の分離があるか"""
+        return any(d * sign >= TURN_SWEEP_MIN for t, d in series if t_from <= t <= t_to)
+
     events = []
-    run = 0
     last_event = -1e9
-    for i, s in enumerate(series):
-        prior = [v["swn"] for v in series[max(0, i - TURN_BASELINE_WIN):i]]
-        if len(prior) < TURN_BASELINE_MIN:
-            continue
-        if s["swn"] < TURN_RATIO * median_of(prior):
-            run += 1
-            if run >= TURN_MIN_SAMPLES and s["t"] - last_event > EVENT_COOLDOWN_SEC:
-                start_t = series[i - run + 1]["t"]
-                events.append(round(start_t, 2))
-                last_event = start_t
+    i = 0
+    while i + 1 < len(flips):
+        (t1, sign_before), (t2, _) = flips[i], flips[i + 1]
+        if (
+            t2 - t1 <= TURN_FLIP_WINDOW
+            and t1 - last_event > EVENT_COOLDOWN_SEC
+            and sweep_ok(t1 - TURN_PRE_SEC, t1, sign_before)   # 反転前: 旧向きでしっかり見えていた
+            and sweep_ok(t1, t2, -sign_before)                 # 反転間: 背面までしっかり回った
+        ):
+            events.append(round(t1, 2))
+            last_event = t1
+            i += 2  # 使った反転ペアはスキップ（1回転=2反転を重複カウントしない）
         else:
-            run = 0
+            i += 1
     return events
 
 
@@ -298,17 +311,32 @@ def detect_cbl(draw_frames):
 
 
 def detect_events(draw_frames, leader_pid):
-    """全イベントを時刻順で返す: [{t, type, by}]"""
-    events = []
+    """全イベントを時刻順で返す: [{t, type, by}]
+
+    リーダーの「随伴回転」を棄却する2つのフィルタ（いずれも実測で誤検出を確認済み）:
+    - CBL 近傍: リーダーは CBL のリード動作で体を半回転させて戻す（CBLの一部でありターンではない）
+    - フォロワーのターン近傍: フォロワーを回すとき、リーダーの上体も連られて回る
+    フォロワーのターンは CBL 中でも本物（クロスボディ・インサイドターン）なので常に残す。
+    リーダーの単独ターン（フック ターン等）は近傍に何も無ければ検出される
+    """
+    cbl_times = detect_cbl(draw_frames)
+    events = [{"t": t, "type": "CBL", "by": "pair"} for t in cbl_times]
+
+    turns = {0: detect_turns(draw_frames, 0), 1: detect_turns(draw_frames, 1)}
+    follower_pid = None if leader_pid is None else 1 - leader_pid
+    follower_turns = turns.get(follower_pid, []) if follower_pid is not None else []
+
     for pid in (0, 1):
         if leader_pid is None:
             by = "unknown"
         else:
             by = "leader" if pid == leader_pid else "follower"
-        for t in detect_turns(draw_frames, pid):
+        for t in turns[pid]:
+            if by == "leader" and any(abs(t - ct) <= CBL_PIVOT_SUPPRESS_SEC for ct in cbl_times):
+                continue
+            if by == "leader" and any(abs(t - ft) <= CBL_PIVOT_SUPPRESS_SEC for ft in follower_turns):
+                continue
             events.append({"t": t, "type": "Turn", "by": by})
-    for t in detect_cbl(draw_frames):
-        events.append({"t": t, "type": "CBL", "by": "pair"})
     events.sort(key=lambda e: e["t"])
     return events
 
@@ -572,8 +600,7 @@ def main():
             "maskRoi": mask_roi,  # このフレームの検出に実際に使ったマスク
             "roi": roi,           # 検出結果で更新した後のROI（次フレームで使われる枠）
             "kept": [{"bbox": p["bbox"], "shr2d": p["shr2d"], "hipX": p["hipX"],
-                      "shoulderW": p["shoulderW"], "bboxHpx": p["bboxHpx"],
-                      "edgeClipped": p["edgeClipped"],
+                      "shDx": p["shDx"], "edgeClipped": p["edgeClipped"],
                       "hist": torso_hist(frame, p["bbox"])}  # 外見ID用（マスク前の生フレームから）
                      for p in persons],
             "rejected": [{"bbox": p["bbox"], "shr2d": p["shr2d"]} for p in rejected],

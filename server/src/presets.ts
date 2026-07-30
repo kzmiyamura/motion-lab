@@ -16,6 +16,8 @@ export interface JobContext {
   debugVideoRawPath: string;
   /** 骨格人形だけで踊りを再現した動画（mp4v生出力。同上） */
   skeletonVideoRawPath: string;
+  /** Claude アンカーが判定したリーダー位置（例: "right@5.00"）。null なら CV 単独判定 */
+  leaderHint: string | null;
 }
 
 export interface PresetDef {
@@ -33,7 +35,10 @@ export const PRESETS: Record<string, PresetDef> = {
   'salsa-pair': {
     name: 'salsa-pair',
     cvSteps: [
-      { script: 'analyze_pair.py', args: ctx => [ctx.videoPath, ctx.modelPath, ctx.measurementsPath, ctx.debugVideoRawPath, ctx.skeletonVideoRawPath] },
+      { script: 'analyze_pair.py', args: ctx => [
+        ctx.videoPath, ctx.modelPath, ctx.measurementsPath, ctx.debugVideoRawPath, ctx.skeletonVideoRawPath,
+        ...(ctx.leaderHint ? [`--leader-hint=${ctx.leaderHint}`] : []),
+      ] },
     ],
     useClaude: true, // P2: claude CLI 未導入の環境では [CLAUDE] エラーになる（server/CLAUDE.md その7参照）
   },

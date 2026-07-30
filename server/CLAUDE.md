@@ -584,3 +584,31 @@ P2 を実装した。`salsa-pair` プリセットは今後 CV計測 → **claude
 - ビート格子: jobWorker が音声を WAV 化 → `analyze_beats.py`（numpy のみ、新規 pip 依存なし）で
   BPM・拍時刻を推定し、レポートに【5-6-7】のようなカウント表記が付くようになった
 - レポート末尾の「## 動画」に debug_roi.mp4 と skeleton.mp4 の両リンクが載る
+
+---
+
+## 追加タスク（2026-07-30・その9）: リーダーアンカー — Claude とルールベースの併用方針
+
+PCの持ち主の方針転換: 「全部計算でなんとかしようとしなくていい。写真を見れば間違えようが
+ない判断（男女・リーダー）は Claude に最初に聞けばいい」。ルールベースのリーダー選択は
+4回作り直してもこの動画1本でしか検証できておらず、実際に色の全編逆転バグも起きた（`436cffd`）。
+
+### 変更内容（git pull で入る）
+1. **リーダーアンカー**: ジョブ開始時に動画から静止画3枚（2/5/9秒）を抜き、claude に
+   「リーダーは画面左右どっちか」を1回だけ判定させる（`prompts/anchor-prompt.md`・
+   `runClaudeAnchor()`）。答えは `--leader-hint=right@5.00` の形で analyze_pair.py に渡り、
+   色分け・技の帰属の基準になる
+2. claude 不在・判定不能時は従来の CV 中央値多数決（SHR×2+身長+肩幅のペア比較）に
+   自動フォールバック — P1 として claude 無しでも動く設計は維持
+3. 投票内訳とアンカーの一致/上書きを stderr にログ出力（`leader anchor agrees/override`）
+
+### 消費量への影響
+- ジョブ1件あたり claude 呼び出しが1回増える（画像3枚の軽い判定。Max 枠の消費は小）
+
+### やってほしいこと
+1. `git pull` && `pm2 restart motion-lab-server`
+2. 2fda2815 を再解析し、`pm2 logs` で以下を報告:
+   - `[claudeAnchor] leader=... (グレーシャツの男性 等)` が出るか
+   - analyze_pair の stderr に `leader anchor agrees with CV vote` が出るか
+     （Mac実測では一致。もし override が出たらそれはCV投票が間違えた動画ということ — それも貴重な報告）
+3. skeleton.mp4 / debug_roi.mp4 の男女の色が正しいか目視確認

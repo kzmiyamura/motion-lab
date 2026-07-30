@@ -718,13 +718,18 @@ def extract_contested(frames, effective_fps):
 
 
 def main():
-    if len(sys.argv) not in (4, 5, 6):
-        print("Usage: analyze_pair.py <video_path> <yolo_model_path> <output_json_path> [debug_video_path] [skeleton_video_path]", file=sys.stderr)
+    # フラグ（--key=value）と位置引数を分離
+    positional = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = dict(a.split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
+    if len(positional) not in (3, 4, 5):
+        print("Usage: analyze_pair.py <video_path> <yolo_model_path> <output_json_path> "
+              "[debug_video_path] [skeleton_video_path] [--leader-hint=<left|right>@<sec>]", file=sys.stderr)
         sys.exit(1)
 
-    video_path, model_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
-    debug_video_path = sys.argv[4] if len(sys.argv) >= 5 and sys.argv[4] != "-" else None
-    skeleton_video_path = sys.argv[5] if len(sys.argv) == 6 else None
+    video_path, model_path, output_path = positional[0], positional[1], positional[2]
+    debug_video_path = positional[3] if len(positional) >= 4 and positional[3] != "-" else None
+    skeleton_video_path = positional[4] if len(positional) == 5 else None
+    leader_hint = flags.get("--leader-hint")  # Claude アンカー（例: right@5.00）
 
     model = YOLO(model_path)
 
@@ -888,6 +893,35 @@ def main():
 
     # 外見IDの割り当て → 技イベント検出（Turn/CBL）+ ホールドタイムライン（デバッグ動画の有無に関わらず実行）
     leader_pid = assign_appearance_ids(draw_frames) if draw_frames else None
+
+    # Claude アンカーによるリーダー上書き（併用方針: 写真で間違えようがない意味判断は
+    # Claude が先に1回だけ行い、CVはそれを基準に計測する。ヒントが無い/壊れている場合は
+    # 上の中央値多数決がそのまま使われる）
+    if leader_hint and draw_frames:
+        try:
+            side, t_str = leader_hint.split("@")
+            t_hint = float(t_str)
+            best = None  # (時刻差, {pid: person})
+            for df in draw_frames:
+                by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
+                if 0 in by_pid and 1 in by_pid:
+                    d = abs(df["t"] - t_hint)
+                    if best is None or d < best[0]:
+                        best = (d, by_pid)
+            if best is not None and best[0] <= 2.0 and side in ("left", "right"):
+                by_pid = best[1]
+                right_pid = 0 if by_pid[0]["hipX"] >= by_pid[1]["hipX"] else 1
+                anchored = right_pid if side == "right" else 1 - right_pid
+                if anchored != leader_pid:
+                    print(f"leader anchor override: {leader_pid} -> {anchored} (hint={leader_hint})", file=sys.stderr)
+                else:
+                    print(f"leader anchor agrees with CV vote (hint={leader_hint})", file=sys.stderr)
+                leader_pid = anchored
+            else:
+                print(f"leader hint unusable (no pair frame near t={t_hint})", file=sys.stderr)
+        except (ValueError, KeyError) as e:
+            print(f"leader hint ignored: {e}", file=sys.stderr)
+
     events = detect_events(draw_frames, leader_pid) if draw_frames else []
     hold_timeline = build_hold_timeline(draw_frames, leader_pid) if draw_frames else []
 

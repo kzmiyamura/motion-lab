@@ -19,6 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? 'claude';
 const PROMPT_PATH = path.resolve(__dirname, '../prompts/runner-prompt.md');
+const ANCHOR_PROMPT_PATH = path.resolve(__dirname, '../prompts/anchor-prompt.md');
 const MAX_TURNS = process.env.CLAUDE_MAX_TURNS ?? '30';
 
 /** レート制限・使用量上限。リトライ（バックオフ）対象 */
@@ -34,6 +35,53 @@ export interface ClaudeRunResult {
 
 function tailOf(stdout: string, stderr: string): string {
   return `stdout: ${stdout.slice(-1000)}\nstderr: ${stderr.slice(-1000)}`;
+}
+
+/**
+ * リーダーアンカー: 解析前に Claude に静止画数枚を見せて
+ * 「リーダーが画面左右どちらか」を1回だけ判定させる（CLAUDE.md その9 / ユーザー方針:
+ * 写真を見れば間違えようがない意味判断は Claude、フレーム比例の計測はルールの分業）。
+ *
+ * 戻り値は analyze_pair.py の --leader-hint 形式（例: "right@5.00"）。
+ * 判定不能・claude 不在・パース失敗は null（CV側の中央値多数決にフォールバック）
+ */
+export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise<string | null> {
+  const promptText = readFileSync(ANCHOR_PROMPT_PATH, 'utf-8');
+  return new Promise(resolve => {
+    const proc = spawn(CLAUDE_BIN, [
+      '-p',
+      '--allowedTools', 'Read',
+      '--max-turns', '10',
+      '--output-format', 'json',
+    ], {
+      cwd: anchorDir,
+      env: { ...process.env },
+      signal,
+      shell: process.platform === 'win32',
+    });
+    let stdout = '';
+    proc.stdout.on('data', d => { stdout += d.toString(); });
+    proc.stdin.on('error', () => { /* noop */ });
+    proc.stdin.write(promptText);
+    proc.stdin.end();
+    proc.on('error', () => resolve(null));
+    proc.on('exit', code => {
+      if (code !== 0) return resolve(null);
+      try {
+        // --output-format json のエンベロープから結果テキストを取り出し、その中の JSON を拾う
+        const envelope = JSON.parse(stdout) as { result?: string };
+        const m = (envelope.result ?? '').match(/\{[^{}]*"leaderSide"[^{}]*\}/);
+        if (!m) return resolve(null);
+        const parsed = JSON.parse(m[0]) as { t: number | null; leaderSide: 'left' | 'right' | null; leaderLook?: string };
+        if (parsed.leaderSide !== 'left' && parsed.leaderSide !== 'right') return resolve(null);
+        if (typeof parsed.t !== 'number') return resolve(null);
+        console.log(`[claudeAnchor] leader=${parsed.leaderSide} at t=${parsed.t} (${parsed.leaderLook ?? '?'})`);
+        resolve(`${parsed.leaderSide}@${parsed.t.toFixed(2)}`);
+      } catch {
+        resolve(null);
+      }
+    });
+  });
 }
 
 export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSignal): Promise<ClaudeRunResult> {

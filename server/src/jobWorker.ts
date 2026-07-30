@@ -19,7 +19,7 @@ import {
 } from './db.js';
 import { isAnalysisRunning } from './analysisJob.js';
 import { PRESETS, type JobContext } from './presets.js';
-import { runClaude, ClaudeAuthError, ClaudeRateLimitError } from './claudeRunner.js';
+import { runClaude, runClaudeAnchor, ClaudeAuthError, ClaudeRateLimitError } from './claudeRunner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const JOBS_DIR = path.resolve(__dirname, '../storage/analysis-jobs');
@@ -126,6 +126,23 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     return;
   }
 
+  // リーダーアンカー: CV 実行前に Claude へ静止画数枚で「リーダーは左右どっちか」を1回だけ聞く。
+  // 写真を見れば間違えようがない意味判断を先に固定し、CVはそれを基準に色分け・帰属を行う。
+  // claude 不在・判定不能なら null（CV の中央値多数決にフォールバック — 挙動は従来どおり）
+  let leaderHint: string | null = null;
+  if (preset.useClaude && preset.cvSteps.length > 0) {
+    try {
+      const anchorDir = path.join(outDir, 'anchor');
+      mkdirSync(anchorDir, { recursive: true });
+      const extractScript = path.resolve(__dirname, '../analysis/extract_keyframes.py');
+      await runPython([extractScript, videoPath, anchorDir, 'anchor', '2.0', '5.0', '9.0'], signal);
+      leaderHint = await runClaudeAnchor(anchorDir, signal);
+      if (leaderHint === null) console.warn('[jobWorker] leader anchor unavailable, CV vote fallback');
+    } catch (e) {
+      console.warn(`[jobWorker] leader anchor skipped: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   const ctx: JobContext = {
     jobId: job.id,
     videoPath,
@@ -134,6 +151,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     measurementsPath: path.join(outDir, 'measurements.json'),
     debugVideoRawPath: path.join(outDir, 'debug_roi_raw.mp4'),
     skeletonVideoRawPath: path.join(outDir, 'skeleton_raw.mp4'),
+    leaderHint,
   };
 
   // 3. CVパス実行（直列）

@@ -236,7 +236,6 @@ COLOR_REJECTED = (0, 0, 255)     # 赤: 背景人物として除外
 
 TORSO_HIST_REGION = 0.55   # bbox 上部何割をヒストグラム対象にするか（胴体+腕。脚は両者とも黒で無情報）
 APPEARANCE_EMA = 0.1       # 外見リファレンスの更新率（小さいほどオクルージョン混入に頑健）
-APPEARANCE_MAX_DIST = 1.2  # どちらのダンサーの外見にも似ていない人物にはIDを与えない（観客の保険）
 
 
 def torso_hist(frame, bbox):
@@ -287,24 +286,39 @@ def assign_appearance_ids(draw_frames):
             pids = (0,) if hist_dist(ks[0]["hist"], refs[0]) <= hist_dist(ks[0]["hist"], refs[1]) else (1,)
         else:
             continue
+        # 注意: ここに「外見が遠い人物にIDを与えないゲート」を入れてはならない。
+        # 一度入れたところ、ダンサーが背面を向いた区間で本人のID更新まで拒否され、
+        # クラスタが途中で入れ替わって男女の色が全編逆転した（実測）。
+        # 観客の排除は検出段の体格門番（SPECTATOR_AREA_RATIO）が担う
         for p, pid in zip(ks, pids):
-            # どちらのダンサーにも似ていない外見（観客等）にはIDを与えない
-            if hist_dist(p["hist"], refs[pid]) > APPEARANCE_MAX_DIST:
-                continue
             p["pid"] = pid
             refs[pid] = (1.0 - APPEARANCE_EMA) * refs[pid] + APPEARANCE_EMA * p["hist"]
 
-    # Leader クラスタ = クリーンなペアフレームでの SHR 平均が高い方
-    sums = {0: [0.0, 0], 1: [0.0, 0]}
+    # Leader クラスタの選択: フレーム毎のペア比較（pid0 - pid1）の中央値による多数決。
+    # SHR差（重み2）+ 身長差 + 肩幅差。かつて「SHR平均が高い方」で選んでいたが、
+    # ターン中の異常値（SHR 2.8 等）が平均を汚染し、僅差（1.555 vs 1.591）で
+    # 女性クラスタをリーダーと誤選択→全編の色が逆転した実測がある。
+    # 中央値のペア比較は外れ値に頑健で、同一フレーム内の比較なので遠近の影響も相殺される
+    d_shr, d_h, d_sw = [], [], []
     for df in draw_frames:
-        ks = [p for p in df["kept"] if p.get("pid") is not None]
-        if len(ks) == 2 and ks[0]["pid"] != ks[1]["pid"] and not any(p["edgeClipped"] for p in ks):
-            for p in ks:
-                sums[p["pid"]][0] += p["shr2d"]
-                sums[p["pid"]][1] += 1
-    if sums[0][1] == 0 or sums[1][1] == 0:
+        ks = {p["pid"]: p for p in df["kept"] if p.get("pid") is not None}
+        if 0 in ks and 1 in ks and not (ks[0]["edgeClipped"] or ks[1]["edgeClipped"]):
+            d_shr.append(ks[0]["shr2d"] - ks[1]["shr2d"])
+            d_h.append(ks[0]["bboxHpx"] - ks[1]["bboxHpx"])
+            d_sw.append(ks[0]["shoulderW"] - ks[1]["shoulderW"])
+    if not d_shr:
         return None
-    return 0 if sums[0][0] / sums[0][1] >= sums[1][0] / sums[1][1] else 1
+
+    def med(v):
+        s = sorted(v)
+        return s[len(s) // 2]
+
+    score = 2 * (1 if med(d_shr) >= 0 else -1) \
+        + (1 if med(d_h) >= 0 else -1) \
+        + (1 if med(d_sw) >= 0 else -1)
+    print(f"leader cluster vote: medSHRdiff={med(d_shr):.3f} medHdiff={med(d_h):.1f} "
+          f"medSWdiff={med(d_sw):.1f} score={score} pairs={len(d_shr)}", file=sys.stderr)
+    return 0 if score > 0 else 1
 
 
 # --- 技イベント検出（ロードマップ②: Turn / CBL のタイムスタンプ候補） ---
@@ -807,6 +821,7 @@ def main():
             "roi": roi,           # 検出結果で更新した後のROI（次フレームで使われる枠）
             "kept": [{"bbox": p["bbox"], "shr2d": p["shr2d"], "hipX": p["hipX"],
                       "shDx": p["shDx"], "wrists": p["wrists"], "edgeClipped": p["edgeClipped"],
+                      "shoulderW": p["shoulderW"], "bboxHpx": p["bboxHpx"],  # リーダークラスタ判定用
                       "kps": p["kps"],  # 骨格人形レンダリング用
                       "hist": torso_hist(frame, p["bbox"])}  # 外見ID用（マスク前の生フレームから）
                      for p in persons],

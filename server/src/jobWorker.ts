@@ -133,6 +133,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     jobDir,
     measurementsPath: path.join(outDir, 'measurements.json'),
     debugVideoRawPath: path.join(outDir, 'debug_roi_raw.mp4'),
+    skeletonVideoRawPath: path.join(outDir, 'skeleton_raw.mp4'),
   };
 
   // 3. CVパス実行（直列）
@@ -188,8 +189,9 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     for (const [label, times] of byType) {
       await runPython([extractScript, ctx.videoPath, keyframesDir, label, ...times.map(t => t.toFixed(2))], signal);
     }
-    // ROIデバッグ動画（mp4v）をブラウザ再生可能な H.264 へ変換
+    // ROIデバッグ動画・骨格人形動画（mp4v）をブラウザ再生可能な H.264 へ変換
     await transcodeDebugVideo(ctx.debugVideoRawPath, path.join(outDir, 'debug_roi.mp4'), signal);
+    await transcodeDebugVideo(ctx.skeletonVideoRawPath, path.join(outDir, 'skeleton.mp4'), signal);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     markJobError(job.id, signal.aborted ? `[TIMEOUT] CVパスがタイムアウトしました` : `[CV] ${msg}`);
@@ -257,14 +259,23 @@ function handleClaudeFailure(job: AnalysisJobRow, e: unknown, signal: AbortSigna
   console.log(`[jobWorker] job ${job.id} claude failed, retry once: ${msg.slice(0, 200)}`);
 }
 
-/** デバッグ動画が生成されていればレポート末尾に案内を付ける（CV/Claude 両パス共通） */
+/** デバッグ動画・骨格人形動画が生成されていればレポート末尾に案内を付ける（CV/Claude 両パス共通） */
 function debugVideoSection(jobId: string): string {
-  if (!existsSync(path.join(jobDirOf(jobId), 'out/debug_roi.mp4'))) return '';
-  return [
-    ``, ``, `## デバッグ動画`, ``,
-    `背景マスク（ROI）と検出枠の可視化: [debug_roi.mp4](/analysis-output/${jobId}/out/debug_roi.mp4)`,
-    `（金枠=ROI、青=Leader、ピンク=Follower、赤枠=除外した背景人物。ROI外はグレーで塗りつぶし）`,
-  ].join('\n');
+  const lines: string[] = [];
+  if (existsSync(path.join(jobDirOf(jobId), 'out/debug_roi.mp4'))) {
+    lines.push(
+      `検出の可視化: [debug_roi.mp4](/analysis-output/${jobId}/out/debug_roi.mp4)`,
+      `（金枠=ROI、青=Leader、ピンク=Follower、赤枠=除外した背景人物）`,
+    );
+  }
+  if (existsSync(path.join(jobDirOf(jobId), 'out/skeleton.mp4'))) {
+    lines.push(
+      ``, `骨格人形での踊りの再現: [skeleton.mp4](/analysis-output/${jobId}/out/skeleton.mp4)`,
+      `（実写なし。青=Leader、ピンク=Follower、技ラベル付き）`,
+    );
+  }
+  if (lines.length === 0) return '';
+  return ['', '', '## 動画', '', ...lines].join('\n');
 }
 
 const MAX_EVENT_KEYFRAMES = 8; // キーフレームを書き出す技イベント数の上限（各3枚 = 最大24枚）
@@ -386,11 +397,7 @@ function buildCvOnlyReport(job: AnalysisJobRow, cvStepCount: number, measurement
     lines.push(`拮抗区間はありませんでした（ルールベース判定のみで確定）。`);
   }
 
-  if (existsSync(path.join(jobDirOf(job.id), 'out/debug_roi.mp4'))) {
-    lines.push(``, `## デバッグ動画`, ``,
-      `背景マスク（ROI）と検出枠の可視化: [debug_roi.mp4](/analysis-output/${job.id}/out/debug_roi.mp4)`,
-      `（金枠=ROI、緑枠=採用ペア、赤枠=除外した背景人物。ROI外はグレーで塗りつぶし）`);
-  }
+  lines.push(debugVideoSection(job.id));
 
   return {
     resultJson: JSON.stringify({

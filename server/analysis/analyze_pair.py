@@ -121,8 +121,76 @@ def detect_persons(model, frame):
     for i in range(len(boxes_n)):
         m = measure_person(boxes_n[i], kps_xy[i], kps_conf[i], confs[i], w, h)
         if m is not None:
+            # 骨格人形レンダリング用の全キーポイント（正規化 + conf）
+            m["kps"] = [(round(float(kps_xy[i][k][0]) / w, 4), round(float(kps_xy[i][k][1]) / h, 4),
+                         round(float(kps_conf[i][k]), 2)) for k in range(len(kps_xy[i]))]
             persons.append(m)
     return persons
+
+
+# COCO 17キーポイントの骨格エッジ（骨格人形の線）
+SKELETON_EDGES = [
+    (5, 6),                      # 肩
+    (5, 7), (7, 9),              # 左腕
+    (6, 8), (8, 10),             # 右腕
+    (5, 11), (6, 12), (11, 12),  # 胴体
+    (11, 13), (13, 15),          # 左脚
+    (12, 14), (14, 16),          # 右脚
+]
+SKELETON_KP_CONF = 0.3
+
+
+def draw_skeleton_person(canvas, kps, color, w, h):
+    """1人分の骨格人形を描く（低confの関節は省略。頭は鼻の位置に円）"""
+    def px(k):
+        return int(kps[k][0] * w), int(kps[k][1] * h)
+    for a, b in SKELETON_EDGES:
+        if kps[a][2] >= SKELETON_KP_CONF and kps[b][2] >= SKELETON_KP_CONF:
+            cv2.line(canvas, px(a), px(b), color, 5, cv2.LINE_AA)
+    for k in range(5, 17):
+        if kps[k][2] >= SKELETON_KP_CONF:
+            cv2.circle(canvas, px(k), 5, color, -1, cv2.LINE_AA)
+    # 頭: 鼻(0)を中心に、肩幅から推定した半径の円
+    if kps[0][2] >= SKELETON_KP_CONF and kps[5][2] >= SKELETON_KP_CONF and kps[6][2] >= SKELETON_KP_CONF:
+        sw = math.hypot((kps[5][0] - kps[6][0]) * w, (kps[5][1] - kps[6][1]) * h)
+        cv2.circle(canvas, px(0), max(8, int(sw * 0.28)), color, 3, cv2.LINE_AA)
+
+
+def render_skeleton_video(skeleton_video_path, draw_frames, leader_pid, effective_fps, events, size=(720, 1280)):
+    """実写を消し、骨格人形（Leader=青 / Follower=ピンク）だけで踊りを再現した動画を書き出す"""
+    w, h = size
+    writer = cv2.VideoWriter(skeleton_video_path, cv2.VideoWriter_fourcc(*"mp4v"),
+                             max(1.0, effective_fps), (w, h))
+    for df in draw_frames:
+        canvas = np.full((h, w, 3), 24, dtype=np.uint8)  # ほぼ黒の背景
+        # 床のガイド線（空間の感覚を残す）
+        cv2.line(canvas, (0, int(h * 0.92)), (w, int(h * 0.92)), (60, 60, 60), 2)
+        for p in df["kept"]:
+            if "kps" not in p:
+                continue
+            if leader_pid is None or p.get("pid") is None:
+                color = COLOR_NEUTRAL
+            elif p["pid"] == leader_pid:
+                color = COLOR_LEADER
+            else:
+                color = COLOR_FOLLOWER
+            draw_skeleton_person(canvas, p["kps"], color, w, h)
+        # 技ラベル（デバッグ動画と同じ規則）
+        li = 0
+        for e in events:
+            if e["t"] <= df["t"] <= e["t"] + EVENT_LABEL_SEC:
+                label = e["type"].upper()
+                if e.get("rotations", 1) > 1:
+                    label += f" x{e['rotations']}"
+                if e["by"] != "pair":
+                    label += f" ({e['by']})"
+                y = 60 + li * 44
+                cv2.putText(canvas, label, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2, cv2.LINE_AA)
+                li += 1
+        # タイムコード
+        cv2.putText(canvas, f"{df['t']:5.1f}s", (w - 130, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 2)
+        writer.write(canvas)
+    writer.release()
 
 
 def pick_main_pair(persons):
@@ -628,12 +696,13 @@ def extract_contested(frames, effective_fps):
 
 
 def main():
-    if len(sys.argv) not in (4, 5):
-        print("Usage: analyze_pair.py <video_path> <yolo_model_path> <output_json_path> [debug_video_path]", file=sys.stderr)
+    if len(sys.argv) not in (4, 5, 6):
+        print("Usage: analyze_pair.py <video_path> <yolo_model_path> <output_json_path> [debug_video_path] [skeleton_video_path]", file=sys.stderr)
         sys.exit(1)
 
     video_path, model_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
-    debug_video_path = sys.argv[4] if len(sys.argv) == 5 else None
+    debug_video_path = sys.argv[4] if len(sys.argv) >= 5 and sys.argv[4] != "-" else None
+    skeleton_video_path = sys.argv[5] if len(sys.argv) == 6 else None
 
     model = YOLO(model_path)
 
@@ -717,6 +786,7 @@ def main():
             "roi": roi,           # 検出結果で更新した後のROI（次フレームで使われる枠）
             "kept": [{"bbox": p["bbox"], "shr2d": p["shr2d"], "hipX": p["hipX"],
                       "shDx": p["shDx"], "wrists": p["wrists"], "edgeClipped": p["edgeClipped"],
+                      "kps": p["kps"],  # 骨格人形レンダリング用
                       "hist": torso_hist(frame, p["bbox"])}  # 外見ID用（マスク前の生フレームから）
                      for p in persons],
             "rejected": [{"bbox": p["bbox"], "shr2d": p["shr2d"]} for p in rejected],
@@ -788,6 +858,10 @@ def main():
     # デバッグ動画（2パス目）: 全編の計測を踏まえたロールで色を塗り、イベントラベルを焼き込む
     if debug_video_path is not None and draw_frames:
         render_debug_video(video_path, debug_video_path, draw_frames, leader_pid, effective_fps, events)
+
+    # 骨格人形動画: 実写なしで踊りを再現（Leader=青 / Follower=ピンク）
+    if skeleton_video_path is not None and draw_frames:
+        render_skeleton_video(skeleton_video_path, draw_frames, leader_pid, effective_fps, events)
 
     # サマリ
     def slot_summary(s):

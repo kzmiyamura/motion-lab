@@ -576,3 +576,11 @@ P2 を実装した。`salsa-pair` プリセットは今後 CV計測 → **claude
 - `extract_keyframes.py` の引数が変更: `<video> <out_dir> <label> <t...>`（label 引数が追加）
 - Mac実測: 14件 + 回転数（9.0秒に3回転連続・28.0秒にダブルターン）+ hold 候補が全CBL/大半のターンに付与
 - 再解析時、レポートの「技のタイムライン」が再現可能な記述になっているかを重点的に報告してほしい
+
+### 【追記2】骨格人形動画 + ビート格子（同じく git pull で入る）
+
+- `analyze_pair.py` に第5引数（骨格人形動画）追加。実写なしで踊りを再現した
+  `out/skeleton.mp4`（青=Leader/ピンク=Follower/技ラベル付き）が生成・配信される
+- ビート格子: jobWorker が音声を WAV 化 → `analyze_beats.py`（numpy のみ、新規 pip 依存なし）で
+  BPM・拍時刻を推定し、レポートに【5-6-7】のようなカウント表記が付くようになった
+- レポート末尾の「## 動画」に debug_roi.mp4 と skeleton.mp4 の両リンクが載る

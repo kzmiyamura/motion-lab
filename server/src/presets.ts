@@ -14,6 +14,8 @@ export interface JobContext {
   measurementsPath: string;
   /** ROIマスク可視化のデバッグ動画（mp4v生出力。jobWorkerがH.264へ変換して配信） */
   debugVideoRawPath: string;
+  /** 骨格人形だけで踊りを再現した動画（mp4v生出力。同上） */
+  skeletonVideoRawPath: string;
 }
 
 export interface PresetDef {
@@ -31,7 +33,7 @@ export const PRESETS: Record<string, PresetDef> = {
   'salsa-pair': {
     name: 'salsa-pair',
     cvSteps: [
-      { script: 'analyze_pair.py', args: ctx => [ctx.videoPath, ctx.modelPath, ctx.measurementsPath, ctx.debugVideoRawPath] },
+      { script: 'analyze_pair.py', args: ctx => [ctx.videoPath, ctx.modelPath, ctx.measurementsPath, ctx.debugVideoRawPath, ctx.skeletonVideoRawPath] },
     ],
     useClaude: true, // P2: claude CLI 未導入の環境では [CLAUDE] エラーになる（server/CLAUDE.md その7参照）
   },

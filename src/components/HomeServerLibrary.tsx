@@ -6,6 +6,7 @@ import {
   type HomeServerVideo, type HomeServerFolder, type AnalysisJob,
 } from '../engine/homeServer';
 import { SpecEditorModal } from './SpecEditorModal';
+import { ReportModal } from './ReportModal';
 import styles from './HomeServerLibrary.module.css';
 
 const HOME_SERVER_URL = (import.meta.env.VITE_HOME_SERVER_URL ?? '') as string;
@@ -25,6 +26,8 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
   const [activeFolderHasSpec, setActiveFolderHasSpec] = useState(false);
   // 動画IDごとの最新解析ジョブ（フォルダ所属の動画のみ取得）
   const [latestJobs, setLatestJobs] = useState<Record<string, AnalysisJob | undefined>>({});
+  // レポートモーダル（✅解析済みバッジのタップで開く）
+  const [reportTarget, setReportTarget] = useState<{ jobId: string; title: string } | null>(null);
 
   const loadJobs = useCallback(async (targetVideos: HomeServerVideo[]) => {
     const withFolder = targetVideos.filter(v => v.folderId != null);
@@ -249,7 +252,18 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
                   if (!j) return null;
                   if (j.status === 'queued') return <p className={styles.jobBadge}>⏳ 解析待ち</p>;
                   if (j.status === 'running') return <p className={styles.jobBadge}>🔬 解析中…</p>;
-                  if (j.status === 'done') return <p className={styles.jobBadgeDone}>✅ 解析済み</p>;
+                  if (j.status === 'done') {
+                    return (
+                      <p
+                        className={styles.jobBadgeDone}
+                        role="button"
+                        title="解析レポートを開く"
+                        onClick={e => { e.stopPropagation(); setReportTarget({ jobId: j.id, title: v.title }); }}
+                      >
+                        📋 レポートを見る
+                      </p>
+                    );
+                  }
                   return <p className={styles.jobBadgeError} title={j.errorMessage ?? undefined}>⚠ 解析失敗</p>;
                 })()}
               </div>
@@ -275,6 +289,15 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
           </div>
         ))}
       </div>
+
+      {reportTarget && (
+        <ReportModal
+          jobId={reportTarget.jobId}
+          videoTitle={reportTarget.title}
+          baseUrl={HOME_SERVER_URL}
+          onClose={() => setReportTarget(null)}
+        />
+      )}
 
       {specOpen && activeFolderId && (
         <SpecEditorModal

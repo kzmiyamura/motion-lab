@@ -221,6 +221,13 @@
   font-size: 0.6rem;
   color: #4caf7d;
   margin: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.jobBadgeDone:hover {
+  color: #6fd49e;
 }
 
 .jobBadgeError {

@@ -1,0 +1,148 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+  max-width: 640px;
+  max-height: 90vh;
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
+  border-radius: 12px;
+  padding: 0.9rem;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  margin: 0;
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  color: var(--color-fg-dim);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+
+.body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.h1 {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  margin: 0.3rem 0 0;
+}
+
+.h2 {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  margin: 0.5rem 0 0;
+  border-bottom: 1px solid var(--color-border2);
+  padding-bottom: 0.2rem;
+}
+
+.h3 {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  margin: 0.3rem 0 0;
+}
+
+.para {
+  font-size: 0.7rem;
+  line-height: 1.6;
+  color: var(--color-fg);
+  margin: 0;
+}
+
+.para a,
+.list a,
+.table a {
+  color: var(--color-accent);
+}
+
+.list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.list li {
+  font-size: 0.7rem;
+  line-height: 1.55;
+  color: var(--color-fg);
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  border-collapse: collapse;
+  font-size: 0.66rem;
+  width: 100%;
+}
+
+.table th,
+.table td {
+  border: 1px solid var(--color-border2);
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  color: var(--color-fg);
+  white-space: nowrap;
+}
+
+.table th {
+  background: var(--color-ui-dark2);
+  font-weight: 700;
+}
+
+.hint {
+  font-size: 0.68rem;
+  color: var(--color-fg-dim);
+  margin: 0;
+}
+
+.error {
+  font-size: 0.7rem;
+  color: #ff6060;
+  margin: 0;
+}
+
+.meta {
+  font-size: 0.62rem;
+  color: var(--color-fg-dim);
+  margin: 0;
+  text-align: right;
+}

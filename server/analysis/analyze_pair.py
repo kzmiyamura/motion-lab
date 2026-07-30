@@ -45,6 +45,8 @@ from ultralytics import YOLO
 # COCO 17 keypoints
 LEFT_SHOULDER = 5
 RIGHT_SHOULDER = 6
+LEFT_WRIST = 9
+RIGHT_WRIST = 10
 LEFT_HIP = 11
 RIGHT_HIP = 12
 
@@ -87,6 +89,13 @@ def measure_person(box_xyxyn, kps_xy, kps_conf, det_conf, frame_w, frame_h):
         # ターン検出は「この符号の反転回数」で行う（幅の収縮より直接的）
         "shDx": round(float(sl[0] - sr[0]) / frame_w, 4),
         "bboxHpx": round((y1 - y0) * frame_h, 1),
+        # 手首の正規化座標（低信頼なら None）。ペアの手のつなぎ（ホールド）検出に使う
+        "wrists": {
+            "L": (round(float(kps_xy[LEFT_WRIST][0]) / frame_w, 4), round(float(kps_xy[LEFT_WRIST][1]) / frame_h, 4))
+                 if kps_conf[LEFT_WRIST] >= KP_CONF else None,
+            "R": (round(float(kps_xy[RIGHT_WRIST][0]) / frame_w, 4), round(float(kps_xy[RIGHT_WRIST][1]) / frame_h, 4))
+                 if kps_conf[RIGHT_WRIST] >= KP_CONF else None,
+        },
         "bboxArea": round((x1 - x0) * (y1 - y0), 5),
         "bbox": (x0, y0, x1, y1),
         "conf": round(float(det_conf), 3),
@@ -230,6 +239,8 @@ TURN_FLIP_WINDOW = 1.5     # この秒数以内に向き反転が2回 = 一回�
 TURN_FLIP_MARGIN = 0.015   # 左右肩のX分離がこれ未満（真横向き）は向き不定として無視
 TURN_SWEEP_MIN = 0.04      # 反転の前後で要求する肩分離の振り幅（しっかり正面/背面まで回ったこと）
 TURN_PRE_SEC = 1.0         # 1回目の反転前にこの秒数以内で旧向きの振り幅があること
+TURN_CHAIN_GAP_SEC = 0.6   # 連続回転（ダブルターン）とみなす反転ペア間の最大間隔
+TURN_MAX_ROTATIONS = 3     # 連続回転の上限（それ以上はジッタの可能性が高い）
 CBL_MIN_SEP = 0.08         # 交差前後で必要な左右分離（正規化X。ジッタの往復を弾く）
 CBL_WINDOW_SEC = 2.0       # 交差の前後この秒数内に十分な分離があること
 CBL_PIVOT_SUPPRESS_SEC = 1.2  # CBLの±この秒数内のリーダーのターンはCBLのピボット動作として棄却
@@ -261,7 +272,7 @@ def detect_turns(draw_frames, pid):
         """区間内に sign 向きで TURN_SWEEP_MIN 以上の分離があるか"""
         return any(d * sign >= TURN_SWEEP_MIN for t, d in series if t_from <= t <= t_to)
 
-    events = []
+    events = []  # (開始時刻, 回転数)
     last_event = -1e9
     i = 0
     while i + 1 < len(flips):
@@ -272,9 +283,22 @@ def detect_turns(draw_frames, pid):
             and sweep_ok(t1 - TURN_PRE_SEC, t1, sign_before)   # 反転前: 旧向きでしっかり見えていた
             and sweep_ok(t1, t2, -sign_before)                 # 反転間: 背面までしっかり回った
         ):
-            events.append(round(t1, 2))
+            # 連続回転（ダブルターン等）: 「直後（0.6秒以内）に始まり、振り幅条件も満たす」
+            # 反転ペアのみ連結する。緩い連結は後続の別ターンやジッタを際限なく飲み込む（実測: rotations=10）
+            rotations = 1
+            i += 2
+            while (
+                rotations < TURN_MAX_ROTATIONS
+                and i + 1 < len(flips)
+                and flips[i][0] - t2 <= TURN_CHAIN_GAP_SEC
+                and flips[i + 1][0] - flips[i][0] <= TURN_FLIP_WINDOW
+                and sweep_ok(flips[i][0], flips[i + 1][0], -flips[i][1])
+            ):
+                rotations += 1
+                t2 = flips[i + 1][0]
+                i += 2
+            events.append((round(t1, 2), rotations))
             last_event = t1
-            i += 2  # 使った反転ペアはスキップ（1回転=2反転を重複カウントしない）
         else:
             i += 1
     return events
@@ -310,8 +334,49 @@ def detect_cbl(draw_frames):
     return events
 
 
+HOLD_DIST = 0.07       # 手首間の正規化距離がこれ未満なら「つないでいる」
+HOLD_WINDOW_SEC = 0.35  # イベント時刻の前後この範囲でホールドを判定
+
+
+def detect_hold(draw_frames, t_center, leader_pid):
+    """イベント時刻近傍での手のつなぎを推定する。
+
+    リーダーとフォロワーの手首4ペア（L-L, L-R, R-L, R-R）の距離を
+    近傍フレームで測り、最頻の最近接ペアが HOLD_DIST 未満なら
+    「リーダー◯手×フォロワー◯手」を返す。取れなければ None。
+    2Dの重なりでも距離が縮むため確定情報ではない（Claude がキーフレームで検証する前提の候補）
+    """
+    if leader_pid is None:
+        return None
+    votes = {}
+    for df in draw_frames:
+        if abs(df["t"] - t_center) > HOLD_WINDOW_SEC:
+            continue
+        by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
+        if leader_pid not in by_pid or (1 - leader_pid) not in by_pid:
+            continue
+        lw = by_pid[leader_pid]["wrists"]
+        fw = by_pid[1 - leader_pid]["wrists"]
+        best = None
+        for lk in ("L", "R"):
+            for fk in ("L", "R"):
+                if lw[lk] is None or fw[fk] is None:
+                    continue
+                d = math.hypot(lw[lk][0] - fw[fk][0], lw[lk][1] - fw[fk][1])
+                if best is None or d < best[0]:
+                    best = (d, f"{lk}-{fk}")
+        if best is not None and best[0] < HOLD_DIST:
+            votes[best[1]] = votes.get(best[1], 0) + 1
+    if not votes:
+        return None
+    pair = max(votes, key=lambda k: votes[k])
+    jp = {"L": "左手", "R": "右手"}
+    lk, fk = pair.split("-")
+    return f"リーダー{jp[lk]}×フォロワー{jp[fk]}"
+
+
 def detect_events(draw_frames, leader_pid):
-    """全イベントを時刻順で返す: [{t, type, by}]
+    """全イベントを時刻順で返す: [{t, type, by, rotations?, hold?}]
 
     リーダーの「随伴回転」を棄却する2つのフィルタ（いずれも実測で誤検出を確認済み）:
     - CBL 近傍: リーダーは CBL のリード動作で体を半回転させて戻す（CBLの一部でありターンではない）
@@ -320,23 +385,25 @@ def detect_events(draw_frames, leader_pid):
     リーダーの単独ターン（フック ターン等）は近傍に何も無ければ検出される
     """
     cbl_times = detect_cbl(draw_frames)
-    events = [{"t": t, "type": "CBL", "by": "pair"} for t in cbl_times]
+    events = [{"t": t, "type": "CBL", "by": "pair", "hold": detect_hold(draw_frames, t, leader_pid)}
+              for t in cbl_times]
 
     turns = {0: detect_turns(draw_frames, 0), 1: detect_turns(draw_frames, 1)}
     follower_pid = None if leader_pid is None else 1 - leader_pid
-    follower_turns = turns.get(follower_pid, []) if follower_pid is not None else []
+    follower_turn_times = [t for t, _ in turns.get(follower_pid, [])] if follower_pid is not None else []
 
     for pid in (0, 1):
         if leader_pid is None:
             by = "unknown"
         else:
             by = "leader" if pid == leader_pid else "follower"
-        for t in turns[pid]:
+        for t, rotations in turns[pid]:
             if by == "leader" and any(abs(t - ct) <= CBL_PIVOT_SUPPRESS_SEC for ct in cbl_times):
                 continue
-            if by == "leader" and any(abs(t - ft) <= CBL_PIVOT_SUPPRESS_SEC for ft in follower_turns):
+            if by == "leader" and any(abs(t - ft) <= CBL_PIVOT_SUPPRESS_SEC for ft in follower_turn_times):
                 continue
-            events.append({"t": t, "type": "Turn", "by": by})
+            events.append({"t": t, "type": "Turn", "by": by, "rotations": rotations,
+                           "hold": detect_hold(draw_frames, t, leader_pid)})
     events.sort(key=lambda e: e["t"])
     return events
 
@@ -394,8 +461,16 @@ def render_debug_video(video_path, debug_video_path, draw_frames, leader_pid, ef
                     debug_video_path, cv2.VideoWriter_fourcc(*"mp4v"),
                     max(1.0, effective_fps), (w0, h0),
                 )
-            labels = [f"{e['type'].upper()} ({e['by']})" if e["by"] != "pair" else e["type"].upper()
-                      for e in events if e["t"] <= df["t"] <= e["t"] + EVENT_LABEL_SEC]
+            labels = []
+            for e in events:
+                if not (e["t"] <= df["t"] <= e["t"] + EVENT_LABEL_SEC):
+                    continue
+                label = e["type"].upper()
+                if e.get("rotations", 1) > 1:
+                    label += f" x{e['rotations']}"
+                if e["by"] != "pair":
+                    label += f" ({e['by']})"
+                labels.append(label)
             writer.write(draw_debug(frame, df["maskRoi"], df["roi"], df["kept"], df["rejected"], leader_pid, labels))
         frame_idx += 1
     cap.release()
@@ -600,7 +675,7 @@ def main():
             "maskRoi": mask_roi,  # このフレームの検出に実際に使ったマスク
             "roi": roi,           # 検出結果で更新した後のROI（次フレームで使われる枠）
             "kept": [{"bbox": p["bbox"], "shr2d": p["shr2d"], "hipX": p["hipX"],
-                      "shDx": p["shDx"], "edgeClipped": p["edgeClipped"],
+                      "shDx": p["shDx"], "wrists": p["wrists"], "edgeClipped": p["edgeClipped"],
                       "hist": torso_hist(frame, p["bbox"])}  # 外見ID用（マスク前の生フレームから）
                      for p in persons],
             "rejected": [{"bbox": p["bbox"], "shr2d": p["shr2d"]} for p in rejected],

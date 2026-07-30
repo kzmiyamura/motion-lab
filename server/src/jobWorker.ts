@@ -145,12 +145,28 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
       const scriptPath = path.resolve(__dirname, '../analysis', step.script);
       await runPython([scriptPath, ...step.args(ctx)], signal);
     }
+    const extractScript = path.resolve(__dirname, '../analysis/extract_keyframes.py');
     // contested 区間があれば各区間の {始点・中間・終点} のキーフレームを書き出す（Claude 裁定用）
     const contested = readContested(ctx.measurementsPath);
     if (contested.length > 0) {
       const times = contested.flatMap(seg => [seg.from, (seg.from + seg.to) / 2, seg.to]);
-      const scriptPath = path.resolve(__dirname, '../analysis/extract_keyframes.py');
-      await runPython([scriptPath, ctx.videoPath, keyframesDir, ...times.map(t => t.toFixed(2))], signal);
+      await runPython([extractScript, ctx.videoPath, keyframesDir, 'contested', ...times.map(t => t.toFixed(2))], signal);
+    }
+    // 技イベント毎に「技の最中」のキーフレームを書き出す（Claude が回転方向・手のつなぎ・
+    // 入り/出口を目視して再現可能な記述を書くための材料。上限あり — Max 枠の画像消費を抑える）
+    const events = readEvents(ctx.measurementsPath);
+    const capped = events.slice(0, MAX_EVENT_KEYFRAMES);
+    if (events.length > capped.length) {
+      console.log(`[jobWorker] event keyframes capped: ${capped.length}/${events.length}`);
+    }
+    const byType = new Map<string, number[]>();
+    for (const e of capped) {
+      const arr = byType.get(e.type.toLowerCase()) ?? [];
+      arr.push(e.t + 0.3);
+      byType.set(e.type.toLowerCase(), arr);
+    }
+    for (const [label, times] of byType) {
+      await runPython([extractScript, ctx.videoPath, keyframesDir, label, ...times.map(t => t.toFixed(2))], signal);
     }
     // ROIデバッグ動画（mp4v）をブラウザ再生可能な H.264 へ変換
     await transcodeDebugVideo(ctx.debugVideoRawPath, path.join(outDir, 'debug_roi.mp4'), signal);
@@ -231,7 +247,11 @@ function debugVideoSection(jobId: string): string {
   ].join('\n');
 }
 
+const MAX_EVENT_KEYFRAMES = 12;
+
 interface ContestedSeg { from: number; to: number; reason: string }
+
+interface TechniqueEvent { t: number; type: string; by: string; rotations?: number; hold?: string | null }
 
 interface MeasurementsSummary {
   slot0?: { shrMean: number | null; shrStd: number | null; samples: number; samplesAll?: number };
@@ -249,12 +269,22 @@ interface MeasurementsSummary {
   reliability?: { cleanPairFrames: number; allPairFrames: number; cleanRatio: number };
   contested?: ContestedSeg[];
   contestedDropped?: number;
+  events?: TechniqueEvent[];
 }
 
 function readContested(measurementsPath: string): ContestedSeg[] {
   try {
     const data = JSON.parse(readFileSync(measurementsPath, 'utf-8')) as { summary?: MeasurementsSummary };
     return data.summary?.contested ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function readEvents(measurementsPath: string): TechniqueEvent[] {
+  try {
+    const data = JSON.parse(readFileSync(measurementsPath, 'utf-8')) as { summary?: MeasurementsSummary };
+    return data.summary?.events ?? [];
   } catch {
     return [];
   }

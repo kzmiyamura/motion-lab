@@ -83,6 +83,7 @@ def measure_person(box_xyxyn, kps_xy, kps_conf, det_conf, frame_w, frame_h):
         "hipY": round(float(hl[1] + hr[1]) / 2 / frame_h, 4),
         "shr2d": round(shoulder_w / hip_w, 4),
         "shoulderW": round(shoulder_w, 1),
+        "bboxHpx": round((y1 - y0) * frame_h, 1),
         "bboxArea": round((x1 - x0) * (y1 - y0), 5),
         "bbox": (x0, y0, x1, y1),
         "conf": round(float(det_conf), 3),
@@ -218,14 +219,113 @@ def assign_appearance_ids(draw_frames):
     return 0 if sums[0][0] / sums[0][1] >= sums[1][0] / sums[1][1] else 1
 
 
-def draw_debug(frame, mask_roi, roi, kept, rejected, leader_pid):
+# --- 技イベント検出（ロードマップ②: Turn / CBL のタイムスタンプ候補） ---
+# ブラウザ版 usePoseEstimation.ts の runPatternDetection() を、オフライン+外見ID前提で強化移植。
+# あくまで「候補」であり誤検出があり得る。最終的な採用可否・命名は P2 の Claude が裁定する
+
+TURN_RATIO = 0.5          # 肩幅（対身長比）がベースラインのこの割合を下回ったらターン姿勢（横→後ろ向き）
+TURN_MIN_SAMPLES = 3      # 連続サンプル数（10fpsで0.3秒）
+TURN_BASELINE_WIN = 30    # ベースライン（直近中央値）の窓（10fpsで3秒）
+TURN_BASELINE_MIN = 10    # ベースライン計算に必要な最小サンプル
+CBL_MIN_SEP = 0.08        # 交差前後で必要な左右分離（正規化X。ジッタの往復を弾く）
+CBL_WINDOW_SEC = 2.0      # 交差の前後この秒数内に十分な分離があること
+EVENT_COOLDOWN_SEC = 2.5  # 同種イベントの最小間隔
+
+
+def median_of(values):
+    s = sorted(values)
+    return s[len(s) // 2]
+
+
+def detect_turns(draw_frames, pid):
+    """指定人物のターン候補時刻を返す。
+
+    肩幅は正面で最大・横/後ろ向きで潰れるため、「肩幅（身長で正規化）が
+    直近ベースラインの半分未満に落ちる状態が連続」を回転とみなす。
+    身長で割るのはカメラとの距離変化（近づくと肩幅ピクセルも太る）の相殺
+    """
+    series = []
+    for df in draw_frames:
+        for p in df["kept"]:
+            if p.get("pid") == pid and p["bboxHpx"] > 1:
+                series.append({"t": df["t"], "swn": p["shoulderW"] / p["bboxHpx"]})
+    events = []
+    run = 0
+    last_event = -1e9
+    for i, s in enumerate(series):
+        prior = [v["swn"] for v in series[max(0, i - TURN_BASELINE_WIN):i]]
+        if len(prior) < TURN_BASELINE_MIN:
+            continue
+        if s["swn"] < TURN_RATIO * median_of(prior):
+            run += 1
+            if run >= TURN_MIN_SAMPLES and s["t"] - last_event > EVENT_COOLDOWN_SEC:
+                start_t = series[i - run + 1]["t"]
+                events.append(round(start_t, 2))
+                last_event = start_t
+        else:
+            run = 0
+    return events
+
+
+def detect_cbl(draw_frames):
+    """CBL（クロスボディリード）候補時刻を返す。
+
+    CBL の定義そのものである「2人の左右位置の入れ替わり」を検出する。
+    腰X差の符号反転のうち、交差の前後 CBL_WINDOW_SEC 以内に十分な分離
+    （CBL_MIN_SEP 以上）が両側にあるものだけを採用（密着中のジッタを弾く）
+    """
+    pair = []  # (t, hipX[pid0] - hipX[pid1])
+    for df in draw_frames:
+        by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
+        if 0 in by_pid and 1 in by_pid:
+            pair.append((df["t"], by_pid[0]["hipX"] - by_pid[1]["hipX"]))
+    events = []
+    last_event = -1e9
+    for i in range(1, len(pair)):
+        t_prev, d_prev = pair[i - 1]
+        t_cur, d_cur = pair[i]
+        if d_prev == 0 or d_cur == 0 or (d_prev > 0) == (d_cur > 0):
+            continue
+        before = [d for t, d in pair if t_cur - CBL_WINDOW_SEC <= t < t_cur]
+        after = [d for t, d in pair if t_cur < t <= t_cur + CBL_WINDOW_SEC]
+        sign_prev = 1 if d_prev > 0 else -1
+        ok_before = any(d * sign_prev >= CBL_MIN_SEP for d in before)
+        ok_after = any(d * -sign_prev >= CBL_MIN_SEP for d in after)
+        if ok_before and ok_after and t_cur - last_event > EVENT_COOLDOWN_SEC:
+            events.append(round(t_cur, 2))
+            last_event = t_cur
+    return events
+
+
+def detect_events(draw_frames, leader_pid):
+    """全イベントを時刻順で返す: [{t, type, by}]"""
+    events = []
+    for pid in (0, 1):
+        if leader_pid is None:
+            by = "unknown"
+        else:
+            by = "leader" if pid == leader_pid else "follower"
+        for t in detect_turns(draw_frames, pid):
+            events.append({"t": t, "type": "Turn", "by": by})
+    for t in detect_cbl(draw_frames):
+        events.append({"t": t, "type": "CBL", "by": "pair"})
+    events.sort(key=lambda e: e["t"])
+    return events
+
+
+def draw_debug(frame, mask_roi, roi, kept, rejected, leader_pid, event_labels=()):
     """デバッグ動画用（2パス目）: ROI枠（金）を描画し、採用ペアを外見クラスタの
     ロール（Leader=青 / Follower=ピンク）で塗り分ける。
-    ロール不明フレームは緑、背景の除外候補は赤"""
+    ロール不明フレームは緑、背景の除外候補は赤。検出イベントは黄色ラベルで焼き込む"""
     h, w = frame.shape[:2]
     vis = apply_roi_mask(frame, mask_roi) if mask_roi is not None else frame.copy()
     if roi is not None:
         cv2.rectangle(vis, (int(roi[0] * w), int(roi[1] * h)), (int(roi[2] * w), int(roi[3] * h)), (0, 200, 255), 2)
+
+    for li, label in enumerate(event_labels):
+        y = int(h * 0.12) + li * 44
+        cv2.putText(vis, label, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 7)
+        cv2.putText(vis, label, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 255, 255), 3)
 
     persons = []
     for p in kept:
@@ -245,7 +345,10 @@ def draw_debug(frame, mask_roi, roi, kept, rejected, leader_pid):
     return vis
 
 
-def render_debug_video(video_path, debug_video_path, draw_frames, leader_pid, effective_fps):
+EVENT_LABEL_SEC = 1.2  # イベントラベルを表示し続ける秒数
+
+
+def render_debug_video(video_path, debug_video_path, draw_frames, leader_pid, effective_fps, events=()):
     """2パス目: 動画を再読して計測済みの描画データで色を塗る（推論なし・デコードのみ）"""
     by_idx = {df["frameIdx"]: df for df in draw_frames}
     cap = cv2.VideoCapture(video_path)
@@ -263,7 +366,9 @@ def render_debug_video(video_path, debug_video_path, draw_frames, leader_pid, ef
                     debug_video_path, cv2.VideoWriter_fourcc(*"mp4v"),
                     max(1.0, effective_fps), (w0, h0),
                 )
-            writer.write(draw_debug(frame, df["maskRoi"], df["roi"], df["kept"], df["rejected"], leader_pid))
+            labels = [f"{e['type'].upper()} ({e['by']})" if e["by"] != "pair" else e["type"].upper()
+                      for e in events if e["t"] <= df["t"] <= e["t"] + EVENT_LABEL_SEC]
+            writer.write(draw_debug(frame, df["maskRoi"], df["roi"], df["kept"], df["rejected"], leader_pid, labels))
         frame_idx += 1
     cap.release()
     if writer is not None:
@@ -460,17 +565,19 @@ def main():
             if slots[i] is not None:
                 prev_slots[i] = slots[i]
 
-        if debug_video_path is not None:
-            draw_frames.append({
-                "frameIdx": frame_idx,
-                "maskRoi": mask_roi,  # このフレームの検出に実際に使ったマスク
-                "roi": roi,           # 検出結果で更新した後のROI（次フレームで使われる枠）
-                "kept": [{"bbox": p["bbox"], "shr2d": p["shr2d"],
-                          "edgeClipped": p["edgeClipped"],
-                          "hist": torso_hist(frame, p["bbox"])}  # 外見ID用（マスク前の生フレームから）
-                         for p in persons],
-                "rejected": [{"bbox": p["bbox"], "shr2d": p["shr2d"]} for p in rejected],
-            })
+        # 外見ID・イベント検出・デバッグ描画で共用する追跡レコード（デバッグ動画の有無に関わらず常時記録）
+        draw_frames.append({
+            "frameIdx": frame_idx,
+            "t": t_sec,
+            "maskRoi": mask_roi,  # このフレームの検出に実際に使ったマスク
+            "roi": roi,           # 検出結果で更新した後のROI（次フレームで使われる枠）
+            "kept": [{"bbox": p["bbox"], "shr2d": p["shr2d"], "hipX": p["hipX"],
+                      "shoulderW": p["shoulderW"], "bboxHpx": p["bboxHpx"],
+                      "edgeClipped": p["edgeClipped"],
+                      "hist": torso_hist(frame, p["bbox"])}  # 外見ID用（マスク前の生フレームから）
+                     for p in persons],
+            "rejected": [{"bbox": p["bbox"], "shr2d": p["shr2d"]} for p in rejected],
+        })
 
         both = slots[0] is not None and slots[1] is not None
         occluded = False
@@ -530,10 +637,13 @@ def main():
 
     cap.release()
 
-    # デバッグ動画（2パス目）: 全編の計測を踏まえた平滑化ロールで色を塗る
+    # 外見IDの割り当て → 技イベント検出（Turn/CBL。デバッグ動画の有無に関わらず実行）
+    leader_pid = assign_appearance_ids(draw_frames) if draw_frames else None
+    events = detect_events(draw_frames, leader_pid) if draw_frames else []
+
+    # デバッグ動画（2パス目）: 全編の計測を踏まえたロールで色を塗り、イベントラベルを焼き込む
     if debug_video_path is not None and draw_frames:
-        leader_pid = assign_appearance_ids(draw_frames)
-        render_debug_video(video_path, debug_video_path, draw_frames, leader_pid, effective_fps)
+        render_debug_video(video_path, debug_video_path, draw_frames, leader_pid, effective_fps, events)
 
     # サマリ
     def slot_summary(s):
@@ -617,13 +727,16 @@ def main():
                 "reliability": reliability,
                 "contested": contested,
                 "contestedDropped": dropped,
+                # 技イベント候補（ルールベース検出。採用可否は P2 の Claude が裁定）
+                "events": events,
             },
         }, f)
 
     print(
         f"done: {sampled}/{frame_idx} frames sampled, "
         f"pairFrames clean={reliability['cleanPairFrames']}/all={reliability['allPairFrames']}, "
-        f"verdict={verdict}, contested={len(contested)} (+{dropped} dropped)",
+        f"verdict={verdict}, contested={len(contested)} (+{dropped} dropped), "
+        f"events={events}",
         file=sys.stderr,
     )
 

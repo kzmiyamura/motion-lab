@@ -8,6 +8,10 @@
     - `leaderAtStart: {side, t}` — 開始時に SHR が高い側（Leader候補）が画面左右どちらにいたか
     - `highSideConsistency` — 高SHR側が同じ側に居続けた割合。低い＝交差（ターン等）が多く位置での追跡が難しい動画
   - `summary.reliability` — `cleanRatio`（オクルージョン除外後の比率）等。低いほどルールベースの信頼度が下がる
+  - `summary.events[]` — 技イベントの**候補**: `{t: 秒, type: "Turn"|"CBL", by: "leader"|"follower"|"pair"}`。
+    ルールベース検出（Turn=肩幅の収縮、CBL=左右の入れ替わり）なので誤検出があり得る。
+    レポートには時系列の表として載せ、キーフレームや文脈から見て明らかに不自然なもの
+    （例: 開始1秒以内・同時刻の重複）は「怪しい」と注記するか除外してよい
   - `persons[]` — フレーム毎の計測。スロット番号は空間追跡のIDであり人物の同一性は保証されない（交差で入れ替わり得る）
 - `out/keyframes/*.jpg` — 判定が難しい区間（contested）の静止画。ファイル名は `<秒（0埋め）>_contested.jpg`（例: `000034.2_contested.jpg`）
 
@@ -37,9 +41,15 @@
   "contestedResolutions": [
     { "from": 0.0, "to": 0.0, "resolvedLeader": "left" | "right" | null, "note": "..." }
   ],
+  "events": [
+    { "t": 0.0, "type": "Turn" | "CBL", "by": "leader" | "follower" | "pair", "verdict": "ok" | "doubtful" }
+  ],
   "notes": "全体の補足"
 }
 ```
+
+- `events` は `summary.events` の候補をあなたが検分した結果。明らかな誤検出は落とし、
+  怪しいが確定できないものは `verdict: "doubtful"` で残す
 
 - `specVersion` は spec.md frontmatter の `version` の値
 - `leader.side` は**開始時点**の Leader の位置。動画の途中で左右が入れ替わっても開始時点で表す

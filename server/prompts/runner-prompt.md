@@ -19,6 +19,12 @@
     例: CBL は 5-6-7 に乗る、On2 のフォロワーターンは 6 で始まることが多い）に沿って、
     全イベントの count8 に一定のオフセットを加えたとき最も自然になる位相を選び、
     各技に【5-6-7】のようなカウント表記を付ける。位相の根拠は notes に一言書く
+  - `summary.onBeat` — On1/On2 判定の CV 材料（beatGrid が取れたときのみ。無ければ null）:
+    `{leaderBreaks, beatHistogram8, dominantBeatsMod8, onBeatRatio, meanAbsOffsetBeats, parity, regularity}`。
+    リーダーの腰Xの折り返し（ブレーク）を beatGrid に畳んだもの。**musical count-1 は音声から未確定**なので、
+    CV は「ブレークがグリッド上のどの拍位置（`dominantBeatsMod8`）に集まるか」までしか出せない。
+    `regularity` が高い（1に近い）＝きれいな2拍周期のベーシック、低い＝ブレークが不規則（ターン主体・計測難）。
+    **あなたが On1 か On2 かを確定する**（下記ステップ）
   - `summary.holdTimeline[]` — 手のつなぎが**確認できた瞬間**の区間リスト: `{from, to, hold}`。
     手首が速く動くため全編は覆わない（点列と考える）。技間の持ち替えの根拠として使い、
     空白区間は画像から補うか「不明」とする（画像と矛盾したら画像を優先）
@@ -32,8 +38,9 @@
 1. `out/measurements.json` を読み、CVの一次判定（`summary.verdictByRule`）を確認する
 2. `summary.contested` の各区間について、対応するキーフレーム画像を見て裁定する
 3. `summary.events` の各技について、キーフレーム画像を見て**再現可能な記述**を書く（下記）
-4. `out/result.json` に機械可読の最終結果を書く（スキーマは下記）
-5. `out/report.md` に人間向けレポートを書く。形式は spec.md の「レポート形式」に従う（指定が無ければ、サマリ→技の詳細→根拠→難所の順の簡潔な Markdown）。タイムスタンプは mm:ss 表記
+4. **On1/On2 を確定する**（`summary.onBeat` と beatGrid、技の慣例から）。下記「On1/On2 の判断」参照
+5. `out/result.json` に機械可読の最終結果を書く（スキーマは下記）
+6. `out/report.md` に人間向けレポートを書く。形式は spec.md の「レポート形式」に従う（指定が無ければ、サマリ→技の詳細→根拠→難所の順の簡潔な Markdown）。タイムスタンプは mm:ss 表記
 
 ## 技の「再現可能な記述」とは
 
@@ -58,6 +65,21 @@
 > リーダーが5で左に避けて道を作り、フォロワーが直進しながら左回りに1回転（6-7）。
 > 出口で左右が入れ替わり、左手つなぎに持ち替えて1で向かい合いに戻る（→次の 0:06 の入り）。
 
+## On1/On2 の判断
+
+サルサの基本は、体重を入れ替える「ブレーク」がどの拍に落ちるかでスタイルが分かれる:
+**On1 = ブレークが 1・5 拍 / On2（NY・Eddie Torres 系）= ブレークが 2・6 拍**。
+
+`summary.onBeat` の `dominantBeatsMod8` は「ブレークがビート格子上のどの拍に集まるか」だが、
+**格子のどれが音楽の『1』かは音声から未確定**。だからこれ単体では On1/On2 は決まらない。次の順で判断する:
+
+1. **spec.md や動画タイトルにスタイル指定があれば最優先**（"On2" "NY style" "LA style(=On1)" 等）。それで確定
+2. 指定が無ければ、`onBeat.regularity` が高い（≳0.5）ことを確認し、ブレーク拍とキーフレームの
+   音楽的な強拍（可能なら）・技の慣例（CBL は 5-6-7 に乗る、On2 のフォロワーターンは 6 始まりが多い）を
+   突き合わせ、全イベントの `count8` 位相合わせ（技のカウント付け）と**矛盾しない**方を選ぶ
+3. `regularity` が低い（ブレーク不規則）・`beatGrid` が null・材料不足なら **`"unclear"`** とし、断定しない
+4. 選んだ位相は、技のカウント表記（【5-6-7】等）と一貫させること。根拠を1〜2文で `notes` に書く
+
 ## ルール
 
 - 数値（時刻・速度・角度）は必ず measurements.json から引用する。画像からの目測で数値を作らない
@@ -74,6 +96,7 @@
 {
   "specVersion": 1,
   "leader": { "side": "left" | "right" | null, "confidence": 0.0, "basis": "rule" | "keyframe" | "mixed" },
+  "style": { "onBeat": "on1" | "on2" | "unclear", "confidence": 0.0, "basis": "spec" | "measurement" | "keyframe" },
   "contestedResolutions": [
     { "from": 0.0, "to": 0.0, "resolvedLeader": "left" | "right" | null, "note": "..." }
   ],

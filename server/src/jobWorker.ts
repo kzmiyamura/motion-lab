@@ -176,8 +176,13 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
           proc.on('exit', code => (code === 0 ? resolve() : reject(new Error(`ffmpeg audio exited ${code}`))));
         });
         await runPython([path.resolve(__dirname, '../analysis/analyze_beats.py'), audioPath, ctx.measurementsPath], signal);
+        // On1/On2 材料（ロードマップ⑥）: beatGrid にリーダーのブレークを畳み込んで
+        // summary.onBeat（拍ヒストグラム・規則性）を書き足す。tracks.json 原盤から腰Xを読む。
+        // beatGrid が無い/リズム不明瞭なら onBeat: null になるだけ（解析は止めない）
+        const tracksPath = ctx.measurementsPath.replace(/\.json$/, '.tracks.json');
+        await runPython([path.resolve(__dirname, '../analysis/analyze_onbeat.py'), tracksPath, ctx.measurementsPath], signal);
       } catch (e) {
-        console.warn(`[jobWorker] beat grid skipped: ${e instanceof Error ? e.message : e}`);
+        console.warn(`[jobWorker] beat grid / onBeat skipped: ${e instanceof Error ? e.message : e}`);
       } finally {
         rmSync(audioPath, { force: true });
       }

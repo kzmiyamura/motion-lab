@@ -641,3 +641,25 @@ PCの持ち主の方針転換: 「全部計算でなんとかしようとしな�
 
 ### まだやらないこと
 - pipeline 配線（jobWorker から呼んでレポートに載せる）は保留。まず生値を複数動画で集めて基準分布を作るのが先。配線するかは Mac 側で判断する
+
+---
+
+## 追加タスク（2026-08-01・その11）: On1/On2 判定（ロードマップ⑥）の取り込み
+
+ロードマップ⑥（最難）の第一弾。ビート格子（③）が揃ったので、リーダーのブレークを拍に畳んで On1/On2 を判定できるようにした。**pip 依存追加なし・pm2 restart のみ**。
+
+### 変更内容（git pull で入る）
+1. **`analyze_onbeat.py`（新規・stdlib のみ）**: tracks.json のリーダー腰X座標の折り返し（ブレーク）を beatGrid に畳み込み、`summary.onBeat`（拍ヒストグラム・`dominantBeatsMod8`・`onBeatRatio`・`regularity`）を measurements.json に書き足す
+2. **jobWorker**: `analyze_beats` の直後に `analyze_onbeat` を実行（beatGrid が前提。無音・リズム不明なら `onBeat: null`）
+3. **runner-prompt**: Claude が `summary.onBeat` ＋キーフレーム＋サルサ知識で **On1/On2 を最終判断**するステップを追加。`result.json` に `style: {onBeat, confidence, basis}` を追加
+   - CV は「ブレークがグリッド上のどの拍に集まるか」まで。音楽の count-1 は音声から未確定なので On1/On2 の確定は Judge（Claude）の仕事、という分業
+
+### やってほしいこと
+1. `git pull` && `pm2 restart motion-lab-server`
+2. 2fda2815 を再解析し、`pm2 logs` の `onbeat: breaks=.. dominant=.. onBeatRatio=.. regularity=..` を報告
+3. Claude レポート/`result.json` の `style.onBeat`（on1/on2/unclear）と根拠（notes）を報告
+
+### 報告してほしいこと
+- `summary.onBeat` の値（特に `dominantBeatsMod8`・`regularity`・`onBeatRatio`）
+- Claude の On1/On2 判定と自信度。**この動画はターン主体で `regularity` が低く `unclear` になる可能性が高い**（それ自体は正常。ブレークの折り返しが腰Xに出にくい＝密着・横向きが多い動画の指標）
+- 背景（最終ビジョン）: これらの検出結果（events＋beatGrid＋on1/on2）を「リーダー技ジェネレーター」形式で**動画のルーティンを再現**する方向に進める予定

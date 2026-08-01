@@ -612,3 +612,32 @@ PCの持ち主の方針転換: 「全部計算でなんとかしようとしな�
    - analyze_pair の stderr に `leader anchor agrees with CV vote` が出るか
      （Mac実測では一致。もし override が出たらそれはCV投票が間違えた動画ということ — それも貴重な報告）
 3. skeleton.mp4 / debug_roi.mp4 の男女の色が正しいか目視確認
+
+---
+
+## 追加タスク（2026-08-01・その10）: tracks.json に events 同梱 + 上手さ指標スクリプト（analyze_skill.py）
+
+ロードマップの先「ダンス版トラックマン＝上手さの定量化」の第一歩。**pipeline への配線はまだしていない**（レポート出力は変わらない）。今回は原盤（tracks.json）の自己完結化と、それを読む解析ツールの追加のみ。ThinkCentre側は取り込みと軽い動作確認だけでよい。
+
+### 変更内容（git pull で入る）
+1. **tracks.json に `events` / `holdTimeline` を同梱**（analyze_pair.py）。従来コメントは「原盤（骨格+人物ID+**イベント**）」と謳っていたのに events が入っておらず、下記 analyze_skill.py を tracks.json 単体で回すとフォロワーのターン系指標が空になる穴があった。これを塞いだ。**既存の 2fda2815 の古い tracks.json には events が無い**ので、上手さ指標を出すなら再解析するか、reprocess の events を 2nd 引数で渡すこと（下記）
+2. **`analyze_skill.py`（新規）**: tracks.json から役割別の「上手さ指標」を計算する。**標準ライブラリのみ・pip 依存なし**（ultralytics/mediapipe 不要、軽量）。リーダー=土台の安定/リードの明確さ、フォロワー=ターンのキレ/スポット維持、を生値で出す。正解ラベルは無いので、複数のプロ動画で「基準分布（お手本ライブラリ）」を作り、そこからの距離で採点する前提
+3. `analyze_pair.py` の tracks.json 出力名を `measurements.tracks.json` 派生に変更（同一ディレクトリで複数動画を解析しても衝突しない）
+
+### やってほしいこと（軽い確認のみ・pm2 restart 不要）
+1. `git pull`
+2. 動作確認（既存の原盤を使う。events 込みで欲しいので reprocess の出力を 2nd 引数に渡す）:
+   ```
+   # 既存 tracks.json のパスを確認（<jobId>/out/measurements.tracks.json 等）
+   <PYTHON_BIN> server/analysis/reprocess_tracks.py <tracks.json> /tmp/ev.json
+   <PYTHON_BIN> server/analysis/analyze_skill.py <tracks.json> /tmp/ev.json
+   ```
+   （2fda2815 を再解析した場合は events 同梱済みなので 2nd 引数は不要: `analyze_skill.py <tracks.json>`）
+3. JSON が出て、leader に `axisUprightMean/baseStability/leadClarity`、follower に `turnCount/turnCrispnessSec` 等が入っていればOK
+
+### 報告してほしいこと
+- 2fda2815 での leader / follower の各指標値（Mac は合成データでしか検証していないため、実動画での生値が知りたい）
+- 指標が直感と合うか所感（例: 女性のターンが速い動画なら turnCrispnessSec が小さいか）
+
+### まだやらないこと
+- pipeline 配線（jobWorker から呼んでレポートに載せる）は保留。まず生値を複数動画で集めて基準分布を作るのが先。配線するかは Mac 側で判断する

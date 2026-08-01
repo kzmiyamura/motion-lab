@@ -1004,8 +1004,10 @@ def main():
 
     # tracks.json: 解析済みの「原盤」（骨格+人物ID+イベント）。これがあれば以降の
     # 技検出ルールの調整・骨格動画の再生成・新検出器の遡及適用は YOLO を回さず数秒で済む
-    # （重い知覚は動画1本につき1回だけ、という方針。ユーザー発案）
-    tracks_path = os.path.join(os.path.dirname(os.path.abspath(output_path)), "tracks.json")
+    # （重い知覚は動画1本につき1回だけ、という方針。ユーザー発案）。
+    # 出力名は measurements パスから派生（measurements.json → measurements.tracks.json）→
+    # 複数動画を同一ディレクトリで解析しても衝突しない
+    tracks_path = os.path.splitext(os.path.abspath(output_path))[0] + ".tracks.json"
     with open(tracks_path, "w") as f:
         json.dump({
             "version": 1,
@@ -1013,6 +1015,10 @@ def main():
             "fps": fps,
             "sampledFps": round(effective_fps, 2),
             "leaderPid": leader_pid,
+            # events/holdTimeline も原盤に同梱（コメントの「骨格+人物ID+イベント」を満たす）。
+            # これで analyze_skill.py が tracks.json 単体で上手さ指標を計算できる
+            "events": events,
+            "holdTimeline": hold_timeline,
             "frames": [
                 {k: v for k, v in df.items() if k != "kept"} | {
                     "kept": [{k: v for k, v in p.items() if k != "hist"} for p in df["kept"]],

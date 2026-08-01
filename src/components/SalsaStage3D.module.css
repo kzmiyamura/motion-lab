@@ -1,0 +1,119 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  max-height: 62vh;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--color-border2, rgba(255, 255, 255, 0.12));
+  background: #0a0e18;
+}
+
+.stage canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.overlay {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #cdd6ec;
+  background: rgba(10, 14, 24, 0.55);
+  padding: 3px 9px;
+  border-radius: 999px;
+  backdrop-filter: blur(4px);
+}
+
+.dotL,
+.dotF {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.dotL { background: #3d8bff; }
+.dotF { background: #ff4db8; }
+
+.now {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #fff;
+  background: rgba(61, 139, 255, 0.22);
+  border: 1px solid rgba(61, 139, 255, 0.5);
+  padding: 3px 12px;
+  border-radius: 999px;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.btn {
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.72rem;
+  color: var(--color-fg, #eaeef7);
+  background: var(--color-ui-dark2, #1e2740);
+  border: 1px solid var(--color-border2, rgba(255, 255, 255, 0.16));
+  border-radius: 10px;
+  padding: 0.55rem 0.9rem;
+}
+.btn:hover { filter: brightness(1.12); }
+.btn:focus-visible { outline: 2px solid #3d8bff; outline-offset: 2px; }
+
+.primary {
+  background: #3d8bff;
+  border-color: #3d8bff;
+  color: #04122b;
+}
+
+.tempo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.68rem;
+  color: var(--color-fg-dim, #7a86a8);
+  margin-left: auto;
+}
+.tempo input { accent-color: #3d8bff; }
+.tempo b {
+  color: var(--color-fg, #eaeef7);
+  font-variant-numeric: tabular-nums;
+}
+
+.note {
+  margin: 0;
+  font-size: 0.64rem;
+  line-height: 1.6;
+  color: var(--color-fg-dim, #7a86a8);
+}
+.note b { color: var(--color-fg, #eaeef7); }
+
+@media (max-width: 640px) {
+  .stage { aspect-ratio: 3 / 4; max-height: 68vh; }
+  .tempo { margin-left: 0; }
+}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import { useAudioEngine } from './hooks/useAudioEngine';
 import { useUrlAnalysis } from './hooks/useUrlAnalysis';
 import { ControlPanel } from './components/ControlPanel';
@@ -14,6 +14,9 @@ import { FilePlayer } from './components/FilePlayer';
 import { StudioPlayer } from './components/StudioPlayer';
 import { HomeServerLibrary } from './components/HomeServerLibrary';
 import styles from './App.module.css';
+
+// three/R3F は重いので遅延ロード（メインバンドルに含めない）
+const SalsaStage3D = lazy(() => import('./components/SalsaStage3D'));
 
 function App() {
   const {
@@ -41,7 +44,7 @@ function App() {
   } = useAudioEngine();
 
   const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
-  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio' | 'homeserver'>('youtube');
+  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio' | 'homeserver' | '3d'>('youtube');
   const [homeVideoToPlay, setHomeVideoToPlay] = useState<{ id: string; name: string; url: string } | null>(null);
   const [ytViewMode, setYtViewMode] = useState<'audio' | 'video'>('video');
 
@@ -88,6 +91,12 @@ function App() {
             onClick={() => setMainTab('homeserver')}
           >
             🏠 Home
+          </button>
+          <button
+            className={`${styles.mainTabBtn} ${mainTab === '3d' ? styles.mainTabBtnActive : ''}`}
+            onClick={() => setMainTab('3d')}
+          >
+            🕺 3D
           </button>
         </div>
       </header>
@@ -301,6 +310,17 @@ function App() {
       <div className={mainTab === 'studio' ? styles.tabPanel : styles.tabPanelHidden}>
         <section className={styles.section}>
           <StudioPlayer />
+        </section>
+      </div>
+
+      {/* ── 3D タブ（試作: 動画のルーティンを3Dキャラで再現） ── */}
+      <div className={mainTab === '3d' ? styles.tabPanel : styles.tabPanelHidden}>
+        <section className={styles.section}>
+          {mainTab === '3d' && (
+            <Suspense fallback={<p style={{ color: 'var(--color-fg-dim)', padding: '1rem' }}>3D を読み込み中…</p>}>
+              <SalsaStage3D />
+            </Suspense>
+          )}
         </section>
       </div>
 

@@ -9,6 +9,20 @@ type Props = {
   onClose: () => void;
 };
 
+// リーダー技ジェネレーター（Artifact）。解析結果を貼り付けて動画のルーティンを再現する
+const GENERATOR_URL = 'https://claude.ai/code/artifact/761235c0-5005-41e4-a315-5772ca8b516e';
+
+/** result.json に再現可能な技イベントが含まれるか（events の件数）を返す */
+function countEvents(resultJson: string | null): number {
+  if (!resultJson) return 0;
+  try {
+    const d = JSON.parse(resultJson) as { events?: unknown[] };
+    return Array.isArray(d.events) ? d.events.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** インライン記法（リンク・太字・コード）を React ノードに変換する */
 function renderInline(text: string, baseUrl: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -108,6 +122,7 @@ function renderMarkdown(md: string, baseUrl: string): ReactNode[] {
 export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
   const [job, setJob] = useState<AnalysisJobDetail | null>(null);
   const [error, setError] = useState('');
+  const [copyMsg, setCopyMsg] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -116,6 +131,20 @@ export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
       .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'レポートの取得に失敗しました'); });
     return () => { cancelled = true; };
   }, [baseUrl, jobId]);
+
+  // 解析結果をクリップボードへコピーし、ジェネレーターを新しいタブで開く。
+  // ユーザーはジェネレーターの「📥」に貼り付けて、動画のルーティンを骨格で再現できる。
+  const reproduceInGenerator = async () => {
+    if (!job?.resultJson) return;
+    try {
+      await navigator.clipboard.writeText(job.resultJson);
+      setCopyMsg('解析結果をコピーしました。ジェネレーターの「📥」に貼り付けてください');
+    } catch {
+      setCopyMsg('コピーできませんでした。タブを開いたら result.json を手動で貼り付けてください');
+    }
+    window.open(GENERATOR_URL, '_blank', 'noopener');
+  };
+  const canReproduce = countEvents(job?.resultJson ?? null) > 0;
 
   return (
     <div className={styles.overlay} onClick={onClose}>
@@ -133,6 +162,14 @@ export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
               : <p className={styles.hint}>このジョブにはレポートがありません（status: {job.status}{job.errorMessage ? ` / ${job.errorMessage}` : ''}）</p>
           )}
         </div>
+        {canReproduce && (
+          <div className={styles.genRow}>
+            <button className={styles.genBtn} onClick={reproduceInGenerator}>
+              🕺 ジェネレーターで再現
+            </button>
+            {copyMsg && <span className={styles.genMsg}>{copyMsg}</span>}
+          </div>
+        )}
         {job?.finishedAt && (
           <p className={styles.meta}>解析完了: {new Date(job.finishedAt).toLocaleString()} / preset: {job.preset}</p>
         )}

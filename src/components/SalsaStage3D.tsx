@@ -1,7 +1,12 @@
-import { useRef, useState, useCallback, type RefObject } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useRef, useState, useCallback, useEffect, type RefObject } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { MocapFigure, type MotionClip } from './MocapFigure';
 import styles from './SalsaStage3D.module.css';
+
+// 動画から復元した3Dモーション。server/analysis/prototype_lift3d.py 系のパイプラインが書き出す
+// （YOLOのbboxで切り出し → MediaPipe単人検出で world landmarks → 弱透視で位置復元）
+const CLIP_URL = '/motion/2fda2815.json';
 
 /**
  * Salsa Stage 3D — 「骨格君」を卒業した 3D キャラで、動画解析のルーティンを再現する試作。
@@ -44,12 +49,17 @@ type Playhead = {
   bpm: number;
   beat: number;
   cycle: number;
-  mode: 'random' | 'replay';
+  // random/replay = 手続きアニメ（技を選んで踊る） / mocap = 動画から復元した実モーションの再生
+  mode: 'random' | 'replay' | 'mocap';
   current: MoveKind;
   rotations: number;
   moveStartBeat: number;
   queue: { move: MoveKind; rotations: number }[];
   onMove: (m: MoveKind, rotations: number) => void;
+  // mocap 用: クリップ内の再生位置[秒]
+  clipTime: number;
+  clipDuration: number;
+  onClipTime: (t: number) => void;
 };
 
 const damp = (cur: number, target: number, k: number) => cur + (target - cur) * k;
@@ -182,6 +192,15 @@ function Choreographer({ phRef }: { phRef: RefObject<Playhead> }) {
   useFrame((_, delta) => {
     const ph = phRef.current;
     if (!ph.playing) return;
+
+    // mocap は実時間で流すだけ（拍で技を送る必要がない。動きは全部クリップに入っている）
+    if (ph.mode === 'mocap') {
+      ph.clipTime += delta;
+      if (ph.clipDuration > 0 && ph.clipTime > ph.clipDuration) ph.clipTime = 0;
+      ph.onClipTime(ph.clipTime);
+      return;
+    }
+
     ph.beat += delta * (ph.bpm / 60);
     const cyc = Math.floor(ph.beat / BEATS_PER_MOVE);
     if (cyc !== ph.cycle) {
@@ -206,6 +225,21 @@ function Choreographer({ phRef }: { phRef: RefObject<Playhead> }) {
   return null;
 }
 
+/**
+ * 軌道カメラ。3D復元の値打ちは「元の動画に無いアングルから見られる」ことなので、
+ * 回り込みを触れるようにしておく（azRef を上のドラッグ操作と共有する）。
+ */
+function CameraRig({ azRef, autoRef }: { azRef: RefObject<number>; autoRef: RefObject<boolean> }) {
+  const cam = useThree((s) => s.camera);
+  useFrame((_, delta) => {
+    if (autoRef.current) azRef.current += delta * 0.22;
+    const r = 4.3, az = azRef.current;
+    cam.position.set(Math.sin(az) * r, 1.5, Math.cos(az) * r);
+    cam.lookAt(0, 0.95, 0);
+  });
+  return null;
+}
+
 const MOVE_LABEL: Record<MoveKind, string> = {
   'basic': 'ベーシック',
   'cross-body': 'クロスボディリード',
@@ -217,26 +251,89 @@ export function SalsaStage3D() {
     playing: false, bpm: 170, beat: 0, cycle: -1, mode: 'random',
     current: 'basic', rotations: 1, moveStartBeat: 0, queue: [],
     onMove: () => {},
+    clipTime: 0, clipDuration: 0, onClipTime: () => {},
   });
   const [playing, setPlaying] = useState(false);
   const [bpm, setBpm] = useState(170);
   const [nowLabel, setNowLabel] = useState('—');
+  const [clip, setClip] = useState<MotionClip | null>(null);
+  const [clipErr, setClipErr] = useState<string | null>(null);
+  const [isMocap, setIsMocap] = useState(false);
+  const [clipT, setClipT] = useState(0);
+  const clipTimeRef = useRef(0);
+  const azRef = useRef(0);
+  const autoOrbitRef = useRef(false);
+  const [autoOrbit, setAutoOrbit] = useState(false);
 
   phRef.current.onMove = useCallback((m: MoveKind, rot: number) => {
     setNowLabel(MOVE_LABEL[m] + (rot >= 2 ? ` ×${rot}` : ''));
   }, []);
 
+  // クリップ時刻は毎フレーム更新されるので ref に直接書き、React state は表示用に間引く
+  phRef.current.onClipTime = useCallback((t: number) => {
+    clipTimeRef.current = t;
+    setClipT((prev) => (Math.abs(prev - t) > 0.1 ? t : prev));
+  }, []);
+
+  // 再生中の技ラベル: クリップの events から直近のものを拾う
+  useEffect(() => {
+    if (!isMocap || !clip) return;
+    const ev = [...clip.events].filter((e) => e.t <= clipT + 0.01).pop();
+    if (!ev || clipT - ev.t > 2.2) { setNowLabel('—'); return; }
+    const name = ev.type === 'CBL' ? 'クロスボディリード'
+      : ev.type === 'Turn' ? `ターン（${ev.by === 'follower' ? 'フォロワー' : 'リーダー'}）`
+      : ev.type;
+    setNowLabel(name + (ev.rotations && ev.rotations >= 2 ? ` ×${ev.rotations}` : ''));
+  }, [isMocap, clip, clipT]);
+
+  const loadClip = async () => {
+    setClipErr(null);
+    try {
+      let c = clip;
+      if (!c) {
+        const res = await fetch(CLIP_URL);
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        c = (await res.json()) as MotionClip;
+        setClip(c);
+      }
+      const ph = phRef.current;
+      ph.mode = 'mocap';
+      ph.clipTime = 0;
+      ph.clipDuration = c.duration;
+      ph.playing = true;
+      clipTimeRef.current = 0;
+      setIsMocap(true);
+      setPlaying(true);
+      setNowLabel('—');
+    } catch (e) {
+      setClipErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // ステージのドラッグで回り込む
+  const dragRef = useRef<number | null>(null);
+  const onPointerDown = (e: React.PointerEvent) => {
+    dragRef.current = e.clientX;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (dragRef.current === null) return;
+    azRef.current += (e.clientX - dragRef.current) * 0.008;
+    dragRef.current = e.clientX;
+  };
+  const onPointerUp = () => { dragRef.current = null; };
+
   const start = (mode: 'random' | 'replay', queue: { move: MoveKind; rotations: number }[]) => {
     const ph = phRef.current;
     ph.mode = mode; ph.queue = queue; ph.beat = 0; ph.cycle = -1;
     ph.current = 'basic'; ph.rotations = 1; ph.moveStartBeat = 0;
-    ph.playing = true; setPlaying(true);
+    ph.playing = true; setPlaying(true); setIsMocap(false);
     setNowLabel(mode === 'replay' ? '再現の準備…' : 'ベーシック');
   };
   const toggle = () => {
     const ph = phRef.current;
     ph.playing = !ph.playing; setPlaying(ph.playing);
-    if (ph.playing && ph.cycle === -1) { ph.mode = 'random'; }
+    if (ph.playing && ph.mode !== 'mocap' && ph.cycle === -1) { ph.mode = 'random'; }
   };
   const replaySample = () => {
     const q = SAMPLE_EVENTS
@@ -248,8 +345,14 @@ export function SalsaStage3D() {
 
   return (
     <div className={styles.wrap}>
-      <div className={styles.stage}>
-        <Canvas shadows camera={{ position: [0, 1.35, 4.3], fov: 42 }} dpr={[1, 2]}>
+      <div
+        className={styles.stage}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        <Canvas shadows camera={{ position: [0, 1.5, 4.3], fov: 42 }} dpr={[1, 2]}>
           <color attach="background" args={['#0a0e18']} />
           <fog attach="fog" args={['#0a0e18', 5, 11]} />
           <ambientLight intensity={0.55} />
@@ -260,15 +363,30 @@ export function SalsaStage3D() {
             <circleGeometry args={[6, 48]} />
             <meshStandardMaterial color="#11172a" roughness={0.9} />
           </mesh>
-          <Dancer role="leader" color="#3d8bff" phRef={phRef} />
-          <Dancer role="follower" color="#ff4db8" phRef={phRef} />
+          {isMocap && clip ? (
+            <>
+              <MocapFigure clip={clip} pid={clip.leaderPid} color="#3d8bff" timeRef={clipTimeRef} />
+              <MocapFigure clip={clip} pid={1 - clip.leaderPid} color="#ff4db8" timeRef={clipTimeRef} />
+            </>
+          ) : (
+            <>
+              <Dancer role="leader" color="#3d8bff" phRef={phRef} />
+              <Dancer role="follower" color="#ff4db8" phRef={phRef} />
+            </>
+          )}
           <Choreographer phRef={phRef} />
+          <CameraRig azRef={azRef} autoRef={autoOrbitRef} />
         </Canvas>
 
         <div className={styles.overlay}>
           <span className={styles.badge}><i className={styles.dotL} />リーダー</span>
           <span className={styles.badge}><i className={styles.dotF} />フォロワー</span>
           <span className={styles.now}>{nowLabel}</span>
+          {isMocap && (
+            <span className={styles.badge}>
+              動画のモーション {clipT.toFixed(1)}s / {clip?.duration.toFixed(1)}s
+            </span>
+          )}
         </div>
       </div>
 
@@ -277,15 +395,29 @@ export function SalsaStage3D() {
           {playing ? '⏸ 停止' : '▶ 再生'}
         </button>
         <button className={styles.btn} onClick={replaySample}>📼 解析サンプルを再現</button>
+        <button className={`${styles.btn} ${isMocap ? styles.primary : ''}`} onClick={loadClip}>
+          🎥 動画のモーションで踊る
+        </button>
+        <button
+          className={`${styles.btn} ${autoOrbit ? styles.primary : ''}`}
+          onClick={() => { const v = !autoOrbit; setAutoOrbit(v); autoOrbitRef.current = v; }}
+        >
+          🔄 回り込み
+        </button>
         <label className={styles.tempo}>
           BPM <input type="range" min={130} max={200} value={bpm} onChange={e => onBpm(Number(e.target.value))} />
           <b>{bpm}</b>
         </label>
       </div>
 
+      {clipErr && <p className={styles.note}>モーションの読み込みに失敗しました: {clipErr}</p>}
+
       <p className={styles.note}>
-        検出イベント（CBL・フォロワーのターン）で技を選び、ビートに同期した手続きアニメで再生する
-        <b> B方式</b> の試作です。動きの質は将来 Mixamo/VRM のモーションクリップに差し替えて上げられます。
+        <b>🎥 動画のモーションで踊る</b> は、動画から復元した<b>関節の3D位置そのもの</b>を再生します
+        （YOLOのbboxで1人ずつ切り出し → MediaPipe の world landmarks → 弱透視で2人を空間に配置）。
+        薄く描かれているボーンは、隠れて観測できず時間補間で埋めた推定です。
+        ステージは<b>ドラッグで回り込め</b>ます — 元の動画に無いアングルから見られるのが3D復元の値打ちです。
+        ▶ 再生 / 📼 は従来どおり、技イベントだけ動画由来の手続きアニメ（B方式）です。
       </p>
     </div>
   );

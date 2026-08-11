@@ -52,6 +52,8 @@ def main():
     ap.add_argument("--hfov", type=float, default=58.0)
     ap.add_argument("--target-height", type=float, default=1.70)
     ap.add_argument("--preview", default=None, help="検証用2画面mp4も書き出す")
+    ap.add_argument("--measurements", default=None,
+                    help="measurements.json のパス。beatGrid をクリップへ同梱する")
     ap.add_argument("--python", default=sys.executable)
     args = ap.parse_args()
 
@@ -69,8 +71,9 @@ def main():
     run(py, "prototype_armfix.py", p("5_rigid.json"), p("6_arms.json"))
     run(py, "prototype_pairfix.py", p("6_arms.json"), args.tracks, p("7_pair.json"),
         "--contact-speed", 0.03, "--contact-height", 0.22)
+    extra = ["--measurements", args.measurements] if args.measurements else []
     run(py, "prototype_export_clip.py", p("7_pair.json"), args.out,
-        "--target-height", args.target_height)
+        "--target-height", args.target_height, *extra)
     if args.preview:
         run(py, "prototype_render3d.py", p("7_pair.json"), args.preview)
 

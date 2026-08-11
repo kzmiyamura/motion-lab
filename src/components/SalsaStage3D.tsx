@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect, type RefObject } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { MocapFigure, type MotionClip } from './MocapFigure';
+import { HybridFigure } from './HybridFigure';
 import styles from './SalsaStage3D.module.css';
 
 // 動画から復元した3Dモーション。server/analysis/prototype_lift3d.py 系のパイプラインが書き出す
@@ -49,8 +50,9 @@ type Playhead = {
   bpm: number;
   beat: number;
   cycle: number;
-  // random/replay = 手続きアニメ（技を選んで踊る） / mocap = 動画から復元した実モーションの再生
-  mode: 'random' | 'replay' | 'mocap';
+  // random/replay = 手続きアニメ（技を選んで踊る） / mocap = 実モーションの直再生
+  // hybrid = 実データの動線・向き・拍 × 手続きアニメの手足（HybridFigure）
+  mode: 'random' | 'replay' | 'mocap' | 'hybrid';
   current: MoveKind;
   rotations: number;
   moveStartBeat: number;
@@ -193,8 +195,8 @@ function Choreographer({ phRef }: { phRef: RefObject<Playhead> }) {
     const ph = phRef.current;
     if (!ph.playing) return;
 
-    // mocap は実時間で流すだけ（拍で技を送る必要がない。動きは全部クリップに入っている）
-    if (ph.mode === 'mocap') {
+    // mocap / hybrid はクリップ時刻を実時間で流すだけ（拍で技を送る必要がない）
+    if (ph.mode === 'mocap' || ph.mode === 'hybrid') {
       ph.clipTime += delta;
       if (ph.clipDuration > 0 && ph.clipTime > ph.clipDuration) ph.clipTime = 0;
       ph.onClipTime(ph.clipTime);
@@ -292,7 +294,7 @@ export function SalsaStage3D() {
   const [nowLabel, setNowLabel] = useState('—');
   const [clip, setClip] = useState<MotionClip | null>(null);
   const [clipErr, setClipErr] = useState<string | null>(null);
-  const [isMocap, setIsMocap] = useState(false);
+  const [clipMode, setClipMode] = useState<'off' | 'mocap' | 'hybrid'>('off');
   const [clipT, setClipT] = useState(0);
   const clipTimeRef = useRef(0);
   const viewRef = useRef<View>({ ...VIEW_PRESETS.正面 });
@@ -313,16 +315,16 @@ export function SalsaStage3D() {
 
   // 再生中の技ラベル: クリップの events から直近のものを拾う
   useEffect(() => {
-    if (!isMocap || !clip) return;
+    if (clipMode === 'off' || !clip) return;
     const ev = [...clip.events].filter((e) => e.t <= clipT + 0.01).pop();
     if (!ev || clipT - ev.t > 2.2) { setNowLabel('—'); return; }
     const name = ev.type === 'CBL' ? 'クロスボディリード'
       : ev.type === 'Turn' ? `ターン（${ev.by === 'follower' ? 'フォロワー' : 'リーダー'}）`
       : ev.type;
     setNowLabel(name + (ev.rotations && ev.rotations >= 2 ? ` ×${ev.rotations}` : ''));
-  }, [isMocap, clip, clipT]);
+  }, [clipMode, clip, clipT]);
 
-  const loadClip = async () => {
+  const loadClip = async (mode: 'mocap' | 'hybrid') => {
     setClipErr(null);
     try {
       let c = clip;
@@ -333,12 +335,12 @@ export function SalsaStage3D() {
         setClip(c);
       }
       const ph = phRef.current;
-      ph.mode = 'mocap';
+      ph.mode = mode;
       ph.clipTime = 0;
       ph.clipDuration = c.duration;
       ph.playing = true;
       clipTimeRef.current = 0;
-      setIsMocap(true);
+      setClipMode(mode);
       setPlaying(true);
       setNowLabel('—');
     } catch (e) {
@@ -390,13 +392,13 @@ export function SalsaStage3D() {
     const ph = phRef.current;
     ph.mode = mode; ph.queue = queue; ph.beat = 0; ph.cycle = -1;
     ph.current = 'basic'; ph.rotations = 1; ph.moveStartBeat = 0;
-    ph.playing = true; setPlaying(true); setIsMocap(false);
+    ph.playing = true; setPlaying(true); setClipMode('off');
     setNowLabel(mode === 'replay' ? '再現の準備…' : 'ベーシック');
   };
   const toggle = () => {
     const ph = phRef.current;
     ph.playing = !ph.playing; setPlaying(ph.playing);
-    if (ph.playing && ph.mode !== 'mocap' && ph.cycle === -1) { ph.mode = 'random'; }
+    if (ph.playing && ph.mode !== 'mocap' && ph.mode !== 'hybrid' && ph.cycle === -1) { ph.mode = 'random'; }
   };
   const replaySample = () => {
     const q = SAMPLE_EVENTS
@@ -427,10 +429,15 @@ export function SalsaStage3D() {
             <circleGeometry args={[6, 48]} />
             <meshStandardMaterial color="#11172a" roughness={0.9} />
           </mesh>
-          {isMocap && clip ? (
+          {clipMode === 'mocap' && clip ? (
             <>
               <MocapFigure clip={clip} pid={clip.leaderPid} color="#3d8bff" timeRef={clipTimeRef} />
               <MocapFigure clip={clip} pid={1 - clip.leaderPid} color="#ff4db8" timeRef={clipTimeRef} />
+            </>
+          ) : clipMode === 'hybrid' && clip ? (
+            <>
+              <HybridFigure clip={clip} pid={clip.leaderPid} role="leader" color="#3d8bff" timeRef={clipTimeRef} />
+              <HybridFigure clip={clip} pid={1 - clip.leaderPid} role="follower" color="#ff4db8" timeRef={clipTimeRef} />
             </>
           ) : (
             <>
@@ -446,9 +453,10 @@ export function SalsaStage3D() {
           <span className={styles.badge}><i className={styles.dotL} />リーダー</span>
           <span className={styles.badge}><i className={styles.dotF} />フォロワー</span>
           <span className={styles.now}>{nowLabel}</span>
-          {isMocap && (
+          {clipMode !== 'off' && (
             <span className={styles.badge}>
-              動画のモーション {clipT.toFixed(1)}s / {clip?.duration.toFixed(1)}s
+              {clipMode === 'hybrid' ? '動線×アニメ' : '動画のモーション'}
+              {' '}{clipT.toFixed(1)}s / {clip?.duration.toFixed(1)}s
             </span>
           )}
         </div>
@@ -459,8 +467,11 @@ export function SalsaStage3D() {
           {playing ? '⏸ 停止' : '▶ 再生'}
         </button>
         <button className={styles.btn} onClick={replaySample}>📼 解析サンプルを再現</button>
-        <button className={`${styles.btn} ${isMocap ? styles.primary : ''}`} onClick={loadClip}>
+        <button className={`${styles.btn} ${clipMode === 'mocap' ? styles.primary : ''}`} onClick={() => loadClip('mocap')}>
           🎥 動画のモーションで踊る
+        </button>
+        <button className={`${styles.btn} ${clipMode === 'hybrid' ? styles.primary : ''}`} onClick={() => loadClip('hybrid')}>
+          🧬 動線×アニメ（ハイブリッド）
         </button>
         <button
           className={`${styles.btn} ${autoOrbit ? styles.primary : ''}`}
@@ -491,6 +502,9 @@ export function SalsaStage3D() {
         <b>🎥 動画のモーションで踊る</b> は、動画から復元した<b>関節の3D位置そのもの</b>を再生します
         （YOLOのbboxで1人ずつ切り出し → MediaPipe の world landmarks → 弱透視で2人を空間に配置）。
         薄く描かれているボーンは、隠れて観測できず時間補間で埋めた推定です。
+        <b>🧬 動線×アニメ</b> は、復元データのうち信頼できる量
+        （<b>動線・体の向き・技のタイミング・拍</b>）だけを実データから取り、
+        手足は崩れない手続きアニメで描くハイブリッドです — ターンの回転も実データ由来です。
         ステージは<b>ドラッグで回り込め</b>ます — 元の動画に無いアングルから見られるのが3D復元の値打ちです。
         ▶ 再生 / 📼 は従来どおり、技イベントだけ動画由来の手続きアニメ（B方式）です。
       </p>

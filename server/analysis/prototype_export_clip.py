@@ -18,6 +18,7 @@ v = 各関節の信頼度（1=観測, 0.5=時間補間で埋めた推定, 0=無�
 
 Usage:
   python prototype_export_clip.py <lifted.json> <out.json> [--decimals 3]
+      [--measurements measurements.json]   # beatGrid をクリップに同梱（ハイブリッドモードの拍同期用）
 """
 import sys
 import json
@@ -40,7 +41,20 @@ def main():
                     help="立ち姿の頭頂高をこの値[m]に合わせてシーン全体を一様スケールする。"
                          "MediaPipe のメートル推定は平均体型に引かれて小さめに出る（実測 約1.4m）ため、"
                          "見た目の説得力を出す用。位置も関節も同じ倍率で拡大するので相対関係は不変。0で無効")
+    ap.add_argument("--measurements", default=None,
+                    help="measurements.json のパス。summary.beatGrid をクリップへ同梱する")
     args = ap.parse_args()
+
+    beat_grid = None
+    if args.measurements:
+        try:
+            m = json.load(open(args.measurements))
+            bg = (m.get("summary") or {}).get("beatGrid")
+            if bg and bg.get("bpm"):
+                beat_grid = {k: bg[k] for k in
+                             ("bpm", "firstBeatSec", "beatIntervalSec", "confidence") if k in bg}
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"warn: measurements 読み込み失敗 ({e}) — beatGrid なしで続行", file=sys.stderr)
 
     data = json.load(open(args.lifted))
     frames = data["frames"]
@@ -105,6 +119,9 @@ def main():
         "events": data.get("events") or [],
         "frames": out_frames,
     }
+    if beat_grid:
+        clip["beatGrid"] = beat_grid
+        print(f"  beatGrid 同梱: bpm={beat_grid['bpm']}", file=sys.stderr)
     json.dump(clip, open(args.out, "w"), separators=(",", ":"))
 
     import os

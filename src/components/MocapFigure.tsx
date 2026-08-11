@@ -39,6 +39,8 @@ export type MotionClip = {
   joints: string[];
   events: { t: number; type: string; by?: string; rotations?: number }[];
   frames: { t: number; p: Record<string, { r: number[]; j: number[]; v: number[] }> }[];
+  // 解析で推定した拍格子（等間隔）。ハイブリッドモードの脚のビート同期に使う
+  beatGrid?: { bpm: number; firstBeatSec: number; beatIntervalSec: number; confidence?: number };
 };
 
 type Track = { ts: number[]; js: Float32Array[]; vs: Float32Array[] };

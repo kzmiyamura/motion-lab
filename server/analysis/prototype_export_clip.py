@@ -90,10 +90,15 @@ def main():
         if ps:
             out_frames.append({"t": round(fr["t"], 3), "p": ps})
 
+    # fps はメタデータではなく実際のタイムスタンプ間隔から出す（上流で取り直すと古い値が残る）
+    ts_all = [fr["t"] for fr in out_frames]
+    dt = float(np.median(np.diff(ts_all))) if len(ts_all) > 2 else 0.0
+    eff_fps = round(1.0 / dt, 2) if dt > 1e-6 else data.get("sampledFps")
+
     clip = {
         "version": 1,
         "video": data.get("video"),
-        "fps": data.get("sampledFps"),
+        "fps": eff_fps,
         "duration": out_frames[-1]["t"] if out_frames else 0.0,
         "leaderPid": data.get("leaderPid", 0),
         "joints": NAMES,

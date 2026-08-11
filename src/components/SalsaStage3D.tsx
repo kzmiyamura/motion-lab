@@ -225,17 +225,51 @@ function Choreographer({ phRef }: { phRef: RefObject<Playhead> }) {
   return null;
 }
 
+/** 自由視点カメラの状態。注視点まわりの球座標（方位角・仰角・距離） */
+export type View = { az: number; el: number; dist: number };
+export const VIEW_PRESETS: Record<string, View> = {
+  正面: { az: 0, el: 0.13, dist: 4.3 },
+  斜め: { az: 0.85, el: 0.35, dist: 4.3 },
+  真横: { az: Math.PI / 2, el: 0.1, dist: 4.0 },
+  真上: { az: 0, el: 1.35, dist: 4.6 },
+  背面: { az: Math.PI, el: 0.13, dist: 4.3 },
+};
+const TARGET = new THREE.Vector3(0, 0.95, 0);
+export const EL_MIN = -0.2, EL_MAX = 1.45, DIST_MIN = 1.8, DIST_MAX = 9;
+
 /**
- * 軌道カメラ。3D復元の値打ちは「元の動画に無いアングルから見られる」ことなので、
- * 回り込みを触れるようにしておく（azRef を上のドラッグ操作と共有する）。
+ * 自由視点カメラ。3D復元の値打ちは「元の動画に無いアングルから見られる」ことなので、
+ * 方位角・仰角・距離を全部触れるようにする。目標値へ減衰追従させて、
+ * プリセット切り替えやドラッグが飛ばずに繋がるようにしている。
  */
-function CameraRig({ azRef, autoRef }: { azRef: RefObject<number>; autoRef: RefObject<boolean> }) {
+function CameraRig({
+  viewRef, autoRef,
+}: {
+  viewRef: RefObject<View>;
+  autoRef: RefObject<boolean>;
+}) {
   const cam = useThree((s) => s.camera);
+  const cur = useRef<View>({ ...VIEW_PRESETS.正面 });
   useFrame((_, delta) => {
-    if (autoRef.current) azRef.current += delta * 0.22;
-    const r = 4.3, az = azRef.current;
-    cam.position.set(Math.sin(az) * r, 1.5, Math.cos(az) * r);
-    cam.lookAt(0, 0.95, 0);
+    const want = viewRef.current;
+    if (autoRef.current) want.az += delta * 0.22;
+    const k = Math.min(1, delta * 9);
+    // 方位角は最短方向に回す（0 と 2π をまたぐときに大回りしない）
+    let dAz = want.az - cur.current.az;
+    while (dAz > Math.PI) dAz -= Math.PI * 2;
+    while (dAz < -Math.PI) dAz += Math.PI * 2;
+    cur.current.az += dAz * k;
+    cur.current.el += (want.el - cur.current.el) * k;
+    cur.current.dist += (want.dist - cur.current.dist) * k;
+
+    const { az, el, dist } = cur.current;
+    const ce = Math.cos(el);
+    cam.position.set(
+      TARGET.x + Math.sin(az) * ce * dist,
+      TARGET.y + Math.sin(el) * dist,
+      TARGET.z + Math.cos(az) * ce * dist,
+    );
+    cam.lookAt(TARGET);
   });
   return null;
 }
@@ -261,9 +295,11 @@ export function SalsaStage3D() {
   const [isMocap, setIsMocap] = useState(false);
   const [clipT, setClipT] = useState(0);
   const clipTimeRef = useRef(0);
-  const azRef = useRef(0);
+  const viewRef = useRef<View>({ ...VIEW_PRESETS.正面 });
   const autoOrbitRef = useRef(false);
   const [autoOrbit, setAutoOrbit] = useState(false);
+  const [preset, setPreset] = useState('正面');
+  const stageRef = useRef<HTMLDivElement>(null);
 
   phRef.current.onMove = useCallback((m: MoveKind, rot: number) => {
     setNowLabel(MOVE_LABEL[m] + (rot >= 2 ? ` ×${rot}` : ''));
@@ -310,18 +346,45 @@ export function SalsaStage3D() {
     }
   };
 
-  // ステージのドラッグで回り込む
-  const dragRef = useRef<number | null>(null);
+  // ステージのドラッグで自由視点。横=回り込み、縦=見下ろし/見上げ
+  const dragRef = useRef<{ x: number; y: number } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
-    dragRef.current = e.clientX;
+    dragRef.current = { x: e.clientX, y: e.clientY };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent) => {
-    if (dragRef.current === null) return;
-    azRef.current += (e.clientX - dragRef.current) * 0.008;
-    dragRef.current = e.clientX;
+    const d = dragRef.current;
+    if (!d) return;
+    const v = viewRef.current;
+    v.az += (e.clientX - d.x) * 0.008;
+    v.el = Math.min(EL_MAX, Math.max(EL_MIN, v.el + (e.clientY - d.y) * 0.006));
+    dragRef.current = { x: e.clientX, y: e.clientY };
+    setPreset('');
   };
   const onPointerUp = () => { dragRef.current = null; };
+
+  // ホイールでドリー。ページスクロールを奪うので passive:false で自前登録する
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const v = viewRef.current;
+      v.dist = Math.min(DIST_MAX, Math.max(DIST_MIN, v.dist * (1 + Math.sign(e.deltaY) * 0.09)));
+      setPreset('');
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const applyPreset = (name: string) => {
+    const p = VIEW_PRESETS[name];
+    if (!p) return;
+    viewRef.current.az = p.az;
+    viewRef.current.el = p.el;
+    viewRef.current.dist = p.dist;
+    setPreset(name);
+  };
 
   const start = (mode: 'random' | 'replay', queue: { move: MoveKind; rotations: number }[]) => {
     const ph = phRef.current;
@@ -346,6 +409,7 @@ export function SalsaStage3D() {
   return (
     <div className={styles.wrap}>
       <div
+        ref={stageRef}
         className={styles.stage}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -375,7 +439,7 @@ export function SalsaStage3D() {
             </>
           )}
           <Choreographer phRef={phRef} />
-          <CameraRig azRef={azRef} autoRef={autoOrbitRef} />
+          <CameraRig viewRef={viewRef} autoRef={autoOrbitRef} />
         </Canvas>
 
         <div className={styles.overlay}>
@@ -404,6 +468,17 @@ export function SalsaStage3D() {
         >
           🔄 回り込み
         </button>
+        <span className={styles.views}>
+          {Object.keys(VIEW_PRESETS).map((name) => (
+            <button
+              key={name}
+              className={`${styles.viewBtn} ${preset === name ? styles.viewBtnActive : ''}`}
+              onClick={() => applyPreset(name)}
+            >
+              {name}
+            </button>
+          ))}
+        </span>
         <label className={styles.tempo}>
           BPM <input type="range" min={130} max={200} value={bpm} onChange={e => onBpm(Number(e.target.value))} />
           <b>{bpm}</b>

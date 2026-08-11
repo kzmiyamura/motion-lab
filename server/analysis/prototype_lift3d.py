@@ -115,6 +115,10 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--stride", type=int, default=1, help="tracks のフレームを何個おきに処理するか")
     ap.add_argument("--max-frames", type=int, default=0, help="0 なら全部")
+    ap.add_argument("--fps", type=float, default=0.0,
+                    help="この fps まで密に取り直す。tracks の bbox を時間補間して間のフレームも "
+                         "MediaPipe にかける。原盤は10.5fpsだが手首は1フレームで20cm以上飛ぶことがあり、"
+                         "その速さは10.5fpsでは表現できない。0 で無効（原盤のフレームのみ）")
     ap.add_argument("--hfov", type=float, default=68.0, help="水平画角[度]。iPhone メインカメラの実測相当")
     args = ap.parse_args()
 
@@ -124,7 +128,55 @@ def main():
         frames = frames[:: args.stride]
     if args.max_frames:
         frames = frames[: args.max_frames]
-    want = {f["frameIdx"]: f for f in frames}
+
+    # want: 動画のフレーム番号 -> {"t": 秒, "persons": [{"pid", "bbox"}]}
+    want = {}
+    if args.fps <= 0:
+        for f in frames:
+            want[f["frameIdx"]] = {
+                "t": f["t"],
+                "persons": [{"pid": p["pid"], "bbox": p["bbox"]}
+                            for p in f["kept"] if p.get("pid") is not None],
+            }
+    else:
+        # 原盤の bbox を人物ごとの時系列にして、目標 fps の時刻へ線形補間する。
+        # bbox は人の位置なので滑らかに動く量であり、この補間は安全（姿勢は補間していない —
+        # 間のフレームは実際に MediaPipe にかけるので、動きは捏造ではなく新しい観測になる）。
+        series = {}
+        for f in frames:
+            for p in f["kept"]:
+                if p.get("pid") is None:
+                    continue
+                series.setdefault(p["pid"], []).append((f["t"], f["frameIdx"], p["bbox"]))
+        vfps = float(tracks.get("fps") or 30.0)
+        t_end = frames[-1]["t"]
+        step = 1.0 / args.fps
+        # 原盤のサンプル間隔より大きく開いた区間は補間しない（人物が居ない区間を埋めない）
+        src_dt = 1.0 / float(tracks.get("sampledFps") or 10.0)
+        max_gap = src_dt * 2.5
+        t = 0.0
+        while t <= t_end + 1e-6:
+            fidx = int(round(t * vfps))
+            persons = []
+            for pid, arr in series.items():
+                # t を挟む2サンプルを探す
+                lo, hi = None, None
+                for k in range(len(arr) - 1):
+                    if arr[k][0] <= t <= arr[k + 1][0]:
+                        lo, hi = arr[k], arr[k + 1]
+                        break
+                if lo is None:
+                    if abs(arr[0][0] - t) < 1e-6:
+                        persons.append({"pid": pid, "bbox": arr[0][2]})
+                    continue
+                if hi[0] - lo[0] > max_gap:
+                    continue
+                w = 0.0 if hi[0] == lo[0] else (t - lo[0]) / (hi[0] - lo[0])
+                bb = [lo[2][i] * (1 - w) + hi[2][i] * w for i in range(4)]
+                persons.append({"pid": pid, "bbox": bb})
+            if persons and fidx not in want:
+                want[fidx] = {"t": t, "persons": persons}
+            t += step
 
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
@@ -161,10 +213,8 @@ def main():
                 continue
 
             persons = []
-            for p in df["kept"]:
-                pid = p.get("pid")
-                if pid is None:
-                    continue
+            for p in df["persons"]:
+                pid = p["pid"]
                 attempts[pid] = attempts.get(pid, 0) + 1
                 crop, x0, y0, s = crop_person(frame, p["bbox"], W, H)
                 if crop is None:
@@ -243,7 +293,9 @@ def main():
         "source": args.tracks,
         "video": tracks.get("video"),
         "fps": tracks.get("fps"),
-        "sampledFps": tracks.get("sampledFps"),
+        # 密に取り直した場合は実際の間隔を書く（原盤の 10.5 を引き継ぐと後段の平滑化が
+        # 時間窓を3倍に見誤る）
+        "sampledFps": args.fps if args.fps > 0 else tracks.get("sampledFps"),
         "leaderPid": tracks.get("leaderPid"),
         "events": tracks.get("events"),
         "axes": "three.js: x=right y=up z=toward camera, meters, root=hip midpoint",

@@ -73,7 +73,14 @@ def main():
     args = ap.parse_args()
 
     data = json.load(open(args.lifted))
-    fps = float(data.get("sampledFps") or 10.0)
+    # sampledFps のフィールドは上流で取り直したときに古い値が残りうるので、
+    # 実際のタイムスタンプの間隔から求める（メタデータより観測を信じる）
+    ts_all = [fr["t"] for fr in data["frames"]]
+    if len(ts_all) > 2:
+        dt = float(np.median(np.diff(ts_all)))
+        fps = 1.0 / dt if dt > 1e-6 else float(data.get("sampledFps") or 10.0)
+    else:
+        fps = float(data.get("sampledFps") or 10.0)
     max_gap = max(1, int(round(args.max_gap_sec * fps)))
 
     frames = data["frames"]

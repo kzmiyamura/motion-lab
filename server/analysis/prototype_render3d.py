@@ -104,7 +104,13 @@ def main():
     data = json.load(open(args.lifted))
     frames = data["frames"]
     leader_pid = data.get("leaderPid", 0)
-    fps = args.fps or float(data.get("sampledFps") or 10.0)
+    # fps はメタデータではなく実際のタイムスタンプ間隔から出す
+    # （上流で密に取り直すと sampledFps に古い値が残り、再生が3倍遅くなる）
+    fps = args.fps
+    if not fps:
+        ts = [fr["t"] for fr in frames]
+        dt = float(np.median(np.diff(ts))) if len(ts) > 2 else 0.0
+        fps = 1.0 / dt if dt > 1e-6 else float(data.get("sampledFps") or 10.0)
 
     # 全フレームの絶対関節位置を先に組み立て、床の高さとペアの中心を決める
     built = []

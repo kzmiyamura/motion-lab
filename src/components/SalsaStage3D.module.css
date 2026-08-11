@@ -91,6 +91,33 @@
   color: #04122b;
 }
 
+/* 自由視点のプリセット */
+.views {
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--color-border2, rgba(255, 255, 255, 0.16));
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.viewBtn {
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.66rem;
+  color: var(--color-fg-dim, #7a86a8);
+  background: transparent;
+  border: 0;
+  padding: 0.55rem 0.7rem;
+}
+.viewBtn:hover { background: rgba(255, 255, 255, 0.06); color: var(--color-fg, #eaeef7); }
+.viewBtn:focus-visible { outline: 2px solid #3d8bff; outline-offset: -2px; }
+
+.viewBtnActive {
+  background: #3d8bff;
+  color: #04122b;
+}
+
 .tempo {
   display: inline-flex;
   align-items: center;

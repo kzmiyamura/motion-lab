@@ -12,7 +12,8 @@
   4. groundplane 床拘束で体格バイアスを補正
   5. bonelength  剛体拘束（胴体の板・骨長固定・zの符号と胴体回転の時間連続性）
   6. armfix      腕の外れ値除去（胴体基準の局所座標で判定・補間）
-  7. export_clip Web用クリップ書き出し
+  7. pairfix     ホールド拘束（観測の転写）+ 接地ロック（footskate除去）
+  8. export_clip Web用クリップ書き出し
 
 焦点距離は prototype_calib_f.py で別途推定する（この動画では f>=1750 までしか絞れず、
 2524 を採用。詳細はそちらのコメント）。
@@ -66,10 +67,12 @@ def main():
     run(py, "prototype_groundplane.py", p("3_smooth.json"), "--apply", p("4_ground.json"))
     run(py, "prototype_bonelength.py", p("4_ground.json"), p("5_rigid.json"))
     run(py, "prototype_armfix.py", p("5_rigid.json"), p("6_arms.json"))
-    run(py, "prototype_export_clip.py", p("6_arms.json"), args.out,
+    run(py, "prototype_pairfix.py", p("6_arms.json"), args.tracks, p("7_pair.json"),
+        "--contact-speed", 0.03, "--contact-height", 0.22)
+    run(py, "prototype_export_clip.py", p("7_pair.json"), args.out,
         "--target-height", args.target_height)
     if args.preview:
-        run(py, "prototype_render3d.py", p("6_arms.json"), args.preview)
+        run(py, "prototype_render3d.py", p("7_pair.json"), args.preview)
 
     print(f"\ndone: {args.out}  (中間ファイル: {wd})", file=sys.stderr)
 

@@ -69,6 +69,59 @@ def usable(vis, k):
     return vis[k] >= 0.4 or vis[k] < 0
 
 
+def j_torso(j):
+    """胴体4点を CHAIN/TORSO の順で取り出す"""
+    return j[TORSO]
+
+
+def clamp_rotation_sequence(Rs, max_step_deg):
+    """胴体の向きの時系列から、物理的にありえない急変を取り除く。
+
+    当初は「前後の曖昧性による180度反転」を2択で解こうとしたが、実測では反転候補が
+    一度も選ばれず何も改善しなかった。原因はそこではない — 画像平面の x,y は左右を
+    はっきり決めるので前後反転は起きず、代わりに **人が真横を向いた瞬間に肩が線に潰れ、
+    ヨー角を z のノイズが支配して連続的に暴れる**。離散的な反転ではないので、
+    2択ではなく回転の変化量そのものを制限する必要がある。
+
+    1フレームあたりの回転を max_step で頭打ちにする。速い3回転ターンでも
+    720度/秒 = 30fps で24度/フレーム程度なので、30度を上限にすれば本物の動きは通る。
+    """
+    max_step = np.radians(max_step_deg)
+    out = [Rs[0]]
+    clamped = 0
+    for t in range(1, len(Rs)):
+        prev = out[-1]
+        delta = Rs[t] @ prev.T
+        c = (np.trace(delta) - 1.0) / 2.0
+        ang = float(np.arccos(np.clip(c, -1.0, 1.0)))
+        if ang <= max_step or not np.isfinite(ang):
+            out.append(Rs[t])
+            continue
+        s = np.sin(ang)
+        if abs(s) < 1e-8:
+            # 軸が数値的に取れない（180度付近）。動かさないのが最も安全
+            out.append(prev)
+            clamped += 1
+            continue
+        axis = np.array([delta[2, 1] - delta[1, 2],
+                         delta[0, 2] - delta[2, 0],
+                         delta[1, 0] - delta[0, 1]]) / (2.0 * s)
+        n = np.linalg.norm(axis)
+        if n < 1e-8:
+            out.append(prev)
+            clamped += 1
+            continue
+        axis = axis / n
+        th = max_step
+        K = np.array([[0, -axis[2], axis[1]],
+                      [axis[2], 0, -axis[0]],
+                      [-axis[1], axis[0], 0]])
+        d2 = np.eye(3) + np.sin(th) * K + (1 - np.cos(th)) * (K @ K)
+        out.append(d2 @ prev)
+        clamped += 1
+    return out, clamped
+
+
 def kabsch(P, Q, w):
     """重み付き Kabsch。正準形状 P を観測 Q に合わせる (R, t) を返す。鏡像は許さない"""
     w = w / max(1e-9, w.sum())
@@ -135,6 +188,10 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--pct", type=float, default=92.0,
                     help="骨長・胴体寸法に使う2D投影長のパーセンタイル")
+    ap.add_argument("--max-step-deg", type=float, default=30.0,
+                    help="胴体の向きの1フレームあたり最大回転[度]。速い3回転ターンでも "
+                         "24度/フレーム程度なので、既定の30度なら本物の動きは通り "
+                         "計測された151度のような不可能な急変だけが落ちる")
     args = ap.parse_args()
 
     data = json.load(open(args.lifted))
@@ -174,16 +231,36 @@ def main():
             dn = J[nose_ok][:, NOSE] - sm
             nose_len = float(np.percentile(np.hypot(dn[:, 0], dn[:, 1]), args.pct))
 
+        # --- 先に胴体の回転列だけ求めて、急変を取り除いてから配置する ---
+        Rs, trs = [], []
+        for t in range(len(J)):
+            w = np.array([1.0 if usable(V[t], k) else 0.05 for k in TORSO])
+            Rt, tt = kabsch(canon, j_torso(J[t]), w)
+            Rs.append(Rt)
+            trs.append(tt)
+        Rs, n_clamped = clamp_rotation_sequence(Rs, args.max_step_deg)
+
         # --- フレームを時間順に処理（符号の連続性のため順序が意味を持つ）---
         prev = None
+        prev_R = None
+        # 胴体の上下軸まわりの180度回転。胴体はほぼ平面なので、この回転は同じ平面に
+        # 写り、4点への当てはまりがほとんど変わらない（単眼では前向き/後ろ向きが
+        # 見分けにくい、いわゆる前後の曖昧性）。実測で1フレームに151度という
+        # 物理的にありえない反転が起きており、腕はこれに引きずられて瞬間移動していた。
         stats = {"flip_saved": 0, "clamped": 0, "total": 0}
         for t in range(len(J)):
             j = J[t]
             out = j.copy()
 
-            # 1) 胴体を剛体として当てはめる
+            # 1) 胴体を剛体として配置する。回転は急変を取り除いた列を使い、
+            #    平行移動は観測の重心に合わせ直す（回転を均しても位置は追従させる）
+            R = Rs[t]
             w = np.array([1.0 if usable(V[t], k) else 0.05 for k in TORSO])
-            R, tr = kabsch(canon, j[TORSO], w)
+            wn = w / max(1e-9, w.sum())
+            pc = (canon * wn[:, None]).sum(0)
+            qc = (j[TORSO] * wn[:, None]).sum(0)
+            tr = qc - R @ pc
+            prev_R = R
             placed = (canon @ R.T) + tr
             for k, p3 in zip(TORSO, placed):
                 out[k] = p3
@@ -226,7 +303,8 @@ def main():
               f"上腕={L[(L_SHO,13)]:.3f} 前腕={L[(13,15)]:.3f} 大腿={L[(L_HIP,25)]:.3f} "
               f"下腿={L[(25,27)]:.3f}m", file=sys.stderr)
         print(f"        符号を時間連続性で選び直した回数 {stats['flip_saved']}/{stats['total']}  "
-              f"投影長クランプ {stats['clamped']}/{stats['total']}", file=sys.stderr)
+              f"投影長クランプ {stats['clamped']}/{stats['total']}  "
+              f"胴体の回転を頭打ちにした回数 {n_clamped}/{len(J)}", file=sys.stderr)
 
     json.dump(data, open(args.out, "w"))
     print(f"wrote {args.out}", file=sys.stderr)

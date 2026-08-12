@@ -24,7 +24,7 @@ import { PhotoHead, SampleHead, SAMPLE_BY_ID, DEFAULT_SKIN } from './AvatarHeads
  */
 
 // クリップの joints 並び（MocapFigure の J と同じ）
-const LSHO = 1, RSHO = 2, LHIP = 7, RHIP = 8;
+const LSHO = 1, RSHO = 2, LWRI = 5, RWRI = 6, LHIP = 7, RHIP = 8;
 const LANK = 11, RANK = 12, LEAR = 13, REAR = 14, LTOE = 17, RTOE = 18;
 
 // リグの寸法[m]（export の --target-height 1.70 に合わせた固定長）。
@@ -74,6 +74,52 @@ function smooth(src: number[], win: number): Float32Array {
   return out;
 }
 
+/** 中央値フィルタ。1〜2フレームだけ飛ぶ復元ノイズは、平均で均すと周りへ広がるだけで消えない */
+function median(src: number[], win: number): number[] {
+  const out = new Array<number>(src.length);
+  const h = Math.floor(win / 2);
+  const buf: number[] = [];
+  for (let i = 0; i < src.length; i++) {
+    buf.length = 0;
+    for (let k = Math.max(0, i - h); k <= Math.min(src.length - 1, i + h); k++) buf.push(src[k]);
+    buf.sort((a, b) => a - b);
+    out[i] = buf[buf.length >> 1];
+  }
+  return out;
+}
+
+/**
+ * 水平の移動を人が出せる速さへ頭打ちにする（前向き・後ろ向きの2回を平均して遅れを片寄らせない）。
+ *
+ * 弱透視では 横位置 X = (u - cx)·Z/f なので、**奥行き Z の推定が飛ぶと横位置も一緒に飛ぶ**。
+ * 実測では腰の奥行きが最大 47m/s・全体の 20〜27% のフレームで 3m/s（人の歩速）を超えており、
+ * これは踊りではなく復元ノイズ。平均で均すと隣のフレームへ広がるだけなので、速度で止める。
+ */
+const MAX_ROOT_SPEED = 3.5;   // [m/s] ダンサーの重心が床の上で出せる速さ
+
+function limitSpeed(xs: number[], zs: number[], ts: number[], maxSpeed: number) {
+  const pass = (fwd: boolean) => {
+    const ox = xs.slice(), oz = zs.slice();
+    for (let s = 1; s < ox.length; s++) {
+      const i = fwd ? s : ox.length - 1 - s, p = fwd ? i - 1 : i + 1;
+      const dt = Math.abs(ts[i] - ts[p]);
+      if (!(dt > 1e-6 && dt < 0.5)) continue;
+      const dx = ox[i] - ox[p], dz = oz[i] - oz[p];
+      const len = Math.hypot(dx, dz), max = maxSpeed * dt;
+      if (len > max) {
+        const k = max / len;
+        ox[i] = ox[p] + dx * k; oz[i] = oz[p] + dz * k;
+      }
+    }
+    return [ox, oz] as const;
+  };
+  const [fx, fz] = pass(true), [bx, bz] = pass(false);
+  return [
+    fx.map((v, i) => (v + bx[i]) / 2),
+    fz.map((v, i) => (v + bz[i]) / 2),
+  ] as const;
+}
+
 /** 値 + 信頼度のチャンネル。信頼度は手続きアニメとの混ぜ率になる */
 type Chan = { v: Float32Array; w: Float32Array };
 /** 足首の目標（体ローカル座標。y は床基準の絶対高さ） */
@@ -90,7 +136,48 @@ type Guide = {
   headYaw: Chan;       // 骨盤に対する頭の相対ヨー = スポッティング
   ank: [AnkleChan, AnkleChan];  // [左, 右]
   footYaw: [Chan, Chan];
+  wri: [AnkleChan, AnkleChan];  // 手首の目標。足首と同じ形（体ローカル + 床基準の y）
 };
+
+// 手の速さの上限[m/s]。これを超える1フレーム移動は復元ノイズ（実測 p95 で 10m/s 超が出る）
+const MAX_HAND_SPEED = 5.0;
+// 欠測を速度ベクトルで伸ばす時間[s]と、その間に許す最大変位[m]。
+// 手首の穴は median 48〜96ms なので、これで大半は実データの続きで埋まる
+const EXTRAP_SEC = 0.25, EXTRAP_MAX = 0.25;
+
+/**
+ * 欠測を「直前の速度ベクトルの続き」で埋める。位置を保持するだけだと手が空中で止まり、
+ * 0 に落とすと消える。**人の手は急に止まらない**ので、出ていた方向へ伸ばして
+ * 信頼度だけを落とし、手続きアニメ／ホールド点へ滑らかに明け渡す。
+ */
+function fillByVelocity(a: { x: number[]; y: number[]; z: number[]; w: number[] }, ts: number[]) {
+  let last = -1;                      // 直前に実観測できた index
+  let vx = 0, vy = 0, vz = 0;
+  for (let i = 0; i < ts.length; i++) {
+    if (a.w[i] > 0) {
+      if (last >= 0) {
+        const dt = ts[i] - ts[last];
+        if (dt > 1e-6 && dt < 0.5) {
+          vx = (a.x[i] - a.x[last]) / dt;
+          vy = (a.y[i] - a.y[last]) / dt;
+          vz = (a.z[i] - a.z[last]) / dt;
+          const sp = Math.hypot(vx, vy, vz);
+          if (sp > MAX_HAND_SPEED) { const k = MAX_HAND_SPEED / sp; vx *= k; vy *= k; vz *= k; }
+        }
+      }
+      last = i;
+      continue;
+    }
+    if (last < 0) continue;
+    const dt = ts[i] - ts[last];
+    if (dt > EXTRAP_SEC) continue;    // 長い穴は手続き側へ渡す（w=0 のまま）
+    const k = Math.min(1, EXTRAP_MAX / (Math.hypot(vx, vy, vz) * dt || 1e-6));
+    a.x[i] = a.x[last] + vx * dt * k;
+    a.y[i] = a.y[last] + vy * dt * k;
+    a.z[i] = a.z[last] + vz * dt * k;
+    a.w[i] = 1 - dt / EXTRAP_SEC;     // 伸ばすほど信頼度を落とす
+  }
+}
 
 /**
  * クリップから信頼できる量だけを抜き出す。
@@ -104,6 +191,7 @@ function buildGuide(clip: MotionClip, pid: number): Guide {
   const twists: number[] = [], twistW: number[] = [];
   const mkA = () => ({ x: [] as number[], y: [] as number[], z: [] as number[], w: [] as number[] });
   const aRaw = [mkA(), mkA()];
+  const wRaw = [mkA(), mkA()];
   const fRaw = [{ v: [] as number[], w: [] as number[] }, { v: [] as number[], w: [] as number[] }];
   let prevYaw: number | null = null;
 
@@ -185,9 +273,36 @@ function buildGuide(clip: MotionClip, pid: number): Guide {
     };
     foot(LANK, LTOE, 0);
     foot(RANK, RTOE, 1);
+
+    // ── 手首（腕IKの目標）。**腕こそ見たいところ**なので、観測できたフレームは
+    // 手続きアニメではなく実データを使う。肩から腕の長さを超える点は復元ノイズなので捨てる
+    const hand = (wIdx: number, shIdx: number, s: 0 | 1) => {
+      const dst = wRaw[s];
+      const reach = v[wIdx] > 0 && v[shIdx] > 0
+        ? Math.hypot(j[wIdx * 3] - j[shIdx * 3], j[wIdx * 3 + 1] - j[shIdx * 3 + 1],
+          j[wIdx * 3 + 2] - j[shIdx * 3 + 2])
+        : -1;
+      if (reach >= 0.08 && reach <= 0.62) {
+        const [lx, lz] = toLocal(j[wIdx * 3], j[wIdx * 3 + 2]);
+        dst.x.push(lx); dst.y.push(j[wIdx * 3 + 1]); dst.z.push(lz);
+        dst.w.push(v[wIdx] >= 1 ? 1 : 0.5);
+      } else {
+        dst.x.push(last(dst.x, 0)); dst.y.push(last(dst.y, 1.1));
+        dst.z.push(last(dst.z, 0.1)); dst.w.push(0);
+      }
+    };
+    hand(LWRI, LSHO, 0);
+    hand(RWRI, RSHO, 1);
   }
 
-  const x = smooth(xs, 7), z = smooth(zs, 7), yaw = smooth(yaws, 7);
+  // 手首の穴は速度ベクトルで少しだけ伸ばしてから均す（平滑化の前にやること —
+  // 保持したままの値を均すと、止まっている手が正しいかのように見えてしまう）
+  fillByVelocity(wRaw[0], ts);
+  fillByVelocity(wRaw[1], ts);
+
+  // 単発の飛びを中央値で潰し、残りを人の速さへ頭打ちにしてから均す
+  const [lx, lz] = limitSpeed(median(xs, 5), median(zs, 5), ts, MAX_ROOT_SPEED);
+  const x = smooth(lx, 7), z = smooth(lz, 7), yaw = smooth(yaws, 7);
   const speed = new Float32Array(ts.length);
   for (let i = 1; i < ts.length; i++) {
     const dt = ts[i] - ts[i - 1];
@@ -200,6 +315,9 @@ function buildGuide(clip: MotionClip, pid: number): Guide {
   const ank = (a: ReturnType<typeof mkA>): AnkleChan => ({
     x: smooth(a.x, 5), y: smooth(a.y, 5), z: smooth(a.z, 5), w: smooth(a.w, 11),
   });
+  const wch = (a: ReturnType<typeof mkA>): AnkleChan => ({
+    x: smooth(a.x, 3), y: smooth(a.y, 3), z: smooth(a.z, 3), w: smooth(a.w, 5),
+  });
 
   return {
     ts: new Float32Array(ts), x, z, yaw, speed: smooth(Array.from(speed), 5),
@@ -208,12 +326,84 @@ function buildGuide(clip: MotionClip, pid: number): Guide {
     headYaw: chan({ v: hYaw, w: hYawW }),
     ank: [ank(aRaw[0]), ank(aRaw[1])],
     footYaw: [chan(fRaw[0]), chan(fRaw[1])],
+    // 手首は足首より窓を狭くする。信頼度を広く均すと、観測できているフレームまで
+    // 手続きアニメと半々に薄まって、せっかくの実データが見えなくなる
+    wri: [wch(wRaw[0]), wch(wRaw[1])],
+  };
+}
+
+/**
+ * ペアの**相対位置**だけを別に解くガイド。
+ *
+ * 単眼の弱透視では奥行き(z)が推定なので、実際には横に並んでいる2人が
+ * 「前後に並んでいる」ことになるフレームが出る。2D原盤と突き合わせると、
+ * **画像では画面幅の15%以上離れているのに3Dでは20cm未満まで重なるフレームが9%**あり、
+ * 失われた左右差はそのぶん奥行きに化けていた（重なって見える＝何をしているか読めない）。
+ *
+ * 直し方は人体・物理の側から: **手をつないだ2人の相対の向きは、人が回り込める速さより
+ * 速く変わらない**。実測でも 7% のフレームが 720deg/s を超えており（最大 5941deg/s =
+ * 毎秒16回転）、これは踊りではなく復元ノイズ。中央値フィルタ＋角速度の頭打ちで潰す。
+ *
+ * 重心（2人の中点）は実データのまま動かさないので、振付の床の使い方は保たれる。
+ */
+type PairGuide = {
+  ts: Float32Array; cx: Float32Array; cz: Float32Array;
+  th: Float32Array;  // 相対位置の向き（unwrap 済み）
+  d: Float32Array;   // 2人の距離
+};
+const MAX_PAIR_TURN = Math.PI * 4;   // [rad/s] = 720deg/s。人が相手を回り込める上限
+
+function buildPair(clip: MotionClip, pid0: number, pid1: number): PairGuide {
+  const ts: number[] = [], cx: number[] = [], cz: number[] = [];
+  const th: number[] = [], d: number[] = [];
+  let prev: number | null = null;
+  for (const f of clip.frames) {
+    const a = f.p[String(pid0)], b = f.p[String(pid1)];
+    if (!a || !b) continue;
+    if (a.v[LHIP] <= 0 || a.v[RHIP] <= 0 || b.v[LHIP] <= 0 || b.v[RHIP] <= 0) continue;
+    const ax = (a.j[LHIP * 3] + a.j[RHIP * 3]) / 2, az = (a.j[LHIP * 3 + 2] + a.j[RHIP * 3 + 2]) / 2;
+    const bx = (b.j[LHIP * 3] + b.j[RHIP * 3]) / 2, bz = (b.j[LHIP * 3 + 2] + b.j[RHIP * 3 + 2]) / 2;
+    const dx = bx - ax, dz = bz - az;
+    let a2 = Math.atan2(dz, dx);
+    if (prev !== null) {
+      while (a2 - prev > Math.PI) a2 -= Math.PI * 2;
+      while (a2 - prev < -Math.PI) a2 += Math.PI * 2;
+    }
+    prev = a2;
+    ts.push(f.t); cx.push((ax + bx) / 2); cz.push((az + bz) / 2);
+    th.push(a2); d.push(Math.hypot(dx, dz));
+  }
+
+  // 単発の飛びを中央値で潰してから、残った速すぎる回り込みを頭打ちにする。
+  // 前向き・後ろ向きの2回かけて平均する（片方向だけだと遅れが片側に偏る）
+  const th1 = median(th, 5);
+  const limit = (src: number[], fwd: boolean) => {
+    const out = src.slice();
+    const n = out.length;
+    for (let s = 1; s < n; s++) {
+      const i = fwd ? s : n - 1 - s, p = fwd ? i - 1 : i + 1;
+      const dt = Math.abs(ts[i] - ts[p]);
+      if (!(dt > 1e-6 && dt < 0.5)) continue;
+      const max = MAX_PAIR_TURN * dt;
+      out[i] = clamp(out[i], out[p] - max, out[p] + max);
+    }
+    return out;
+  };
+  const f1 = limit(th1, true), b1 = limit(th1, false);
+  const th2 = th1.map((_, i) => (f1[i] + b1[i]) / 2);
+
+  const [lcx, lcz] = limitSpeed(median(cx, 5), median(cz, 5), ts, MAX_ROOT_SPEED);
+  return {
+    ts: new Float32Array(ts),
+    cx: smooth(lcx, 7), cz: smooth(lcz, 7),
+    th: smooth(th2, 7),
+    d: smooth(median(d, 5).map((v) => clamp(v, PAIR_MIN, PAIR_MAX)), 7),
   };
 }
 
 // ── ガイドのサンプリング（人物ごとにカーソルを持つ）
 type Sample = { i: number; i2: number; w: number; inRange: boolean };
-function sampleAt(g: Guide, t: number, cur: { current: number }): Sample {
+function sampleAt(g: { ts: Float32Array }, t: number, cur: { current: number }): Sample {
   if (g.ts.length < 2) return { i: 0, i2: 0, w: 0, inRange: false };
   let i = cur.current;
   if (i >= g.ts.length) i = g.ts.length - 1;
@@ -235,7 +425,7 @@ const tmp = {
   m: new THREE.Matrix4(), q: new THREE.Quaternion(), q2: new THREE.Quaternion(),
   qs: new THREE.Quaternion(),
   hold: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3(),
-  v: new THREE.Vector3(),
+  v: new THREE.Vector3(), v2: new THREE.Vector3(), w2: new THREE.Vector3(),
 };
 
 /**
@@ -535,6 +725,8 @@ export function CoupleFigure({
   const guides = useMemo(
     () => [buildGuide(clip, pids[0]), buildGuide(clip, pids[1])], [clip, pids]);
   const holds = useMemo(() => buildHolds(clip), [clip]);
+  const pair = useMemo(() => buildPair(clip, pids[0], pids[1]), [clip, pids]);
+  const pairCur = useRef(0);
   const rigs = useRef<[Rig, Rig]>([newRig(), newRig()]).current;
   // つないだ手の共有点（前フレーム）。ここで鈍らせるので腕は目標をそのまま解ける
   const holdPos = useRef(new THREE.Vector3());
@@ -568,7 +760,16 @@ export function CoupleFigure({
       tx[d] = at(smp[d], guides[d].x);
       tz[d] = at(smp[d], guides[d].z);
     }
-    if (smp[0].inRange && smp[1].inRange) {
+    // 2人の**相対位置**はペアガイドで解く。個々の x/z をそのまま使うと、
+    // 奥行き推定の誤差で「横に並んでいるはずの2人が前後に重なる」フレームが出る
+    const ps = sampleAt(pair, t, pairCur);
+    if (smp[0].inRange && smp[1].inRange && ps.inRange) {
+      const th = at(ps, pair.th), half = at(ps, pair.d) / 2;
+      const cx = at(ps, pair.cx), cz = at(ps, pair.cz);
+      const ux = Math.cos(th), uz = Math.sin(th);
+      tx[0] = cx - ux * half; tz[0] = cz - uz * half;
+      tx[1] = cx + ux * half; tz[1] = cz + uz * half;
+    } else if (smp[0].inRange && smp[1].inRange) {
       let dx = tx[1] - tx[0], dz = tz[1] - tz[0];
       let dist = Math.hypot(dx, dz);
       if (dist < 1e-3) {
@@ -678,6 +879,20 @@ export function CoupleFigure({
         tmp.v.set(r.root.position.x, r.hips.position.y + 0.78, r.root.position.z);
         tmp.hold.lerp(tmp.v, lift);
       }
+      // つないだ手は物理的に**同じ1点**にある。だから片方でも手首が観測できていれば
+      // そこが本当のホールド点で、合成した中点より必ず正しい。信頼度ぶんだけ実データへ寄せる
+      let dw = 0;
+      tmp.v2.set(0, 0, 0);
+      for (let d = 0; d < 2; d++) {
+        const g = guides[d], k = linked[d]!;
+        const w = clamp(at(smp[d], g.wri[k].w), 0, 1);
+        if (w <= 0.02) continue;
+        tmp.w2.set(at(smp[d], g.wri[k].x), at(smp[d], g.wri[k].y), at(smp[d], g.wri[k].z));
+        rigs[d].root.localToWorld(tmp.w2);
+        tmp.v2.addScaledVector(tmp.w2, w); dw += w;
+      }
+      if (dw > 0.02) tmp.hold.lerp(tmp.v2.divideScalar(dw), Math.min(1, dw));
+
       // 手の揺れは**共有点の側**で吸収する。腕ごとに鈍らせると、2人が別々に
       // 遅れて別々の場所を掴むことになり、速いターンで手が離れる（実測 30〜40cm）
       if (holdSame.current === hold) tmp.hold.lerp(holdPos.current, HOLD_LAG);
@@ -719,9 +934,9 @@ export function CoupleFigure({
       holdSame.current = null;
     }
 
-    // ── レイヤー4: フリーの腕。体側で軽く構えて拍で揺れる
+    // ── レイヤー4: フリーの腕。実データがあればそれを目標に、無ければ体側で軽く構えて拍で揺れる
     for (let d = 0; d < 2; d++) {
-      const rig = rigs[d];
+      const rig = rigs[d], g = guides[d], s = smp[d];
       for (let k = 0; k < 2; k++) {
         if (linked[d] === k) continue;
         const sign = SIDE_SIGN[k];
@@ -729,6 +944,23 @@ export function CoupleFigure({
         sh.position.set(sign * SHO_DX, SHO_DY, 0);   // 上げた肩を戻す
         sh.rotation.set(-0.30 + dip * 0.10, 0, sign * (0.42 + dip * 0.06));
         rig.elbow[k].rotation.set(damp(rig.elbow[k].rotation.x, -0.85, 0.2), 0, 0);
+
+        // 実観測（+ 速度ベクトルで伸ばした続き）の手首へ、信頼度ぶん寄せる。
+        // 上で手続きの構えを入れてあるので、w が落ちれば自然にそちらへ戻る
+        const w = s.inRange ? clamp(at(s, g.wri[k].w), 0, 1) : 0;
+        if (w <= 0.02) continue;
+        tmp.v.set(at(s, g.wri[k].x), at(s, g.wri[k].y), at(s, g.wri[k].z));
+        rig.root.localToWorld(tmp.v);
+        // 肩甲上腕リズム + 可動域。IK に無理をさせず、目標の側を人体の範囲へ丸める
+        rig.spine.worldToLocal(tmp.v);
+        const raise = clamp((tmp.v.y - SHO_DY) / 0.35, 0, 1) * 0.055;
+        sh.position.set(sign * (SHO_DX + raise * 0.35), SHO_DY + raise, 0);
+        rig.spine.localToWorld(tmp.v);
+        clampToArm(rig.spine, sh.position, tmp.v);
+        rig.spine.worldToLocal(tmp.v);
+        solve2Bone(sh, rig.elbow[k], L_UPARM, L_FOREARM,
+          tmp.v.x - sh.position.x, tmp.v.y - sh.position.y, tmp.v.z,
+          sign * 0.55, -1, -0.3, w);
       }
     }
   });

@@ -139,6 +139,28 @@
 }
 .clipSel select:focus-visible { outline: 2px solid #3d8bff; outline-offset: 2px; }
 
+/* 頭の選択（サンプルのプルダウン + 写真ボタン）をひとまとまりに見せる */
+.headSel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 見返し用のシークバー。残り幅いっぱいに伸ばす */
+.seek {
+  display: flex;
+  flex: 1 1 12rem;
+  align-items: center;
+  gap: 8px;
+  min-width: 8rem;
+  font-size: 0.68rem;
+}
+.seek input { flex: 1; accent-color: #3d8bff; }
+.seek b {
+  color: var(--color-fg, #eaeef7);
+  font-variant-numeric: tabular-nums;
+}
+
 .tempo {
   display: inline-flex;
   align-items: center;

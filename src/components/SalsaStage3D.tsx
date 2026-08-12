@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { MocapFigure, type MotionClip } from './MocapFigure';
 import { CoupleFigure } from './CoupleFigure';
 import { detectFace, loadFaces, saveFaces, EMPTY_FACES, type FaceSlots } from '../engine/faceAvatar';
+import { SAMPLE_AVATARS } from './AvatarHeads';
 import styles from './SalsaStage3D.module.css';
 
 // 動画から復元した3Dモーション。server/analysis/prototype_lift3d.py 系のパイプラインが書き出す
@@ -66,6 +67,7 @@ type Playhead = {
   // mocap 用: クリップ内の再生位置[秒]
   clipTime: number;
   clipDuration: number;
+  clipSpeed: number;   // スロー再生（1 = 等速）
   onClipTime: (t: number) => void;
 };
 
@@ -202,7 +204,7 @@ function Choreographer({ phRef }: { phRef: RefObject<Playhead> }) {
 
     // mocap / hybrid はクリップ時刻を実時間で流すだけ（拍で技を送る必要がない）
     if (ph.mode === 'mocap' || ph.mode === 'hybrid') {
-      ph.clipTime += delta;
+      ph.clipTime += delta * ph.clipSpeed;
       if (ph.clipDuration > 0 && ph.clipTime > ph.clipDuration) ph.clipTime = 0;
       ph.onClipTime(ph.clipTime);
       return;
@@ -292,7 +294,7 @@ export function SalsaStage3D() {
     playing: false, bpm: 170, beat: 0, cycle: -1, mode: 'random',
     current: 'basic', rotations: 1, moveStartBeat: 0, queue: [],
     onMove: () => {},
-    clipTime: 0, clipDuration: 0, onClipTime: () => {},
+    clipTime: 0, clipDuration: 0, clipSpeed: 1, onClipTime: () => {},
   });
   const [playing, setPlaying] = useState(false);
   const [bpm, setBpm] = useState(170);
@@ -335,9 +337,34 @@ export function SalsaStage3D() {
     }
   };
 
-  const clearFaces = () => {
-    setFaces(EMPTY_FACES);
-    saveFaces(EMPTY_FACES);
+  // ── クリップの見返し: スロー再生・コマ送り・シーク
+  const [speed, setSpeed] = useState(1);
+  const onSpeed = (v: number) => { setSpeed(v); phRef.current.clipSpeed = v; };
+
+  const seek = (t: number) => {
+    const ph = phRef.current;
+    const v = Math.min(ph.clipDuration || 0, Math.max(0, t));
+    ph.clipTime = v; clipTimeRef.current = v; setClipT(v);
+  };
+  /** コマ送り。止めてから1フレームぶん進める/戻す */
+  const stepFrame = (dir: number) => {
+    const ph = phRef.current;
+    if (ph.playing) { ph.playing = false; setPlaying(false); }
+    seek(ph.clipTime + dir / (clip?.fps || 30));
+  };
+
+  // 頭の選択。'photo' は取り込み済みの写真、それ以外はサンプルの id（'' = 素の球）
+  const headChoice = (slot: 'leader' | 'follower') =>
+    faces[slot] ? 'photo' : faces.sample[slot];
+
+  const onHeadChoice = (slot: 'leader' | 'follower', value: string) => {
+    if (value === 'photo') return; // 写真は取り込んだ時点で選ばれている
+    setFaces((prev) => {
+      // サンプルを選んだらその枠の写真は手放す（選択を1本にしておく）
+      const next = { ...prev, [slot]: null, sample: { ...prev.sample, [slot]: value } };
+      saveFaces(next);
+      return next;
+    });
     setFaceErr(null);
   };
 
@@ -522,6 +549,8 @@ export function SalsaStage3D() {
               followerColor="#ff4db8"
               leaderFace={faces.leader}
               followerFace={faces.follower}
+              leaderSample={faces.sample.leader}
+              followerSample={faces.sample.follower}
             />
           ) : (
             <>
@@ -590,23 +619,62 @@ export function SalsaStage3D() {
           BPM <input type="range" min={130} max={200} value={bpm} onChange={e => onBpm(Number(e.target.value))} />
           <b>{bpm}</b>
         </label>
-        {/* 写真から顔を作る。処理も保存も端末内で完結する */}
+        {/* 頭: 同梱サンプルから選ぶか、写真から作る（写真の処理も保存も端末内で完結） */}
         {(['leader', 'follower'] as const).map((slot) => (
-          <label key={slot} className={`${styles.btn} ${faces[slot] ? styles.primary : ''}`}>
-            {faceBusy === slot ? '⏳ 解析中…'
-              : `${slot === 'leader' ? '🙂 リーダー' : '🙂 フォロワー'}の顔`}
-            <input
-              type="file"
-              accept="image/*"
-              style={{ display: 'none' }}
-              onChange={(e) => { void onFacePick(slot, e.target.files?.[0]); e.target.value = ''; }}
-            />
-          </label>
+          <span key={slot} className={styles.headSel}>
+            <label className={styles.clipSel}>
+              {slot === 'leader' ? '🙂 リーダー' : '🙂 フォロワー'}
+              <select
+                value={headChoice(slot)}
+                onChange={(e) => onHeadChoice(slot, e.target.value)}
+              >
+                {SAMPLE_AVATARS.map((a) => (
+                  <option key={a.id} value={a.id}>{a.label}</option>
+                ))}
+                <option value="">顔なし（色だけ）</option>
+                {faces[slot] && <option value="photo">写真から作った顔</option>}
+              </select>
+            </label>
+            <label className={`${styles.btn} ${faces[slot] ? styles.primary : ''}`}>
+              {faceBusy === slot ? '⏳ 解析中…' : '📷 写真'}
+              <input
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => { void onFacePick(slot, e.target.files?.[0]); e.target.value = ''; }}
+              />
+            </label>
+          </span>
         ))}
-        {(faces.leader || faces.follower) && (
-          <button className={styles.btn} onClick={clearFaces}>🧹 顔を消す</button>
-        )}
       </div>
+
+      {/* 見返し用: 速い動きは等速だと追えないので、スロー・コマ送り・シークを出す */}
+      {clipMode !== 'off' && clip && (
+        <div className={styles.bar}>
+          <button className={styles.btn} onClick={() => stepFrame(-1)}>⏮ コマ戻し</button>
+          <button className={styles.btn} onClick={() => stepFrame(1)}>コマ送り ⏭</button>
+          <label className={styles.clipSel}>
+            ⏱
+            <select value={speed} onChange={(e) => onSpeed(Number(e.target.value))}>
+              <option value={1}>等速</option>
+              <option value={0.5}>0.5倍</option>
+              <option value={0.25}>0.25倍</option>
+              <option value={0.1}>0.1倍</option>
+            </select>
+          </label>
+          <label className={styles.seek}>
+            <input
+              type="range"
+              min={0}
+              max={clip.duration}
+              step={0.01}
+              value={Math.min(clipT, clip.duration)}
+              onChange={(e) => seek(Number(e.target.value))}
+            />
+            <b>{clipT.toFixed(2)}s</b>
+          </label>
+        </div>
+      )}
 
       {clipErr && <p className={styles.note}>モーションの読み込みに失敗しました: {clipErr}</p>}
       {faceErr && <p className={styles.note}>顔の読み込みに失敗しました: {faceErr}</p>}
@@ -624,10 +692,11 @@ export function SalsaStage3D() {
         2人の距離も拘束しています — 弱透視の奥行き誤差で腰の間隔が最小5cmまで潰れるため、
         重心を動かさずに0.58〜1.02mへ収めています（振付の床の使い方は保たれます）。
         ステージは<b>ドラッグで回り込め</b>ます — 元の動画に無いアングルから見られるのが3D復元の値打ちです。
-        <b>🙂 顔</b> は写真から作れます — MediaPipe の顔ランドマーク478点をそのまま頂点にし、
+        <b>🙂 頭</b> は同梱のサンプルから選べます（既定でリーダー/フォロワーに別々のものが入っています）。
+        <b>📷 写真</b> を選ぶと自分の顔にできます — MediaPipe の顔ランドマーク478点をそのまま頂点にし、
         同じ点の画像座標を UV に使うので、写真が顔の形にぴったり貼られます。
         <b>解析も保存もこの端末の中だけで完結し、写真はどこへも送信されません</b>
-        （消したいときは 🧹 で消えます）。
+        （サンプルを選び直せばその枠の写真は消えます）。
         <b>🦴 復元データ</b> は復元結果そのものを見るデバッグ表示で、
         薄いボーンは補間、描かれないボーンは観測なしです。
         ▶ 再生 / 📼 は技イベントだけ動画由来の手続きアニメ（B方式）です。

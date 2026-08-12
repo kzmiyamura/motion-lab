@@ -196,15 +196,35 @@ export function buildFaceGeometry(a: FaceAvatar, faceWidth = 0.175): THREE.Buffe
 
 // ── 保存（写真は端末から出さない）────────────────────────────────────────
 const KEY = 'motionlab.faceAvatar.v1';
-export type FaceSlots = { leader: FaceAvatar | null; follower: FaceAvatar | null };
-export const EMPTY_FACES: FaceSlots = { leader: null, follower: null };
+
+/**
+ * 頭の選択。写真があればそれを使い、無ければ同梱サンプル（`sample` の id）を使う。
+ * サンプル id は AvatarHeads.tsx の SAMPLE_AVATARS に対応し、空文字は「素の球」。
+ */
+export type FaceSlots = {
+  leader: FaceAvatar | null;
+  follower: FaceAvatar | null;
+  sample: { leader: string; follower: string };
+};
+
+/** 既定はサンプル入り — 何もしなくても人形が「人」に見えるほうが読み取りやすい */
+export const EMPTY_FACES: FaceSlots = {
+  leader: null, follower: null, sample: { leader: 'a', follower: 'b' },
+};
 
 export function loadFaces(): FaceSlots {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return EMPTY_FACES;
     const v = JSON.parse(raw) as Partial<FaceSlots>;
-    return { leader: v.leader ?? null, follower: v.follower ?? null };
+    return {
+      leader: v.leader ?? null,
+      follower: v.follower ?? null,
+      sample: {
+        leader: v.sample?.leader ?? EMPTY_FACES.sample.leader,
+        follower: v.sample?.follower ?? EMPTY_FACES.sample.follower,
+      },
+    };
   } catch {
     return EMPTY_FACES;
   }

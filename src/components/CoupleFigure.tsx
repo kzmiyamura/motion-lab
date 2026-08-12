@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { MotionClip } from './MocapFigure';
-import { buildFaceGeometry, type FaceAvatar } from '../engine/faceAvatar';
+import type { FaceAvatar } from '../engine/faceAvatar';
+import { PhotoHead, SampleHead, SAMPLE_BY_ID, DEFAULT_SKIN } from './AvatarHeads';
 
 /**
  * カップルダンスを「2体」ではなく **1つのペア** として組むリグ。
@@ -221,38 +222,59 @@ const tmp = {
   dir: new THREE.Vector3(), pole: new THREE.Vector3(), axis: new THREE.Vector3(),
   ex: new THREE.Vector3(), ey: new THREE.Vector3(), ez: new THREE.Vector3(),
   m: new THREE.Matrix4(), q: new THREE.Quaternion(), q2: new THREE.Quaternion(),
+  qs: new THREE.Quaternion(),
   hold: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3(),
 };
+
+// 肩の可動域。肘が裏返る領域（背中側・体を横切る側）へ目標が来ないよう先に丸める
+const ARM_BACK_MIN = -0.12;  // これより後ろへは手を出さない[m]
+const ARM_ACROSS = -0.20;    // 体の反対側へ回り込める量[m]
+const ARM_OUT = 0.62;
 const UP = new THREE.Vector3(0, 1, 0);
 
 /**
  * 2ボーンIK。親ローカルの目標 (tx,ty,tz) へ末端を運ぶ。
  * `pole` は中間関節（膝・肘）を出す向き。姿勢は基底を明示して組む —
  * setFromUnitVectors だけだとロールが不定になり、曲がる面が毎フレーム変わってねじれる。
+ *
+ * pole は **dir に直交する成分だけを使う**。これを省くと、腕がほぼ真下を向いて
+ * dir と pole が平行になった瞬間に外積が潰れ、曲がる面が飛んで肘が裏返る
+ * （「腕がありえない方向へ曲がる」の正体はこれ）。
+ *
+ * `sm` は追従率（1 = 即時）。腕は目標が2体の位置に依存して細かく動くので鈍らせる。
  */
 function solve2Bone(
   j1: THREE.Object3D, j2: THREE.Object3D, l1: number, l2: number,
   tx: number, ty: number, tz: number,
   px: number, py: number, pz: number,
+  sm = 1,
 ) {
-  const d = Math.hypot(tx, ty, tz);
+  const d = Math.hypot(tx, ty, tz) || 1e-6;
   // 完全に伸びきる/畳みきる手前で止める（acos の端で姿勢が飛ぶのを防ぐ）
   const dc = clamp(d, Math.abs(l1 - l2) + 0.02, l1 + l2 - 0.02);
   const bend = Math.PI - Math.acos(clamp((l1 * l1 + l2 * l2 - dc * dc) / (2 * l1 * l2), -1, 1));
   const off = Math.acos(clamp((l1 * l1 + dc * dc - l2 * l2) / (2 * l1 * dc), -1, 1));
 
-  tmp.dir.set(tx || 1e-6, ty, tz).normalize();
-  tmp.pole.set(px, py, pz).normalize();
+  tmp.dir.set(tx, ty, tz).divideScalar(d);
+  tmp.pole.set(px, py, pz);
+  tmp.pole.addScaledVector(tmp.dir, -tmp.pole.dot(tmp.dir)); // dir 成分を抜く
+  if (tmp.pole.lengthSq() < 1e-8) {
+    // dir と pole が平行。安定に決まる直交軸へ逃がす
+    tmp.pole.set(-tmp.dir.y, tmp.dir.x, 0);
+    if (tmp.pole.lengthSq() < 1e-8) tmp.pole.set(1, 0, 0);
+  }
+  tmp.pole.normalize();
   // dir を axis まわりに +off 回すと pole 側へ倒れる = 中間関節がそちらへ出る
-  tmp.axis.crossVectors(tmp.dir, tmp.pole);
-  if (tmp.axis.lengthSq() < 1e-8) tmp.axis.set(1, 0, 0); else tmp.axis.normalize();
+  tmp.axis.crossVectors(tmp.dir, tmp.pole).normalize();
   tmp.ey.copy(tmp.dir).applyAxisAngle(tmp.axis, off).negate(); // ボーンの +Y（付け根向き）
   tmp.ex.copy(tmp.axis).negate();
   tmp.ex.addScaledVector(tmp.ey, -tmp.ex.dot(tmp.ey)).normalize();  // 直交化
   tmp.ez.crossVectors(tmp.ex, tmp.ey);
   tmp.m.makeBasis(tmp.ex, tmp.ey, tmp.ez);
-  j1.quaternion.setFromRotationMatrix(tmp.m);
-  j2.rotation.set(bend, 0, 0);
+  tmp.qs.setFromRotationMatrix(tmp.m);
+  if (sm >= 1) j1.quaternion.copy(tmp.qs);
+  else j1.quaternion.slerp(tmp.qs, sm);
+  j2.rotation.set(sm >= 1 ? bend : damp(j2.rotation.x, bend, sm), 0, 0);
 }
 
 // ── ホールド（つないでいる手）のタイムライン。0=左手, 1=右手
@@ -283,35 +305,34 @@ const newRig = (): Rig => ({
   cursor: { current: 0 },
 });
 
-/** 写真から作った顔。後頭部は色つきの球のまま残して「頭」として成立させる */
-function PhotoHead({ avatar, color }: { avatar: FaceAvatar; color: string }) {
-  const geo = useMemo(() => buildFaceGeometry(avatar), [avatar]);
-  const tex = useMemo(() => {
-    const t = new THREE.TextureLoader().load(avatar.image);
-    t.colorSpace = THREE.SRGBColorSpace;
-    return t;
-  }, [avatar.image]);
-  useEffect(() => () => { geo.dispose(); tex.dispose(); }, [geo, tex]);
+/** 服の配色。役割の色は服の色として残すので、青＝リーダー/ピンク＝フォロワーは変わらない */
+type Palette = { cloth: string; pants: string; skin: string; shoe: string; dress: boolean };
 
-  return (
-    <>
-      <mesh geometry={geo} position={[0, 0, 0.03]}>
-        {/* 三角形の向きは分割の都合で揃わないので両面で描く */}
-        <meshStandardMaterial map={tex} roughness={0.85} metalness={0} side={THREE.DoubleSide} />
-      </mesh>
-      <mesh position={[0, 0, -0.03]}>
-        <sphereGeometry args={[0.105, 20, 16]} />
-        <meshStandardMaterial color={color} roughness={0.6} metalness={0.05} />
-      </mesh>
-    </>
-  );
+function buildPalette(color: string, skin: string, dress: boolean): Palette {
+  const c = new THREE.Color(color);
+  return {
+    cloth: color,
+    pants: `#${c.clone().multiplyScalar(0.45).getHexString()}`,
+    skin,
+    shoe: '#141a2b',
+    dress,
+  };
 }
 
 /** 1人ぶんの見た目。関節は group 階層＝ボーンで、姿勢は CoupleFigure がまとめて書き込む */
-function Body({ rig, color, face }: { rig: Rig; color: string; face?: FaceAvatar | null }) {
-  const limbMat = <meshStandardMaterial color={color} roughness={0.55} metalness={0.05} />;
-  const skinMat = <meshStandardMaterial color={color} roughness={0.5} metalness={0.05} />;
-  const darkMat = <meshStandardMaterial color="#101528" roughness={0.6} metalness={0.05} />;
+function Body({
+  rig, pal, face, sample,
+}: {
+  rig: Rig; pal: Palette; face?: FaceAvatar | null; sample?: string | null;
+}) {
+  const preset = sample ? SAMPLE_BY_ID(sample) : null;
+  // 服＝役割色、素肌＝サンプルの肌色。上腕だけ服＝半袖に見える
+  const clothMat = <meshStandardMaterial color={pal.cloth} roughness={0.62} metalness={0.02} />;
+  const pantsMat = <meshStandardMaterial color={pal.pants} roughness={0.66} metalness={0.02} />;
+  const skinMat = <meshStandardMaterial color={pal.skin} roughness={0.72} metalness={0} />;
+  const shoeMat = <meshStandardMaterial color={pal.shoe} roughness={0.5} metalness={0.05} />;
+  // ワンピースの人は脚が素肌、そうでない人はスラックス
+  const legMat = pal.dress ? skinMat : pantsMat;
 
   return (
     <group ref={(o) => { if (o) rig.root = o; }}>
@@ -323,8 +344,17 @@ function Body({ rig, color, face }: { rig: Rig; color: string; face?: FaceAvatar
       <group ref={(o) => { if (o) rig.hips = o; }} position={[0, 0.9, 0]}>
         <mesh>
           <capsuleGeometry args={[0.135, 0.1, 6, 14]} />
-          {skinMat}
+          {pal.dress ? clothMat : pantsMat}
         </mesh>
+        {/* ワンピースのスカート。腰の子なので体の向きにだけ付いて回り、脚の動きでは歪まない */}
+        {pal.dress && (
+          <mesh position={[0, -0.16, 0]}>
+            <cylinderGeometry args={[0.155, 0.28, 0.36, 24, 1, true]} />
+            <meshStandardMaterial
+              color={pal.cloth} roughness={0.65} metalness={0.02} side={THREE.DoubleSide}
+            />
+          </mesh>
+        )}
 
         {/* 脚（太もも → すね → 足）。IK が太ももの姿勢と膝角を書き込む */}
         {[0, 1].map((s) => (
@@ -335,18 +365,18 @@ function Body({ rig, color, face }: { rig: Rig; color: string; face?: FaceAvatar
           >
             <mesh position={[0, -L_THIGH / 2, 0]} castShadow>
               <capsuleGeometry args={[0.078, L_THIGH - 0.1, 6, 12]} />
-              {limbMat}
+              {legMat}
             </mesh>
             <group ref={(o) => { if (o) rig.knee[s] = o; }} position={[0, -L_THIGH, 0]}>
               <mesh position={[0, -L_SHIN / 2, 0]} castShadow>
                 <capsuleGeometry args={[0.062, L_SHIN - 0.1, 6, 12]} />
-                {limbMat}
+                {legMat}
               </mesh>
               {/* 足: つま先が +Z（体の前方）を向く向きで作る */}
               <group ref={(o) => { if (o) rig.foot[s] = o; }} position={[0, -L_SHIN, 0]}>
                 <mesh position={[0, 0.03, 0.05]} castShadow>
                   <boxGeometry args={[0.095, 0.06, 0.23]} />
-                  {darkMat}
+                  {shoeMat}
                 </mesh>
               </group>
             </group>
@@ -357,7 +387,7 @@ function Body({ rig, color, face }: { rig: Rig; color: string; face?: FaceAvatar
         <group ref={(o) => { if (o) rig.spine = o; }}>
           <mesh position={[0, 0.24, 0]}>
             <capsuleGeometry args={[0.135, 0.32, 6, 14]} />
-            {skinMat}
+            {clothMat}
           </mesh>
           <mesh position={[0, 0.47, 0]}>
             <capsuleGeometry args={[0.045, 0.06, 4, 8]} />
@@ -366,19 +396,20 @@ function Body({ rig, color, face }: { rig: Rig; color: string; face?: FaceAvatar
 
           {/* 頭（耳から取れる相対ヨーで回る = スポッティング） */}
           <group ref={(o) => { if (o) rig.head = o; }} position={[0, 0.58, 0]}>
-            {face ? <PhotoHead avatar={face} color={color} /> : (
-              <>
-                <mesh>
-                  <sphereGeometry args={[0.115, 20, 16]} />
-                  {skinMat}
-                </mesh>
-                {/* 顔の向きが読めるように鼻先を出す */}
-                <mesh position={[0, -0.01, 0.105]}>
-                  <sphereGeometry args={[0.032, 12, 10]} />
-                  {darkMat}
-                </mesh>
-              </>
-            )}
+            {face ? <PhotoHead avatar={face} color={pal.cloth} />
+              : preset ? <SampleHead preset={preset} /> : (
+                <>
+                  <mesh>
+                    <sphereGeometry args={[0.115, 20, 16]} />
+                    {skinMat}
+                  </mesh>
+                  {/* 顔の向きが読めるように鼻先を出す */}
+                  <mesh position={[0, -0.01, 0.105]}>
+                    <sphereGeometry args={[0.032, 12, 10]} />
+                    {shoeMat}
+                  </mesh>
+                </>
+              )}
           </group>
 
           {/* 腕（肩 → 肘 → 手）。つないでいる側は IK が姿勢を書き込む */}
@@ -388,14 +419,15 @@ function Body({ rig, color, face }: { rig: Rig; color: string; face?: FaceAvatar
               ref={(o) => { if (o) rig.shldr[s] = o; }}
               position={[SIDE_SIGN[s] * SHO_DX, SHO_DY, 0]}
             >
+              {/* 上腕は服（＝袖）、前腕から先は素肌にして半袖に見せる */}
               <mesh position={[0, -L_UPARM / 2, 0]}>
                 <capsuleGeometry args={[0.052, L_UPARM - 0.1, 6, 10]} />
-                {limbMat}
+                {clothMat}
               </mesh>
               <group ref={(o) => { if (o) rig.elbow[s] = o; }} position={[0, -L_UPARM, 0]}>
                 <mesh position={[0, -L_FOREARM / 2, 0]}>
                   <capsuleGeometry args={[0.044, L_FOREARM - 0.1, 6, 10]} />
-                  {limbMat}
+                  {skinMat}
                 </mesh>
                 <mesh position={[0, -L_FOREARM, 0]}>
                   <sphereGeometry args={[0.052, 12, 10]} />
@@ -411,7 +443,8 @@ function Body({ rig, color, face }: { rig: Rig; color: string; face?: FaceAvatar
 }
 
 export function CoupleFigure({
-  clip, timeRef, leaderColor, followerColor, leaderFace, followerFace,
+  clip, timeRef, leaderColor, followerColor,
+  leaderFace, followerFace, leaderSample, followerSample,
 }: {
   clip: MotionClip;
   timeRef: { current: number };
@@ -419,6 +452,8 @@ export function CoupleFigure({
   followerColor: string;
   leaderFace?: FaceAvatar | null;
   followerFace?: FaceAvatar | null;
+  leaderSample?: string | null;
+  followerSample?: string | null;
 }) {
   // 添字 0 = リーダー, 1 = フォロワー
   const pids = useMemo<[number, number]>(
@@ -427,6 +462,11 @@ export function CoupleFigure({
     () => [buildGuide(clip, pids[0]), buildGuide(clip, pids[1])], [clip, pids]);
   const holds = useMemo(() => buildHolds(clip), [clip]);
   const rigs = useRef<[Rig, Rig]>([newRig(), newRig()]).current;
+  // 肌の色は選んだサンプルに合わせる（写真の頭でも体はこの色で通す）
+  const pals = useMemo<[Palette, Palette]>(() => [
+    buildPalette(leaderColor, SAMPLE_BY_ID(leaderSample ?? '')?.skin ?? DEFAULT_SKIN, false),
+    buildPalette(followerColor, SAMPLE_BY_ID(followerSample ?? '')?.skin ?? DEFAULT_SKIN, true),
+  ], [leaderColor, followerColor, leaderSample, followerSample]);
 
   useFrame(() => {
     const t = timeRef.current;
@@ -541,9 +581,13 @@ export function CoupleFigure({
         const cy = Math.cos(rig.root.rotation.y), sy = Math.sin(rig.root.rotation.y);
         const lx = dx * cy - dz * sy, lz = dx * sy + dz * cy;
         const shY = rig.hips.position.y + rig.spine.position.y + SHO_DY;
+        // 肩の可動域へ丸めてから解く（背中側や体を大きく横切る目標は肘が裏返る）
+        const ax = clamp((lx - sign * SHO_DX) * sign, ARM_ACROSS, ARM_OUT) * sign;
+        const az = Math.max(lz, ARM_BACK_MIN);
         solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
-          lx - sign * SHO_DX, tmp.hold.y - shY, lz,
-          sign * 0.5, -1, -0.25); // 肘は下・やや外へ
+          ax, tmp.hold.y - shY, az,
+          sign * 0.55, -1, -0.3, // 肘は下・やや外・やや後ろへ
+          0.3);
       }
     }
 
@@ -562,8 +606,8 @@ export function CoupleFigure({
 
   return (
     <>
-      <Body rig={rigs[0]} color={leaderColor} face={leaderFace} />
-      <Body rig={rigs[1]} color={followerColor} face={followerFace} />
+      <Body rig={rigs[0]} pal={pals[0]} face={leaderFace} sample={leaderSample} />
+      <Body rig={rigs[1]} pal={pals[1]} face={followerFace} sample={followerSample} />
     </>
   );
 }

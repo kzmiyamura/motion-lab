@@ -2,7 +2,7 @@ import { useRef, useState, useCallback, useEffect, type RefObject } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { MocapFigure, type MotionClip } from './MocapFigure';
-import { HybridFigure } from './HybridFigure';
+import { CoupleFigure } from './CoupleFigure';
 import styles from './SalsaStage3D.module.css';
 
 // 動画から復元した3Dモーション。server/analysis/prototype_lift3d.py 系のパイプラインが書き出す
@@ -484,10 +484,12 @@ export function SalsaStage3D() {
               <MocapFigure clip={clip} pid={1 - clip.leaderPid} color="#ff4db8" timeRef={clipTimeRef} />
             </>
           ) : clipMode === 'hybrid' && clip ? (
-            <>
-              <HybridFigure clip={clip} pid={clip.leaderPid} role="leader" color="#3d8bff" timeRef={clipTimeRef} />
-              <HybridFigure clip={clip} pid={1 - clip.leaderPid} role="follower" color="#ff4db8" timeRef={clipTimeRef} />
-            </>
+            <CoupleFigure
+              clip={clip}
+              timeRef={clipTimeRef}
+              leaderColor="#3d8bff"
+              followerColor="#ff4db8"
+            />
           ) : (
             <>
               <Dancer role="leader" color="#3d8bff" phRef={phRef} />
@@ -567,8 +569,10 @@ export function SalsaStage3D() {
         実データから取っているのは観測率の高い量に絞っています —
         <b>動線・体の向き・腰の高さ</b>（腰は常時観測）、<b>脚のステップ</b>（足首をIKで追う）、
         <b>足の向き</b>、<b>頭の向き＝スポッティング</b>（耳はほぼ常時観測）。
-        観測率が4割前後しかない<b>腕</b>だけは実データを使わず、技イベント（ターン/CBL・つなぎ手）から
-        手続きアニメで描いています。
+        観測率が4割前後しかない<b>腕</b>は実データを使わず、技イベントの「つなぎ手」から
+        <b>2人で共有する1点</b>を作って両者の手をそこへ運びます（ペアを1つのリグとして解くので手が離れません）。
+        2人の距離も拘束しています — 弱透視の奥行き誤差で腰の間隔が最小5cmまで潰れるため、
+        重心を動かさずに0.58〜1.02mへ収めています（振付の床の使い方は保たれます）。
         ステージは<b>ドラッグで回り込め</b>ます — 元の動画に無いアングルから見られるのが3D復元の値打ちです。
         <b>🦴 復元データ</b> は復元結果そのものを見るデバッグ表示で、
         薄いボーンは補間、描かれないボーンは観測なしです。

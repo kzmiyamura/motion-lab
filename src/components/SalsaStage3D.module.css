@@ -118,6 +118,27 @@
   color: #04122b;
 }
 
+/* クリップ切替（複数クリップがあるときだけ表示） */
+.clipSel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+}
+.clipSel select {
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.68rem;
+  color: var(--color-fg, #eaeef7);
+  background: var(--color-ui-dark2, #1e2740);
+  border: 1px solid var(--color-border2, rgba(255, 255, 255, 0.16));
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  max-width: 15rem;
+}
+.clipSel select:focus-visible { outline: 2px solid #3d8bff; outline-offset: 2px; }
+
 .tempo {
   display: inline-flex;
   align-items: center;

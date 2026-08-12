@@ -5,6 +5,7 @@ import express from 'express';
 import { HLS_DIR, ORIGINALS_DIR, THUMBNAILS_DIR, videosRouter } from './routes/videos.js';
 import { foldersRouter } from './routes/folders.js';
 import { jobsRouter } from './routes/jobs.js';
+import { motionRouter } from './routes/motion.js';
 import { JOBS_DIR, startJobWorker } from './jobWorker.js';
 
 const PORT = Number(process.env.PORT ?? 4000);
@@ -38,6 +39,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/videos', videosRouter);
 app.use('/api/folders', foldersRouter);
 app.use('/api/jobs', jobsRouter);
+app.use('/api/motion', motionRouter);
 app.use('/hls', express.static(HLS_DIR));
 app.use('/thumbnails', express.static(THUMBNAILS_DIR));
 // 解析成果物（デバッグ動画・キーフレーム等）: /analysis-output/<jobId>/out/debug_roi.mp4

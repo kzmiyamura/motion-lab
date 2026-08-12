@@ -6,8 +6,12 @@ import { HybridFigure } from './HybridFigure';
 import styles from './SalsaStage3D.module.css';
 
 // 動画から復元した3Dモーション。server/analysis/prototype_lift3d.py 系のパイプラインが書き出す
-// （YOLOのbboxで切り出し → MediaPipe単人検出で world landmarks → 弱透視で位置復元）
-const CLIP_URL = '/motion/2fda2815.json';
+// （YOLOのbboxで切り出し → MediaPipe単人検出で world landmarks → 弱透視で位置復元）。
+// クリップは個人の練習動画由来のため、リポジトリの public/ には置かず
+// ThinkCentre サーバー（relay 経由の固定URL）の /api/motion から配信する
+const HOME_SERVER_URL = (import.meta.env.VITE_HOME_SERVER_URL ?? '') as string;
+
+type ClipInfo = { id: string; label: string | null; duration: number };
 
 /**
  * Salsa Stage 3D — 「骨格君」を卒業した 3D キャラで、動画解析のルーティンを再現する試作。
@@ -295,6 +299,9 @@ export function SalsaStage3D() {
   const [clip, setClip] = useState<MotionClip | null>(null);
   const [clipErr, setClipErr] = useState<string | null>(null);
   const [clipMode, setClipMode] = useState<'off' | 'mocap' | 'hybrid'>('off');
+  const [clipList, setClipList] = useState<ClipInfo[]>([]);
+  const [clipId, setClipId] = useState<string | null>(null);
+  const clipCacheRef = useRef(new Map<string, MotionClip>());
   const [clipT, setClipT] = useState(0);
   const clipTimeRef = useRef(0);
   const viewRef = useRef<View>({ ...VIEW_PRESETS.正面 });
@@ -324,16 +331,52 @@ export function SalsaStage3D() {
     setNowLabel(name + (ev.rotations && ev.rotations >= 2 ? ` ×${ev.rotations}` : ''));
   }, [clipMode, clip, clipT]);
 
-  const loadClip = async (mode: 'mocap' | 'hybrid') => {
+  const fetchClipList = useCallback(async (): Promise<ClipInfo[]> => {
+    const res = await fetch(`${HOME_SERVER_URL}/api/motion`);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const data = (await res.json()) as { clips: ClipInfo[] };
+    return data.clips;
+  }, []);
+
+  // クリップ一覧はタブを開いた時点で先読みしておく（失敗はボタン押下時に改めて表面化する）
+  useEffect(() => {
+    if (!HOME_SERVER_URL) return;
+    fetchClipList()
+      .then((clips) => {
+        setClipList(clips);
+        setClipId((prev) => prev ?? clips[0]?.id ?? null);
+      })
+      .catch(() => {});
+  }, [fetchClipList]);
+
+  const fetchClip = async (id: string): Promise<MotionClip> => {
+    const cached = clipCacheRef.current.get(id);
+    if (cached) return cached;
+    const res = await fetch(`${HOME_SERVER_URL}/api/motion/${id}`);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const c = (await res.json()) as MotionClip;
+    clipCacheRef.current.set(id, c);
+    return c;
+  };
+
+  const loadClip = async (mode: 'mocap' | 'hybrid', idOverride?: string) => {
     setClipErr(null);
+    if (!HOME_SERVER_URL) {
+      setClipErr('VITE_HOME_SERVER_URL が未設定です（クリップはホームサーバーから配信されます）');
+      return;
+    }
     try {
-      let c = clip;
-      if (!c) {
-        const res = await fetch(CLIP_URL);
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-        c = (await res.json()) as MotionClip;
-        setClip(c);
+      let id = idOverride ?? clipId;
+      if (!id) {
+        // 先読みが失敗していた場合はここで再取得する
+        const clips = await fetchClipList();
+        setClipList(clips);
+        id = clips[0]?.id ?? null;
+        setClipId(id);
       }
+      if (!id) throw new Error('サーバーにクリップがありません');
+      const c = await fetchClip(id);
+      setClip(c);
       const ph = phRef.current;
       ph.mode = mode;
       ph.clipTime = 0;
@@ -346,6 +389,12 @@ export function SalsaStage3D() {
     } catch (e) {
       setClipErr(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  const onSelectClip = (id: string) => {
+    setClipId(id);
+    // 再生中にクリップを替えたら、同じモードのまま新しいクリップへ切り替える
+    if (clipMode !== 'off') void loadClip(clipMode, id);
   };
 
   // ステージのドラッグで自由視点。横=回り込み、縦=見下ろし/見上げ
@@ -473,6 +522,18 @@ export function SalsaStage3D() {
         <button className={`${styles.btn} ${clipMode === 'hybrid' ? styles.primary : ''}`} onClick={() => loadClip('hybrid')}>
           🧬 動線×アニメ（ハイブリッド）
         </button>
+        {clipList.length > 1 && (
+          <label className={styles.clipSel}>
+            🎞
+            <select value={clipId ?? ''} onChange={(e) => onSelectClip(e.target.value)}>
+              {clipList.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label ?? c.id}（{Math.round(c.duration)}秒）
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <button
           className={`${styles.btn} ${autoOrbit ? styles.primary : ''}`}
           onClick={() => { const v = !autoOrbit; setAutoOrbit(v); autoOrbitRef.current = v; }}

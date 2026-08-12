@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(pm2 restart *)",
+      "PowerShell(pm2 delete motion-lab-*)",
+      "PowerShell(pm2 start *)",
+      "PowerShell(pm2 save)",
+
+      "PowerShell(curl.exe -s http://localhost:4000/*)",
+      "PowerShell(curl.exe -s -m * http://localhost:4000/*)",
+      "PowerShell(curl.exe -s https://motion-lab-apa.pages.dev/*)",
+      "PowerShell(curl.exe -s -m * https://motion-lab-apa.pages.dev/*)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:4000/*)",
+
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git pull *)",
+      "PowerShell(git pull *)",
+
+      "Bash(npm install *)",
+      "Bash(winget install *)",
+
+      "Read(//c/Program Files/**)",
+      "Read(//c/Users/admin/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/**)"
+    ]
+  }
+}

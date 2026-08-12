@@ -26,6 +26,9 @@ server/analysis/venv/
 server/analysis/__pycache__/
 *.pyc
 
+# Claude Code のローカル許可リスト（承認済みコマンドが平文で入るためコミットしない）
+.claude/settings.local.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

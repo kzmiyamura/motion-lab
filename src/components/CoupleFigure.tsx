@@ -81,10 +81,11 @@ type Guide = {
   ts: Float32Array;
   x: Float32Array;
   z: Float32Array;
-  yaw: Float32Array;   // unwrap + 平滑化済み
+  yaw: Float32Array;   // 骨盤のヨー。unwrap + 平滑化済み
   speed: Float32Array; // 平滑化後の水平速度 [m/s]
   hipY: Float32Array;  // 実データの腰の高さ（沈み込みがそのまま出る）
-  headYaw: Chan;       // 体に対する頭の相対ヨー = スポッティング
+  twist: Chan;         // 骨盤に対する胸郭の相対ヨー = 上体のねじれ
+  headYaw: Chan;       // 骨盤に対する頭の相対ヨー = スポッティング
   ank: [AnkleChan, AnkleChan];  // [左, 右]
   footYaw: [Chan, Chan];
 };
@@ -98,6 +99,7 @@ function buildGuide(clip: MotionClip, pid: number): Guide {
   const ts: number[] = [], xs: number[] = [], zs: number[] = [], yaws: number[] = [];
   const hipYs: number[] = [];
   const hYaw: number[] = [], hYawW: number[] = [];
+  const twists: number[] = [], twistW: number[] = [];
   const mkA = () => ({ x: [] as number[], y: [] as number[], z: [] as number[], w: [] as number[] });
   const aRaw = [mkA(), mkA()];
   const fRaw = [{ v: [] as number[], w: [] as number[] }, { v: [] as number[], w: [] as number[] }];
@@ -116,14 +118,9 @@ function buildGuide(clip: MotionClip, pid: number): Guide {
     const hy = (j[LHIP * 3 + 1] + j[RHIP * 3 + 1]) / 2;
     const hz = (j[LHIP * 3 + 2] + j[RHIP * 3 + 2]) / 2;
     // 向き: 腰ライン（左→右）に垂直な水平ベクトル = up × (rHip - lHip)。
-    // 肩ラインが取れるフレームは腰と平均して上体のひねりも少し反映する
-    let dx = j[RHIP * 3] - j[LHIP * 3];
-    let dz = j[RHIP * 3 + 2] - j[LHIP * 3 + 2];
-    if (v[LSHO] > 0 && v[RSHO] > 0) {
-      dx = (dx + (j[RSHO * 3] - j[LSHO * 3])) / 2;
-      dz = (dz + (j[RSHO * 3 + 2] - j[LSHO * 3 + 2])) / 2;
-    }
     // up × (dx,0,dz) = (dz, 0, -dx) が前方。three の rotation.y=θ は前方 (sinθ, cosθ)
+    const dx = j[RHIP * 3] - j[LHIP * 3];
+    const dz = j[RHIP * 3 + 2] - j[LHIP * 3 + 2];
     let yaw = Math.atan2(dz, -dx);
     if (prevYaw !== null) {
       // unwrap: 直前との差が最短になる分岐を選ぶ（連続ターンで一周が消えないように）
@@ -131,6 +128,17 @@ function buildGuide(clip: MotionClip, pid: number): Guide {
       while (yaw - prevYaw < -Math.PI) yaw += Math.PI * 2;
     }
     prevYaw = yaw;
+
+    // 胸のヨーは肩ラインから同じ式で出す。**腰と平均してはいけない** —
+    // サルサの見た目は骨盤と胸郭の「ねじれ差」そのもので、平均するとそれが消える。
+    // 胸椎の回旋は片側 40〜50度が限界なので、それを超える値は復元ノイズとして頭打ち
+    if (v[LSHO] > 0 && v[RSHO] > 0) {
+      const sx = j[RSHO * 3] - j[LSHO * 3], sz = j[RSHO * 3 + 2] - j[LSHO * 3 + 2];
+      twists.push(clamp(wrapPi(Math.atan2(sz, -sx) - yaw), -0.8, 0.8));
+      twistW.push(Math.min(v[LSHO], v[RSHO]) >= 1 ? 1 : 0.5);
+    } else {
+      twists.push(last(twists, 0)); twistW.push(0);
+    }
 
     ts.push(f.t); xs.push(hx); zs.push(hz); yaws.push(yaw);
     hipYs.push(clamp(hy, 0.55, 1.15));
@@ -194,6 +202,7 @@ function buildGuide(clip: MotionClip, pid: number): Guide {
   return {
     ts: new Float32Array(ts), x, z, yaw, speed: smooth(Array.from(speed), 5),
     hipY: smooth(hipYs, 7),
+    twist: chan({ v: twists, w: twistW }),
     headYaw: chan({ v: hYaw, w: hYawW }),
     ank: [ank(aRaw[0]), ank(aRaw[1])],
     footYaw: [chan(fRaw[0]), chan(fRaw[1])],
@@ -224,6 +233,7 @@ const tmp = {
   m: new THREE.Matrix4(), q: new THREE.Quaternion(), q2: new THREE.Quaternion(),
   qs: new THREE.Quaternion(),
   hold: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3(),
+  v: new THREE.Vector3(),
 };
 
 // 肩の可動域。肘が裏返る領域（背中側・体を横切る側）へ目標が来ないよう先に丸める
@@ -516,11 +526,27 @@ export function CoupleFigure({
       rig.root.rotation.y = damp(rig.root.rotation.y, at(s, g.yaw), 0.4);
       // 腰の高さも実データ。沈み込み（膝の使い方）が動画そのままに出る
       rig.hips.position.y = damp(rig.hips.position.y, hipY, 0.3);
+
+      // ── 上体のねじれ: 肩ラインと腰ラインの差（実観測）。サルサの見た目の芯なので、
+      // 観測が無いフレームだけ 0（＝腰と同じ向き）へ戻す
+      const tw = clamp(at(s, g.twist.w), 0, 1);
+      const twist = at(s, g.twist.v) * tw;
+      rig.spine.rotation.y = damp(rig.spine.rotation.y, twist, 0.3);
+
+      // ── 支持脚の判定 → キューバンモーション。
+      // 低いほうの足首が体重を受けている。観測が無ければ拍のステップ位相で代用する
+      const mirror = d === 1 ? -1 : 1;
+      const w0 = clamp(at(s, g.ank[0].w), 0, 1), w1 = clamp(at(s, g.ank[1].w), 0, 1);
+      const support = (w0 > 0.3 && w1 > 0.3)
+        ? clamp((at(s, g.ank[1].y) - at(s, g.ank[0].y)) / 0.06, -1, 1)  // +1 = 左足に乗る
+        : stepPhase * mirror;
+      // 体重を受けた側の腰が上がり、胸郭はその逆へ振れる（骨盤を回すと脚IKが崩れるので上体で表す）
       rig.spine.position.y = damp(rig.spine.position.y, -dip * 0.02, 0.3);
+      rig.spine.position.x = damp(rig.spine.position.x, -support * 0.022, 0.25);
+      rig.spine.rotation.z = damp(rig.spine.rotation.z, -support * 0.055, 0.25);
 
       // 脚: 足首の実観測があればそこへIKで運び、無ければ拍のステップで埋める
       const amp = rest ? 0 : 0.16 + Math.min(0.3, at(s, g.speed) * 0.28);
-      const mirror = d === 1 ? -1 : 1;
       for (let k = 0; k < 2; k++) {
         const sign = SIDE_SIGN[k], ank = g.ank[k];
         const aw = clamp(at(s, ank.w), 0, 1);
@@ -531,61 +557,85 @@ export function CoupleFigure({
         const rx = at(s, ank.x) - sign * HIP_DX;
         const ry = at(s, ank.y) - hipY;
         const rz = at(s, ank.z);
+        // 膝はつま先の上を通る（人体の構造）。つま先の向きは実観測なので、
+        // 固定の「前」ではなくそれを使う — 横向きのステップで膝が内へ折れなくなる
+        const fw = clamp(at(s, g.footYaw[k].w), 0, 1);
+        const fy = at(s, g.footYaw[k].v) * fw;
         solve2Bone(rig.thigh[k], rig.knee[k], L_THIGH, L_SHIN,
           (rx) * aw, py + (ry - py) * aw, sw + (rz - sw) * aw,
-          0, 0, 1); // 膝は前へ
+          Math.sin(fy), 0, Math.cos(fy));
 
         // 足の向き: 体ローカルでの目標を作り、脚の回転ぶんを打ち消して足に入れる
-        const fw = clamp(at(s, g.footYaw[k].w), 0, 1);
-        tmp.q.setFromAxisAngle(UP, at(s, g.footYaw[k].v) * fw);
+        tmp.q.setFromAxisAngle(UP, fy);
         tmp.q2.copy(rig.thigh[k].quaternion).multiply(rig.knee[k].quaternion)
           .invert().multiply(tmp.q);
         rig.foot[k].quaternion.slerp(tmp.q2, 0.3);
       }
 
-      // 首: 耳から取れる相対ヨー = スポッティング（ターンで顔だけ残る動き）
+      // 首: 耳から取れる相対ヨー = スポッティング（ターンで顔だけ残る動き）。
+      // 頭は胸郭の子なので、ねじれぶんを引いてから入れる
       const hw = clamp(at(s, g.headYaw.w), 0, 1);
-      rig.head.rotation.y = damp(rig.head.rotation.y, at(s, g.headYaw.v) * hw, 0.35);
+      rig.head.rotation.y = damp(
+        rig.head.rotation.y, clamp(at(s, g.headYaw.v) * hw - twist, -1.35, 1.35), 0.35);
     }
 
-    // ── レイヤー3: 接続。つないだ手は2人で共有する1点へ運ぶ。
-    // ホールド点は両者の「つないでいる肩」の中点に置くので、必ず双方の腕が届く
+    // 胸郭を動かしたので、ここから先はワールド行列を実測してから使う
+    // （肩の位置を手で展開すると、ねじれ・左右シフトのぶんだけ必ずずれる）
+    rigs[0].root.updateMatrixWorld(true);
+    rigs[1].root.updateMatrixWorld(true);
+
+    // ── レイヤー3: 接続。つないだ手は2人で共有する1点へ運ぶ
     let hold: Hold | null = null;
     for (const h of holds) { if (h.t <= t + 0.01) hold = h; else break; }
     const linked: (0 | 1 | null)[] = [null, null];
     if (hold && smp[0].inRange && smp[1].inRange) {
       linked[0] = hold.leader; linked[1] = hold.follower;
-      // 技イベント中は手を頭上へ上げる（ターンをくぐらせる/くぐる）
-      let lift = 0;
+      // 進行中のターンを拾う。誰が回っているかで手の置き所が変わる
+      let lift = 0, turner = -1;
       for (const ev of clip.events) {
         if (ev.type !== 'Turn') continue;
         const dur = 1.6 + ((ev.rotations ?? 1) - 1) * 0.5;
         const prog = (t - (ev.t - 0.4)) / dur;
-        if (prog >= 0 && prog <= 1) lift = Math.max(lift, Math.sin(prog * Math.PI));
+        if (prog < 0 || prog > 1) continue;
+        const a = Math.sin(prog * Math.PI);
+        if (a > lift) { lift = a; turner = ev.by === 'leader' ? 0 : 1; }
       }
-      shoulderWorld(rigs[0], linked[0]!, tmp.a);
-      shoulderWorld(rigs[1], linked[1]!, tmp.b);
-      // 中点なら「肩からの距離」が両者で等しく最小になる = いちばん届きやすい点
-      tmp.hold.addVectors(tmp.a, tmp.b).multiplyScalar(0.5);
-      // 上下オフセットは残りの可動域ぶんしか取れない。ここを無視すると
-      // ターンで手を上げた瞬間に腕が伸びきって手が離れる
-      const half = tmp.a.distanceTo(tmp.b) / 2;
-      const maxOff = Math.sqrt(Math.max(0.0025, ARM_REACH * ARM_REACH - half * half));
-      tmp.hold.y += clamp(-0.20 + lift * 0.62, -maxOff, maxOff);
+      rigs[0].shldr[linked[0]!].getWorldPosition(tmp.a);
+      rigs[1].shldr[linked[1]!].getWorldPosition(tmp.b);
+      // 平時: 両肩の中点。肩からの距離が両者で等しく最小になる＝いちばん届きやすい
+      tmp.hold.addVectors(tmp.a, tmp.b).multiplyScalar(0.5).setY((tmp.a.y + tmp.b.y) / 2 - 0.20);
+      if (turner >= 0) {
+        // ターン中: 手は「回る人の回転軸の真上」へ。中点に置いたままだと
+        // 相手が自分の手をくぐれず、サルサのターンに見えない
+        const r = rigs[turner];
+        tmp.v.set(r.root.position.x, r.hips.position.y + 0.78, r.root.position.z);
+        tmp.hold.lerp(tmp.v, lift);
+      }
+      // どちらかの肩から腕の長さを超えたら、その肩へ寄せる。
+      // ペア距離を 1.02m 以下に拘束してあるので、2回まわせば両方の可動域に入る
+      for (let it = 0; it < 2; it++) {
+        for (let d = 0; d < 2; d++) {
+          const sh = d === 0 ? tmp.a : tmp.b;
+          tmp.v.subVectors(tmp.hold, sh);
+          const len = tmp.v.length();
+          if (len > ARM_REACH) tmp.hold.copy(sh).addScaledVector(tmp.v, ARM_REACH / len);
+        }
+      }
 
       for (let d = 0; d < 2; d++) {
         const rig = rigs[d], k = linked[d]!, sign = SIDE_SIGN[k];
-        // ワールドのホールド点 → 自分の肩ローカル（root は y=0・yaw のみ）
-        const dx = tmp.hold.x - rig.root.position.x;
-        const dz = tmp.hold.z - rig.root.position.z;
-        const cy = Math.cos(rig.root.rotation.y), sy = Math.sin(rig.root.rotation.y);
-        const lx = dx * cy - dz * sy, lz = dx * sy + dz * cy;
-        const shY = rig.hips.position.y + rig.spine.position.y + SHO_DY;
+        // ワールドのホールド点 → 肩の親（胸郭）ローカル。行列から引くのでねじれても正しい
+        tmp.v.copy(tmp.hold);
+        rig.spine.worldToLocal(tmp.v);
+        // 肩甲上腕リズム: 手が肩より上がるぶんだけ肩自体も上がる（1/3 ほど）。
+        // これが無いと腕だけが付け根から生えて回るように見える
+        const raise = clamp((tmp.v.y - SHO_DY) / 0.35, 0, 1) * 0.055;
+        rig.shldr[k].position.set(sign * (SHO_DX + raise * 0.35), SHO_DY + raise, 0);
         // 肩の可動域へ丸めてから解く（背中側や体を大きく横切る目標は肘が裏返る）
-        const ax = clamp((lx - sign * SHO_DX) * sign, ARM_ACROSS, ARM_OUT) * sign;
-        const az = Math.max(lz, ARM_BACK_MIN);
+        const ax = clamp((tmp.v.x - rig.shldr[k].position.x) * sign, ARM_ACROSS, ARM_OUT) * sign;
+        const az = Math.max(tmp.v.z, ARM_BACK_MIN);
         solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
-          ax, tmp.hold.y - shY, az,
+          ax, tmp.v.y - rig.shldr[k].position.y, az,
           sign * 0.55, -1, -0.3, // 肘は下・やや外・やや後ろへ
           0.3);
       }
@@ -598,6 +648,7 @@ export function CoupleFigure({
         if (linked[d] === k) continue;
         const sign = SIDE_SIGN[k];
         const sh = rig.shldr[k];
+        sh.position.set(sign * SHO_DX, SHO_DY, 0);   // 上げた肩を戻す
         sh.rotation.set(-0.30 + dip * 0.10, 0, sign * (0.42 + dip * 0.06));
         rig.elbow[k].rotation.set(damp(rig.elbow[k].rotation.x, -0.85, 0.2), 0, 0);
       }
@@ -609,18 +660,6 @@ export function CoupleFigure({
       <Body rig={rigs[0]} pal={pals[0]} face={leaderFace} sample={leaderSample} />
       <Body rig={rigs[1]} pal={pals[1]} face={followerFace} sample={followerSample} />
     </>
-  );
-}
-
-/** 肩 group のワールド位置（root は y=0・yaw のみなので手で展開できる） */
-function shoulderWorld(rig: Rig, k: 0 | 1, out: THREE.Vector3) {
-  const sign = SIDE_SIGN[k];
-  const cy = Math.cos(rig.root.rotation.y), sy = Math.sin(rig.root.rotation.y);
-  const lx = sign * SHO_DX;
-  out.set(
-    rig.root.position.x + lx * cy,
-    rig.hips.position.y + rig.spine.position.y + SHO_DY,
-    rig.root.position.z - lx * sy,
   );
 }
 

@@ -324,9 +324,57 @@ function buildPalette(color: string, skin: string, dress: boolean): Palette {
     cloth: color,
     pants: `#${c.clone().multiplyScalar(0.45).getHexString()}`,
     skin,
-    shoe: '#141a2b',
+    // サルサシューズ: リーダーは黒のラテン（低いキューバンヒール）、
+    // フォロワーはタンのストラップ付きヒール（この配色が実物でいちばん多い）
+    shoe: dress ? '#b5834f' : '#17181f',
     dress,
   };
+}
+
+/**
+ * サルサシューズ。**足首より下**へ伸ばす — クリップの足首は接地時で床から約5cm
+ * （実測 p05: 0.04〜0.07m）なので、そこから下に靴底が来るように置く。
+ */
+function Shoe({ pal }: { pal: Palette }) {
+  const mat = (
+    <meshStandardMaterial color={pal.shoe} roughness={0.34} metalness={0.16} />
+  );
+  if (!pal.dress) {
+    // ラテンシューズ: つま先の細い甲 + 後ろに低いキューバンヒール
+    return (
+      <group>
+        <mesh position={[0, -0.025, 0.045]} castShadow>
+          <boxGeometry args={[0.090, 0.048, 0.205]} />
+          {mat}
+        </mesh>
+        <mesh position={[0, -0.020, 0.150]} castShadow>
+          <boxGeometry args={[0.058, 0.036, 0.055]} />
+          {mat}
+        </mesh>
+        <mesh position={[0, -0.056, -0.042]} castShadow>
+          <boxGeometry args={[0.055, 0.026, 0.062]} />
+          {mat}
+        </mesh>
+      </group>
+    );
+  }
+  // ヒール: つま先を下げた甲 + 細いヒール + アンクルストラップ
+  return (
+    <group>
+      <mesh position={[0, -0.030, 0.050]} rotation={[0.22, 0, 0]} castShadow>
+        <boxGeometry args={[0.070, 0.040, 0.190]} />
+        {mat}
+      </mesh>
+      <mesh position={[0, -0.062, -0.048]} castShadow>
+        <cylinderGeometry args={[0.010, 0.013, 0.078, 10]} />
+        {mat}
+      </mesh>
+      <mesh position={[0, 0.002, -0.008]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.043, 0.0055, 8, 20]} />
+        {mat}
+      </mesh>
+    </group>
+  );
 }
 
 /** 1人ぶんの見た目。関節は group 階層＝ボーンで、姿勢は CoupleFigure がまとめて書き込む */
@@ -384,10 +432,7 @@ function Body({
               </mesh>
               {/* 足: つま先が +Z（体の前方）を向く向きで作る */}
               <group ref={(o) => { if (o) rig.foot[s] = o; }} position={[0, -L_SHIN, 0]}>
-                <mesh position={[0, 0.03, 0.05]} castShadow>
-                  <boxGeometry args={[0.095, 0.06, 0.23]} />
-                  {shoeMat}
-                </mesh>
+                <Shoe pal={pal} />
               </group>
             </group>
           </group>

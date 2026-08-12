@@ -504,7 +504,7 @@ export function SalsaStage3D() {
           <span className={styles.now}>{nowLabel}</span>
           {clipMode !== 'off' && (
             <span className={styles.badge}>
-              {clipMode === 'hybrid' ? '動線×アニメ' : '動画のモーション'}
+              {clipMode === 'hybrid' ? '動画のモーション' : '復元データ（デバッグ）'}
               {' '}{clipT.toFixed(1)}s / {clip?.duration.toFixed(1)}s
             </span>
           )}
@@ -516,11 +516,11 @@ export function SalsaStage3D() {
           {playing ? '⏸ 停止' : '▶ 再生'}
         </button>
         <button className={styles.btn} onClick={replaySample}>📼 解析サンプルを再現</button>
-        <button className={`${styles.btn} ${clipMode === 'mocap' ? styles.primary : ''}`} onClick={() => loadClip('mocap')}>
+        <button className={`${styles.btn} ${clipMode === 'hybrid' ? styles.primary : ''}`} onClick={() => loadClip('hybrid')}>
           🎥 動画のモーションで踊る
         </button>
-        <button className={`${styles.btn} ${clipMode === 'hybrid' ? styles.primary : ''}`} onClick={() => loadClip('hybrid')}>
-          🧬 動線×アニメ（ハイブリッド）
+        <button className={`${styles.btn} ${clipMode === 'mocap' ? styles.primary : ''}`} onClick={() => loadClip('mocap')}>
+          🦴 復元データ（デバッグ）
         </button>
         {clipList.length > 1 && (
           <label className={styles.clipSel}>
@@ -560,14 +560,19 @@ export function SalsaStage3D() {
       {clipErr && <p className={styles.note}>モーションの読み込みに失敗しました: {clipErr}</p>}
 
       <p className={styles.note}>
-        <b>🎥 動画のモーションで踊る</b> は、動画から復元した<b>関節の3D位置そのもの</b>を再生します
+        <b>🎥 動画のモーションで踊る</b> は、動画から復元したモーションを<b>固定長のリグ</b>で再生します
         （YOLOのbboxで1人ずつ切り出し → MediaPipe の world landmarks → 弱透視で2人を空間に配置）。
-        薄く描かれているボーンは、隠れて観測できず時間補間で埋めた推定です。
-        <b>🧬 動線×アニメ</b> は、復元データのうち信頼できる量
-        （<b>動線・体の向き・技のタイミング・拍</b>）だけを実データから取り、
-        手足は崩れない手続きアニメで描くハイブリッドです — ターンの回転も実データ由来です。
+        関節の位置をそのまま描くのではなく、実データを<b>目標</b>としてリグに渡すので、
+        隠れて観測できなかった関節があっても身体が欠けたり伸びたりしません。
+        実データから取っているのは観測率の高い量に絞っています —
+        <b>動線・体の向き・腰の高さ</b>（腰は常時観測）、<b>脚のステップ</b>（足首をIKで追う）、
+        <b>足の向き</b>、<b>頭の向き＝スポッティング</b>（耳はほぼ常時観測）。
+        観測率が4割前後しかない<b>腕</b>だけは実データを使わず、技イベント（ターン/CBL・つなぎ手）から
+        手続きアニメで描いています。
         ステージは<b>ドラッグで回り込め</b>ます — 元の動画に無いアングルから見られるのが3D復元の値打ちです。
-        ▶ 再生 / 📼 は従来どおり、技イベントだけ動画由来の手続きアニメ（B方式）です。
+        <b>🦴 復元データ</b> は復元結果そのものを見るデバッグ表示で、
+        薄いボーンは補間、描かれないボーンは観測なしです。
+        ▶ 再生 / 📼 は技イベントだけ動画由来の手続きアニメ（B方式）です。
       </p>
     </div>
   );

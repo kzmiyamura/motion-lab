@@ -48,6 +48,8 @@ const SIDE_SIGN = [1, -1] as const;
 // どう解いても手は離れる。腕 0.55m × 2 を少し内側に取る
 const PAIR_MIN = 0.58, PAIR_MAX = 1.02;
 const ARM_REACH = (L_UPARM + L_FOREARM) * 0.95;
+// つないだ手の追従の鈍らせ量（0 = 即時）。腕ごとではなく共有点の側で鈍らせる
+const HOLD_LAG = 0.5;
 
 const damp = (cur: number, target: number, k: number) => cur + (target - cur) * k;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -235,6 +237,23 @@ const tmp = {
   hold: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3(),
   v: new THREE.Vector3(),
 };
+
+/**
+ * ホールド点を「その人の腕が無理なく届く範囲」へ丸める（胸郭ローカルで処理し、
+ * 世界座標へ戻す）。**両者ぶんを繰り返し当てて1点に収束させる**のが肝で、
+ * 各自が自分の可動域へ別々に丸めた先を掴むと、掴んでいるはずの手が必ず離れる。
+ */
+function clampToArm(spine: THREE.Object3D, shoulder: THREE.Vector3, world: THREE.Vector3) {
+  const sign = Math.sign(shoulder.x) || 1;
+  spine.worldToLocal(world);
+  world.x = sign * clamp((world.x - shoulder.x) * sign, ARM_ACROSS, ARM_OUT) + shoulder.x;
+  world.z = Math.max(world.z, ARM_BACK_MIN);
+  // 肩からの距離が腕の長さを超えたら、その肩へ寄せる
+  tmp.v.subVectors(world, shoulder);
+  const len = tmp.v.length();
+  if (len > ARM_REACH) world.copy(shoulder).addScaledVector(tmp.v, ARM_REACH / len);
+  spine.localToWorld(world);
+}
 
 // 肩の可動域。肘が裏返る領域（背中側・体を横切る側）へ目標が来ないよう先に丸める
 const ARM_BACK_MIN = -0.12;  // これより後ろへは手を出さない[m]
@@ -517,6 +536,9 @@ export function CoupleFigure({
     () => [buildGuide(clip, pids[0]), buildGuide(clip, pids[1])], [clip, pids]);
   const holds = useMemo(() => buildHolds(clip), [clip]);
   const rigs = useRef<[Rig, Rig]>([newRig(), newRig()]).current;
+  // つないだ手の共有点（前フレーム）。ここで鈍らせるので腕は目標をそのまま解ける
+  const holdPos = useRef(new THREE.Vector3());
+  const holdSame = useRef<Hold | null>(null);
   // 肌の色は選んだサンプルに合わせる（写真の頭でも体はこの色で通す）
   const pals = useMemo<[Palette, Palette]>(() => [
     buildPalette(leaderColor, SAMPLE_BY_ID(leaderSample ?? '')?.skin ?? DEFAULT_SKIN, false),
@@ -656,34 +678,45 @@ export function CoupleFigure({
         tmp.v.set(r.root.position.x, r.hips.position.y + 0.78, r.root.position.z);
         tmp.hold.lerp(tmp.v, lift);
       }
-      // どちらかの肩から腕の長さを超えたら、その肩へ寄せる。
-      // ペア距離を 1.02m 以下に拘束してあるので、2回まわせば両方の可動域に入る
-      for (let it = 0; it < 2; it++) {
+      // 手の揺れは**共有点の側**で吸収する。腕ごとに鈍らせると、2人が別々に
+      // 遅れて別々の場所を掴むことになり、速いターンで手が離れる（実測 30〜40cm）
+      if (holdSame.current === hold) tmp.hold.lerp(holdPos.current, HOLD_LAG);
+      else holdSame.current = hold;                 // つなぐ手が替わった瞬間は追わない
+
+      // 肩甲上腕リズム: 手が肩より上がるぶんだけ肩自体も上がる（1/3 ほど）。
+      // これが無いと腕だけが付け根から生えて回るように見える
+      for (let d = 0; d < 2; d++) {
+        const rig = rigs[d], k = linked[d]!, sign = SIDE_SIGN[k];
+        tmp.v.copy(tmp.hold);
+        rig.spine.worldToLocal(tmp.v);
+        const raise = clamp((tmp.v.y - SHO_DY) / 0.35, 0, 1) * 0.055;
+        rig.shldr[k].position.set(sign * (SHO_DX + raise * 0.35), SHO_DY + raise, 0);
+      }
+      // 共有点を**両者の可動域の共通部分**へ落とす。片側ずつ丸めると相手側で外れるので、
+      // 2人ぶんを交互に3回当てて1点へ収束させる
+      for (let it = 0; it < 3; it++) {
         for (let d = 0; d < 2; d++) {
-          const sh = d === 0 ? tmp.a : tmp.b;
-          tmp.v.subVectors(tmp.hold, sh);
-          const len = tmp.v.length();
-          if (len > ARM_REACH) tmp.hold.copy(sh).addScaledVector(tmp.v, ARM_REACH / len);
+          const rig = rigs[d];
+          clampToArm(rig.spine, rig.shldr[linked[d]!].position, tmp.hold);
         }
       }
+      holdPos.current.copy(tmp.hold);
 
       for (let d = 0; d < 2; d++) {
         const rig = rigs[d], k = linked[d]!, sign = SIDE_SIGN[k];
         // ワールドのホールド点 → 肩の親（胸郭）ローカル。行列から引くのでねじれても正しい
         tmp.v.copy(tmp.hold);
         rig.spine.worldToLocal(tmp.v);
-        // 肩甲上腕リズム: 手が肩より上がるぶんだけ肩自体も上がる（1/3 ほど）。
-        // これが無いと腕だけが付け根から生えて回るように見える
-        const raise = clamp((tmp.v.y - SHO_DY) / 0.35, 0, 1) * 0.055;
-        rig.shldr[k].position.set(sign * (SHO_DX + raise * 0.35), SHO_DY + raise, 0);
-        // 肩の可動域へ丸めてから解く（背中側や体を大きく横切る目標は肘が裏返る）
-        const ax = clamp((tmp.v.x - rig.shldr[k].position.x) * sign, ARM_ACROSS, ARM_OUT) * sign;
-        const az = Math.max(tmp.v.z, ARM_BACK_MIN);
+        // 目標は上で可動域内に丸めてあるので、ここは鈍らせずそのまま解く
+        // （両者が同じ1点を解く = 手が必ず合う）
         solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
-          ax, tmp.v.y - rig.shldr[k].position.y, az,
-          sign * 0.55, -1, -0.3, // 肘は下・やや外・やや後ろへ
-          0.3);
+          tmp.v.x - rig.shldr[k].position.x,
+          tmp.v.y - rig.shldr[k].position.y,
+          tmp.v.z,
+          sign * 0.55, -1, -0.3); // 肘は下・やや外・やや後ろへ
       }
+    } else {
+      holdSame.current = null;
     }
 
     // ── レイヤー4: フリーの腕。体側で軽く構えて拍で揺れる

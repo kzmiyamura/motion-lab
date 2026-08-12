@@ -13,22 +13,35 @@ import * as THREE from 'three';
  * 円柱の既定は原点中心・高さ1・Y軸方向なので、scale.y にボーン長を入れれば伸縮も一発で決まる。
  */
 
-// クリップの joints 配列の並び（prototype_export_clip.py の NAMES と一致させること）
+// クリップの joints 配列の並び（prototype_export_clip.py の NAMES と一致させること）。
+// 14以降は19関節版クリップのみに存在する（旧13関節クリップも読めるようにガードする）
 const J = {
   nose: 0, lShoulder: 1, rShoulder: 2, lElbow: 3, rElbow: 4, lWrist: 5, rWrist: 6,
   lHip: 7, rHip: 8, lKnee: 9, rKnee: 10, lAnkle: 11, rAnkle: 12,
+  lEar: 13, rEar: 14, lHeel: 15, rHeel: 16, lToe: 17, rToe: 18,
 } as const;
 
-const BONES: [number, number][] = [
-  [J.lShoulder, J.rShoulder], [J.lHip, J.rHip],
-  [J.lShoulder, J.lHip], [J.rShoulder, J.rHip],
-  [J.lShoulder, J.lElbow], [J.lElbow, J.lWrist],
-  [J.rShoulder, J.rElbow], [J.rElbow, J.rWrist],
-  [J.lHip, J.lKnee], [J.lKnee, J.lAnkle],
-  [J.rHip, J.rKnee], [J.rKnee, J.rAnkle],
+// [関節A, 関節B, 太さ, 追加で可視を要求する関節]。胴は太く、手足は細く。
+// 第4要素は「脚とつながっていない足だけが宙に浮く」のを防ぐための前提条件
+type BoneDef = [number, number, number, number[]?];
+const CORE_BONES: BoneDef[] = [
+  [J.lShoulder, J.rShoulder, 0.055], [J.lHip, J.rHip, 0.05],
+  [J.lShoulder, J.lHip, 0.052], [J.rShoulder, J.rHip, 0.052],
+  [J.lShoulder, J.lElbow, 0.038], [J.lElbow, J.lWrist, 0.032],
+  [J.rShoulder, J.rElbow, 0.038], [J.rElbow, J.rWrist, 0.032],
+  [J.lHip, J.lKnee, 0.05], [J.lKnee, J.lAnkle, 0.042],
+  [J.rHip, J.rKnee, 0.05], [J.rKnee, J.rAnkle, 0.042],
 ];
-// 太さ: 胴は太く、手足は細く
-const BONE_R = [0.055, 0.05, 0.052, 0.052, 0.038, 0.032, 0.038, 0.032, 0.05, 0.042, 0.05, 0.042];
+// 足の三角形（足首・かかと・つま先）。足の向き = サルサの足元表現。
+// すねが描けないフレームでは足だけが地面に浮いて見えるので、膝（と足首）も可視のときだけ描く
+const FOOT_BONES: BoneDef[] = [
+  [J.lAnkle, J.lHeel, 0.03, [J.lKnee]],
+  [J.lHeel, J.lToe, 0.026, [J.lKnee, J.lAnkle]],
+  [J.lAnkle, J.lToe, 0.026, [J.lKnee]],
+  [J.rAnkle, J.rHeel, 0.03, [J.rKnee]],
+  [J.rHeel, J.rToe, 0.026, [J.rKnee, J.rAnkle]],
+  [J.rAnkle, J.rToe, 0.026, [J.rKnee]],
+];
 
 export type MotionClip = {
   version: number;
@@ -37,7 +50,7 @@ export type MotionClip = {
   duration: number;
   leaderPid: number;
   joints: string[];
-  events: { t: number; type: string; by?: string; rotations?: number }[];
+  events: { t: number; type: string; by?: string; rotations?: number; hold?: string | null }[];
   frames: { t: number; p: Record<string, { r: number[]; j: number[]; v: number[] }> }[];
   // 解析で推定した拍格子（等間隔）。ハイブリッドモードの脚のビート同期に使う
   beatGrid?: { bpm: number; firstBeatSec: number; beatIntervalSec: number; confidence?: number };
@@ -58,7 +71,15 @@ export function MocapFigure({
   const group = useRef<THREE.Group>(null!);
   const bones = useRef<THREE.Mesh[]>([]);
   const head = useRef<THREE.Mesh>(null!);
+  const noseTip = useRef<THREE.Mesh>(null!);
   const cursor = useRef(0);
+
+  // 旧13関節クリップでは足・耳のボーンを描かない（j 配列の範囲外アクセス防止）
+  const hasExt = clip.joints.length >= 19;
+  const boneDefs = useMemo<BoneDef[]>(
+    () => (hasExt ? [...CORE_BONES, ...FOOT_BONES] : CORE_BONES),
+    [hasExt],
+  );
 
   // この pid のフレームだけ抜き出して連続配列にしておく（毎フレームの検索を軽くする）
   const track = useMemo<Track>(() => {
@@ -105,13 +126,14 @@ export function MocapFigure({
 
     const px = (k: number, c: number) => j0[k * 3 + c] * (1 - w) + j1[k * 3 + c] * w;
 
-    for (let bi = 0; bi < BONES.length; bi++) {
+    for (let bi = 0; bi < boneDefs.length; bi++) {
       const mesh = bones.current[bi];
       if (!mesh) continue;
-      const [ai, bidx] = BONES[bi];
+      const [ai, bidx, , requires] = boneDefs[bi];
       const va = Math.min(v0[ai], v1[ai]);
       const vb = Math.min(v0[bidx], v1[bidx]);
       if (va <= 0 || vb <= 0) { mesh.visible = false; continue; }
+      if (requires?.some((k) => Math.min(v0[k], v1[k]) <= 0)) { mesh.visible = false; continue; }
       mesh.visible = true;
       // 補間で埋めた関節(0.5)は薄く描き、観測(1.0)と区別する
       const mat = mesh.material as THREE.MeshStandardMaterial;
@@ -131,11 +153,29 @@ export function MocapFigure({
       mesh.scale.set(1, len, 1);
     }
 
-    // 頭は鼻の少し上に球で置く
+    // 頭の球。耳が取れる19関節クリップでは耳の中点 = 本当の頭の中心に置き、
+    // 鼻を小さな球で突き出して顔の向き（スポッティング）を見せる
     if (head.current) {
       const vn = Math.min(v0[J.nose], v1[J.nose]);
-      head.current.visible = vn > 0;
-      if (vn > 0) {
+      const earsOk = hasExt
+        && Math.min(v0[J.lEar], v1[J.lEar]) > 0 && Math.min(v0[J.rEar], v1[J.rEar]) > 0;
+      head.current.visible = vn > 0 || earsOk;
+      if (noseTip.current) noseTip.current.visible = false;
+      if (earsOk) {
+        const ex = (px(J.lEar, 0) + px(J.rEar, 0)) / 2;
+        const ey = (px(J.lEar, 1) + px(J.rEar, 1)) / 2;
+        const ez = (px(J.lEar, 2) + px(J.rEar, 2)) / 2;
+        head.current.position.set(ex, ey, ez);
+        if (vn > 0 && noseTip.current) {
+          // 頭の中心から鼻方向へ少し伸ばして、球の表面から覗かせる
+          noseTip.current.visible = true;
+          noseTip.current.position.set(
+            ex + (px(J.nose, 0) - ex) * 1.45,
+            ey + (px(J.nose, 1) - ey) * 1.45,
+            ez + (px(J.nose, 2) - ez) * 1.45,
+          );
+        }
+      } else if (vn > 0) {
         const sx = px(J.lShoulder, 0), sy = px(J.lShoulder, 1), sz = px(J.lShoulder, 2);
         const rx = px(J.rShoulder, 0), ry = px(J.rShoulder, 1), rz = px(J.rShoulder, 2);
         const nx = px(J.nose, 0), ny = px(J.nose, 1), nz = px(J.nose, 2);
@@ -148,15 +188,20 @@ export function MocapFigure({
 
   return (
     <group ref={group}>
-      {BONES.map((_, i) => (
+      {boneDefs.map(([, , r], i) => (
         <mesh key={i} ref={(m) => { if (m) bones.current[i] = m; }} castShadow>
-          <cylinderGeometry args={[BONE_R[i], BONE_R[i], 1, 10]} />
+          <cylinderGeometry args={[r, r, 1, 10]} />
           <meshStandardMaterial color={color} roughness={0.5} metalness={0.05} />
         </mesh>
       ))}
       <mesh ref={head}>
         <sphereGeometry args={[0.115, 20, 16]} />
         <meshStandardMaterial color={color} roughness={0.5} metalness={0.05} />
+      </mesh>
+      {/* 顔の向きインジケーター（耳が取れるクリップのみ表示） */}
+      <mesh ref={noseTip}>
+        <sphereGeometry args={[0.042, 12, 10]} />
+        <meshStandardMaterial color={color} roughness={0.4} metalness={0.05} />
       </mesh>
     </group>
   );

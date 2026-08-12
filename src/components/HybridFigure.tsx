@@ -104,6 +104,13 @@ export function HybridFigure({
   const guide = useMemo(() => buildGuide(clip, pid), [clip, pid]);
   const mirror = role === 'follower' ? -1 : 1;
 
+  // イベントの hold（例: "リーダー右手×フォロワー左手"）から、この役がつないでいる手を引く
+  const holdSide = (hold?: string | null): 'L' | 'R' | null => {
+    if (!hold) return null;
+    const m = role === 'leader' ? /リーダー(右|左)手/.exec(hold) : /フォロワー(右|左)手/.exec(hold);
+    return m ? (m[1] === '右' ? 'R' : 'L') : null;
+  };
+
   useFrame(() => {
     const g = guide;
     if (g.ts.length < 2 || !root.current) return;
@@ -141,8 +148,10 @@ export function HybridFigure({
     root.current.position.y = damp(root.current.position.y, 0.02 - dip * 0.05, 0.3);
     root.current.rotation.y = damp(root.current.rotation.y, yaw, 0.4);
 
-    // ── 脚: 拍ごとに接地脚が交替。歩幅は実移動速度で伸縮（止まっていれば足踏み）
-    const amp = 0.16 + Math.min(0.3, speed * 0.28);
+    // ── 脚: 拍ごとに接地脚が交替。歩幅は実移動速度で伸縮（止まっていれば足踏み）。
+    // サルサの休符: 4拍目・8拍目はステップを踏まない（1,2,3 − 5,6,7 −）
+    const rest = ((Math.floor(beat) % 4) + 4) % 4 === 3;
+    const amp = rest ? 0 : 0.16 + Math.min(0.3, speed * 0.28);
     const stepPhase = Math.sin(beat * Math.PI) * mirror;
     thighL.current.rotation.x = damp(thighL.current.rotation.x, amp * stepPhase, 0.25);
     thighR.current.rotation.x = damp(thighR.current.rotation.x, -amp * stepPhase, 0.25);
@@ -150,21 +159,39 @@ export function HybridFigure({
     // ── 上体のわずかな縦揺れ
     spine.current.position.y = damp(spine.current.position.y, 0.9 - dip * 0.02, 0.3);
 
-    // ── 腕: 基本は前方フレーム。技イベントの前後だけアクセント（回転そのものは yaw が担う）
-    let rArmUp = 0;
+    // ── 腕: 基本は前方フレーム。技イベントの前後だけアクセント（回転そのものは yaw が担う）。
+    // hold からどちらの手をつないでいるか分かるので、その手を動かす
+    let armUpL = 0, armUpR = 0, armTuck = 0;
     for (const ev of clip.events) {
       const dur = 1.6 + ((ev.rotations ?? 1) - 1) * 0.5;
       const prog = (t - (ev.t - 0.4)) / dur;
       if (prog < 0 || prog > 1) continue;
       const arc = Math.sin(prog * Math.PI);
+      const side = holdSide(ev.hold);
       if (ev.type === 'Turn' && ev.by === 'follower') {
-        rArmUp = Math.max(rArmUp, arc * (role === 'follower' ? 0.9 : 1.1)); // つないだ手を上げて回す/回る
-      } else if (ev.type === 'CBL' && role === 'leader') {
-        rArmUp = Math.max(rArmUp, arc * 0.5);                               // 道を空けるリード
+        // つないだ手を上げて回す/回る（hold 不明時は従来どおり右手）
+        const up = arc * (role === 'follower' ? 0.9 : 1.1);
+        if (side === 'L') armUpL = Math.max(armUpL, up);
+        else armUpR = Math.max(armUpR, up);
+      } else if (ev.type === 'Turn' && ev.by === 'leader') {
+        // リーダーの単独ターン: 腕を体に畳む（回転そのものは yaw の実データが描く）
+        if (role === 'leader') armTuck = Math.max(armTuck, arc);
+      } else if (ev.type === 'CBL') {
+        if (role === 'leader') {
+          const up = arc * 0.5; // 道を空けて相手を通すリード
+          if (side === 'L') armUpL = Math.max(armUpL, up);
+          else armUpR = Math.max(armUpR, up);
+        } else if (side) {
+          const up = arc * 0.35; // つないだ手を前に預けて通過
+          if (side === 'L') armUpL = Math.max(armUpL, up);
+          else armUpR = Math.max(armUpR, up);
+        }
       }
     }
-    shldrL.current.rotation.x = damp(shldrL.current.rotation.x, -1.15 + dip * 0.06, 0.2);
-    shldrR.current.rotation.x = damp(shldrR.current.rotation.x, -1.15 - rArmUp, 0.2);
+    const frame = -1.15 + dip * 0.06;                 // 基本の前方フレーム
+    const base = frame + (-0.35 - frame) * armTuck;   // ターン中は畳んだ位置へ寄せる
+    shldrL.current.rotation.x = damp(shldrL.current.rotation.x, base - armUpL, 0.2);
+    shldrR.current.rotation.x = damp(shldrR.current.rotation.x, base - armUpR, 0.2);
   });
 
   const limbMat = <meshStandardMaterial color={color} roughness={0.55} metalness={0.05} />;

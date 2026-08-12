@@ -1,6 +1,23 @@
 # 引継ぎメモ 2026-08-12 — 2D→3D復元パイプラインと3Dタブ
 
-> **2026-08-12 2セッション目の追記（最新状態はこちら）**
+> **2026-08-12 3セッション目の追記（最新状態はこちら）**
+>
+> - **relay 配信化 完了**: クリップを `public/motion/` から撤去し、`server/storage/lift3d/`
+>   （gitignore 済み）から `GET /api/motion`（一覧）/ `GET /api/motion/:id`（本体）で配信する
+>   （`server/src/routes/motion.ts`）。フロントは `VITE_HOME_SERVER_URL` 経由で取得
+>   （本番は relay 固定URL、Pages の環境変数は設定済み）。relay 経由の疎通確認済み
+> - **クリップ切替UI 完了**: 3Dタブに 🎞 セレクタ（クリップが2本以上あるとき表示）。
+>   3本（2fda2815 / 8c312c6d / bb0efcb9）を切替可能。表示名は
+>   `server/storage/lift3d/manifest.json`（手書き・任意）で付与
+> - **履歴スクラブ 完了**: リポジトリは **PUBLIC** のため、ファイル削除だけでは未push履歴の
+>   blob が push で公開されてしまう。`git filter-branch` で未push全コミットから
+>   `public/motion/2fda2815.json` を除去した（**コミットIDが全て変わった**。本メモ内の
+>   旧ハッシュは書き換え前のもの。旧履歴はローカルの `backup-pre-scrub` ブランチに保全 —
+>   **このブランチは絶対に push しないこと**。push 後に不要なら削除してよい）
+> - **push は技術的に安全になった**。実行するかは引き続きユーザー判断待ち。
+>   push すると Cloudflare Pages が自動ビルドし、3Dタブは relay 経由でクリップを読むようになる
+
+> **2026-08-12 2セッション目の追記**
 >
 > 下記「次の一手」4項目は消化済み。新セッションはこの追記と
 > docs/lift3d-shooting-conditions.md を先に読むこと。

@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { MocapFigure, type MotionClip } from './MocapFigure';
 import { CoupleFigure } from './CoupleFigure';
+import { detectFace, loadFaces, saveFaces, EMPTY_FACES, type FaceSlots } from '../engine/faceAvatar';
 import styles from './SalsaStage3D.module.css';
 
 // 動画から復元した3Dモーション。server/analysis/prototype_lift3d.py 系のパイプラインが書き出す
@@ -309,6 +310,36 @@ export function SalsaStage3D() {
   const [autoOrbit, setAutoOrbit] = useState(false);
   const [preset, setPreset] = useState('正面');
   const stageRef = useRef<HTMLDivElement>(null);
+  // 写真から作った顔。端末の localStorage に置くだけで、どこへも送信しない
+  const [faces, setFaces] = useState<FaceSlots>(EMPTY_FACES);
+  const [faceBusy, setFaceBusy] = useState<'leader' | 'follower' | null>(null);
+  const [faceErr, setFaceErr] = useState<string | null>(null);
+
+  useEffect(() => { setFaces(loadFaces()); }, []);
+
+  const onFacePick = async (slot: 'leader' | 'follower', file: File | undefined) => {
+    if (!file) return;
+    setFaceErr(null);
+    setFaceBusy(slot);
+    try {
+      const avatar = await detectFace(file);
+      setFaces((prev) => {
+        const next = { ...prev, [slot]: avatar };
+        saveFaces(next);
+        return next;
+      });
+    } catch (e) {
+      setFaceErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFaceBusy(null);
+    }
+  };
+
+  const clearFaces = () => {
+    setFaces(EMPTY_FACES);
+    saveFaces(EMPTY_FACES);
+    setFaceErr(null);
+  };
 
   phRef.current.onMove = useCallback((m: MoveKind, rot: number) => {
     setNowLabel(MOVE_LABEL[m] + (rot >= 2 ? ` ×${rot}` : ''));
@@ -489,6 +520,8 @@ export function SalsaStage3D() {
               timeRef={clipTimeRef}
               leaderColor="#3d8bff"
               followerColor="#ff4db8"
+              leaderFace={faces.leader}
+              followerFace={faces.follower}
             />
           ) : (
             <>
@@ -557,9 +590,26 @@ export function SalsaStage3D() {
           BPM <input type="range" min={130} max={200} value={bpm} onChange={e => onBpm(Number(e.target.value))} />
           <b>{bpm}</b>
         </label>
+        {/* 写真から顔を作る。処理も保存も端末内で完結する */}
+        {(['leader', 'follower'] as const).map((slot) => (
+          <label key={slot} className={`${styles.btn} ${faces[slot] ? styles.primary : ''}`}>
+            {faceBusy === slot ? '⏳ 解析中…'
+              : `${slot === 'leader' ? '🙂 リーダー' : '🙂 フォロワー'}の顔`}
+            <input
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={(e) => { void onFacePick(slot, e.target.files?.[0]); e.target.value = ''; }}
+            />
+          </label>
+        ))}
+        {(faces.leader || faces.follower) && (
+          <button className={styles.btn} onClick={clearFaces}>🧹 顔を消す</button>
+        )}
       </div>
 
       {clipErr && <p className={styles.note}>モーションの読み込みに失敗しました: {clipErr}</p>}
+      {faceErr && <p className={styles.note}>顔の読み込みに失敗しました: {faceErr}</p>}
 
       <p className={styles.note}>
         <b>🎥 動画のモーションで踊る</b> は、動画から復元したモーションを<b>固定長のリグ</b>で再生します
@@ -574,6 +624,10 @@ export function SalsaStage3D() {
         2人の距離も拘束しています — 弱透視の奥行き誤差で腰の間隔が最小5cmまで潰れるため、
         重心を動かさずに0.58〜1.02mへ収めています（振付の床の使い方は保たれます）。
         ステージは<b>ドラッグで回り込め</b>ます — 元の動画に無いアングルから見られるのが3D復元の値打ちです。
+        <b>🙂 顔</b> は写真から作れます — MediaPipe の顔ランドマーク478点をそのまま頂点にし、
+        同じ点の画像座標を UV に使うので、写真が顔の形にぴったり貼られます。
+        <b>解析も保存もこの端末の中だけで完結し、写真はどこへも送信されません</b>
+        （消したいときは 🧹 で消えます）。
         <b>🦴 復元データ</b> は復元結果そのものを見るデバッグ表示で、
         薄いボーンは補間、描かれないボーンは観測なしです。
         ▶ 再生 / 📼 は技イベントだけ動画由来の手続きアニメ（B方式）です。

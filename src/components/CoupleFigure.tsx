@@ -1,7 +1,8 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { MotionClip } from './MocapFigure';
+import { buildFaceGeometry, type FaceAvatar } from '../engine/faceAvatar';
 
 /**
  * カップルダンスを「2体」ではなく **1つのペア** として組むリグ。
@@ -282,8 +283,32 @@ const newRig = (): Rig => ({
   cursor: { current: 0 },
 });
 
+/** 写真から作った顔。後頭部は色つきの球のまま残して「頭」として成立させる */
+function PhotoHead({ avatar, color }: { avatar: FaceAvatar; color: string }) {
+  const geo = useMemo(() => buildFaceGeometry(avatar), [avatar]);
+  const tex = useMemo(() => {
+    const t = new THREE.TextureLoader().load(avatar.image);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }, [avatar.image]);
+  useEffect(() => () => { geo.dispose(); tex.dispose(); }, [geo, tex]);
+
+  return (
+    <>
+      <mesh geometry={geo} position={[0, 0, 0.03]}>
+        {/* 三角形の向きは分割の都合で揃わないので両面で描く */}
+        <meshStandardMaterial map={tex} roughness={0.85} metalness={0} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh position={[0, 0, -0.03]}>
+        <sphereGeometry args={[0.105, 20, 16]} />
+        <meshStandardMaterial color={color} roughness={0.6} metalness={0.05} />
+      </mesh>
+    </>
+  );
+}
+
 /** 1人ぶんの見た目。関節は group 階層＝ボーンで、姿勢は CoupleFigure がまとめて書き込む */
-function Body({ rig, color }: { rig: Rig; color: string }) {
+function Body({ rig, color, face }: { rig: Rig; color: string; face?: FaceAvatar | null }) {
   const limbMat = <meshStandardMaterial color={color} roughness={0.55} metalness={0.05} />;
   const skinMat = <meshStandardMaterial color={color} roughness={0.5} metalness={0.05} />;
   const darkMat = <meshStandardMaterial color="#101528" roughness={0.6} metalness={0.05} />;
@@ -341,15 +366,19 @@ function Body({ rig, color }: { rig: Rig; color: string }) {
 
           {/* 頭（耳から取れる相対ヨーで回る = スポッティング） */}
           <group ref={(o) => { if (o) rig.head = o; }} position={[0, 0.58, 0]}>
-            <mesh>
-              <sphereGeometry args={[0.115, 20, 16]} />
-              {skinMat}
-            </mesh>
-            {/* 顔の向きが読めるように鼻先を出す */}
-            <mesh position={[0, -0.01, 0.105]}>
-              <sphereGeometry args={[0.032, 12, 10]} />
-              {darkMat}
-            </mesh>
+            {face ? <PhotoHead avatar={face} color={color} /> : (
+              <>
+                <mesh>
+                  <sphereGeometry args={[0.115, 20, 16]} />
+                  {skinMat}
+                </mesh>
+                {/* 顔の向きが読めるように鼻先を出す */}
+                <mesh position={[0, -0.01, 0.105]}>
+                  <sphereGeometry args={[0.032, 12, 10]} />
+                  {darkMat}
+                </mesh>
+              </>
+            )}
           </group>
 
           {/* 腕（肩 → 肘 → 手）。つないでいる側は IK が姿勢を書き込む */}
@@ -382,12 +411,14 @@ function Body({ rig, color }: { rig: Rig; color: string }) {
 }
 
 export function CoupleFigure({
-  clip, timeRef, leaderColor, followerColor,
+  clip, timeRef, leaderColor, followerColor, leaderFace, followerFace,
 }: {
   clip: MotionClip;
   timeRef: { current: number };
   leaderColor: string;
   followerColor: string;
+  leaderFace?: FaceAvatar | null;
+  followerFace?: FaceAvatar | null;
 }) {
   // 添字 0 = リーダー, 1 = フォロワー
   const pids = useMemo<[number, number]>(
@@ -531,8 +562,8 @@ export function CoupleFigure({
 
   return (
     <>
-      <Body rig={rigs[0]} color={leaderColor} />
-      <Body rig={rigs[1]} color={followerColor} />
+      <Body rig={rigs[0]} color={leaderColor} face={leaderFace} />
+      <Body rig={rigs[1]} color={followerColor} face={followerFace} />
     </>
   );
 }

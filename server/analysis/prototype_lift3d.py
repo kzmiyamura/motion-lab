@@ -31,6 +31,18 @@ Pose Landmarker は `pose_world_landmarks` として「腰中点を原点とす�
      （f = 焦点距離[px]。カメラ内部パラメータは動画に無いので水平画角から仮定する。
        f は場面全体のスケールと遠近の強さを決めるだけで、2人の *相対* 奥行きの順序は変えない）
 
+■ 切り出しの落とし穴: 2つの検出が同じ人に集まる
+切り出しにはマージンを付けるので、2人が交差・密着すると切り出しの中に2人とも入る。
+MediaPipe は単人モードで「どちらか一方」しか返さないため、**両方の切り出しが同じ
+（手前の）人を掴む**ことがある。実測（2fda2815）で person-frame の 7.7%、
+2人フレームの 9.5% が「bbox は画面幅の10%以上離れているのに腰が3%未満に重なる」状態だった。
+これは弱透視の奥行き誤差ではない — 画像座標の時点で既に2人が同じ場所に居る。
+
+身元の正解は YOLO の bbox（追跡付き）であって、切り出しの中の MediaPipe は姿勢を取る
+道具にすぎない。そこで2人ぶん検出したあと resolve_identity() で「2つの検出は別人か」を
+確かめ、集まっていたらマージンを外して切り出し直す。それでも直らなければ落とす
+（捏造した位置を残すより欠測のほうが後段で扱える）。
+
 出力: JSON（three.js 座標系・メートル）。frames[].persons[].root と .joints[33]
 
 Usage:
@@ -61,14 +73,22 @@ SCALE_BONES = [
 ]
 VIS_MIN = 0.5          # このスコア未満の landmark はスケール推定から外す
 CROP_MARGIN = 0.18     # bbox に対する上下左右のマージン比
+CROP_RETRY_MARGIN = 0.0  # 二重取得をほどくときの再試行マージン（相手を視野から締め出す）
 CROP_MIN_SIDE = 256    # 切り出しが小さいと精度が落ちるので拡大する下限
 
+# --- 二重取得（同じ人を2回掴む）の判定 ---
+# 切り出しにマージンを付けている以上、2人が近づけば切り出しの中に2人とも入る。
+# MediaPipe は単人モードなので「どちらか一方」しか返さず、両方の切り出しが
+# 同じ（手前の）人を掴むことがある。2つの検出は必ず別人でなければならない。
+HIP_COLLAPSE_UV = 0.03  # 2人の腰が画面幅のこの割合より近ければ重なったとみなす
+BBOX_SEP_MIN = 0.10     # ただし bbox 中心がこれ以上離れているときだけ（本当の密着と区別する）
 
-def crop_person(frame, bbox, w, h):
+
+def crop_person(frame, bbox, w, h, margin=CROP_MARGIN):
     """正規化 bbox にマージンを付けて切り出す。(crop, x0, y0, scale) を返す"""
     x1, y1, x2, y2 = bbox
     bw, bh = (x2 - x1) * w, (y2 - y1) * h
-    mx, my = bw * CROP_MARGIN, bh * CROP_MARGIN
+    mx, my = bw * margin, bh * margin
     x0 = max(0, int(x1 * w - mx))
     y0 = max(0, int(y1 * h - my))
     x3 = min(w, int(x2 * w + mx))
@@ -105,6 +125,104 @@ def estimate_scale(world, img_px):
     if len(ratios) < 4:
         return None
     return float(np.median(ratios))
+
+
+def detect_one(landmarker, frame, bbox, W, H, cx, cy, f_px, margin):
+    """bbox で切り出して単人検出し、three.js 系の1人ぶんを返す。取れなければ None。
+
+    ここでは「その切り出しから何が見えたか」だけを返す。それが本当に狙った人なのかは
+    2人ぶん出揃ってから resolve_identity() で判定する（1人だけ見て決められる話ではない）。
+    """
+    crop, x0, y0, s = crop_person(frame, bbox, W, H, margin)
+    if crop is None:
+        return None
+    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
+                      data=cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+    res = landmarker.detect(mp_img)
+    if not res.pose_world_landmarks or not res.pose_landmarks:
+        return None
+
+    wl = res.pose_world_landmarks[0]
+    il = res.pose_landmarks[0]
+    ch, cw = crop.shape[0], crop.shape[1]
+    # 切り出し内の正規化座標 → 元画像のピクセル座標へ戻す
+    img_px = np.array([[x0 + lm.x * cw / s, y0 + lm.y * ch / s] for lm in il], dtype=np.float64)
+    world = np.array([[lm.x, lm.y, lm.z] for lm in wl], dtype=np.float64)
+    vis = np.array([lm.visibility for lm in il], dtype=np.float64)
+
+    # 見えていない点はスケール推定から外す
+    wm = world.copy()
+    for i in range(len(vis)):
+        if vis[i] < VIS_MIN:
+            wm[i] = np.nan
+            img_px[i] = np.nan
+    px_per_m = estimate_scale(wm, img_px)
+    if px_per_m is None or px_per_m <= 1e-6:
+        return None
+
+    depth = f_px / px_per_m  # メートル
+    # 腰中点の画像座標（world landmarks の原点に対応する点）
+    hip_u = (img_px[23][0] + img_px[24][0]) / 2.0
+    hip_v = (img_px[23][1] + img_px[24][1]) / 2.0
+    if not (np.isfinite(hip_u) and np.isfinite(hip_v)):
+        return None
+
+    # --- 座標変換 ---
+    # ピンホールで腰中点を3D空間へ。画像 v は下向き正なので three の Y は符号反転。
+    root_x = (hip_u - cx) * depth / f_px
+    root_y = -(hip_v - cy) * depth / f_px
+    root_z = -depth  # カメラは原点から -Z を見る → 前方は負
+    # 関節は腰原点の相対座標のまま、X軸まわり180度回転で three.js 系へ
+    joints = [[float(p3[0]), float(-p3[1]), float(-p3[2])] for p3 in world]
+
+    return {
+        "root": [round(root_x, 4), round(root_y, 4), round(root_z, 4)],
+        "joints": [[round(v, 4) for v in j] for j in joints],
+        "vis": [round(float(v), 2) for v in vis],
+        "depthM": round(depth, 3),
+        "pxPerM": round(px_per_m, 1),
+        # 2D対応点も残す。f を後から推定し直して root を再計算できるようにするため
+        # （MediaPipe を回すのは高いので、知覚は1回・幾何は何度でも、の方針）
+        "img": [[round(float(q[0]), 1), round(float(q[1]), 1)] if np.isfinite(q[0]) else None
+                for q in img_px],
+        "hipUV": [round(hip_u, 1), round(hip_v, 1)],
+    }
+
+
+def resolve_identity(dets, boxes, W, H):
+    """2つの検出が本当に別人かを見る。同じ人を掴んでいたら「負けた側」の pid を返す。
+
+    どちらが偽物かは bbox が決める。bbox は YOLO の追跡が出した身元の正解であり、
+    切り出しの中の MediaPipe は姿勢を取るためだけの道具だから、食い違ったら bbox を信じる。
+    距離は bbox 幅で割って比べる（人の大きさが場面で変わるため）。
+    """
+    pids = [q for q in dets if dets[q] is not None and q in boxes]
+    if len(pids) < 2:
+        return None
+    a, b = pids[0], pids[1]
+
+    def cen(q):
+        x1, y1, x2, y2 = boxes[q]
+        return ((x1 + x2) / 2 * W, (y1 + y2) / 2 * H, max((x2 - x1) * W, 1e-6))
+
+    def dist(q, r):
+        u, v = dets[q]["hipUV"]
+        cxr, cyr, bwr = cen(r)
+        return math.hypot(u - cxr, v - cyr) / bwr
+
+    sep = abs(cen(a)[0] - cen(b)[0]) / W
+    hips = abs(dets[a]["hipUV"][0] - dets[b]["hipUV"][0]) / W
+    # 取り違えの形は2つ。どちらも「2つの検出が1人に集まった」ことを意味する:
+    #   ① 両方が同じ bbox を自分のものだと主張する
+    #   ② bbox は離れているのに腰が同じ場所に出た
+    owner_a = a if dist(a, a) <= dist(a, b) else b
+    owner_b = b if dist(b, b) <= dist(b, a) else a
+    collapsed = hips < HIP_COLLAPSE_UV and sep > BBOX_SEP_MIN
+    if owner_a != owner_b and not collapsed:
+        return None
+    # 偽物は「自分の bbox への当てはまりが悪いほう」。①では本人が自分の箱にきれいに
+    # 収まっているので必ず相手が落ちる。②はどちらとも言えないので当てはまりで決める。
+    return a if dist(a, a) > dist(b, b) else b
 
 
 def main():
@@ -199,6 +317,9 @@ def main():
     out_frames = []
     stats = {0: 0, 1: 0}
     attempts = {0: 0, 1: 0}
+    conflicts = {}   # 二重取得を検出した回数
+    recovered = {}   # うちマージンを外した再試行で直った回数
+    dropped = {}     # うち直らず落とした回数
     frame_idx = 0
     done = 0
 
@@ -212,65 +333,36 @@ def main():
                 frame_idx += 1
                 continue
 
-            persons = []
+            boxes = {p["pid"]: p["bbox"] for p in df["persons"]}
+            dets = {}
             for p in df["persons"]:
                 pid = p["pid"]
                 attempts[pid] = attempts.get(pid, 0) + 1
-                crop, x0, y0, s = crop_person(frame, p["bbox"], W, H)
-                if crop is None:
+                dets[pid] = detect_one(landmarker, frame, p["bbox"], W, H, cx, cy, f_px,
+                                       CROP_MARGIN)
+
+            # --- 二重取得をほどく ---
+            # マージン付きの切り出しには相手も入るので、両方が同じ人を掴むことがある。
+            # そのときはマージンを外して切り出し直す（相手を視野から締め出す）。
+            # それでも直らなければ落とす。捏造した位置を残すより欠測のほうが後段で扱える。
+            loser = resolve_identity(dets, boxes, W, H)
+            if loser is not None:
+                conflicts[loser] = conflicts.get(loser, 0) + 1
+                retry = detect_one(landmarker, frame, boxes[loser], W, H, cx, cy, f_px,
+                                   CROP_RETRY_MARGIN)
+                dets[loser] = retry
+                if retry is not None and resolve_identity(dets, boxes, W, H) is None:
+                    recovered[loser] = recovered.get(loser, 0) + 1
+                    dets[loser]["retried"] = True
+                else:
+                    dropped[loser] = dropped.get(loser, 0) + 1
+                    dets[loser] = None
+
+            persons = []
+            for pid, d in dets.items():
+                if d is None:
                     continue
-                mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
-                                  data=cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                res = landmarker.detect(mp_img)
-                if not res.pose_world_landmarks or not res.pose_landmarks:
-                    continue
-
-                wl = res.pose_world_landmarks[0]
-                il = res.pose_landmarks[0]
-                ch, cw = crop.shape[0], crop.shape[1]
-                # 切り出し内の正規化座標 → 元画像のピクセル座標へ戻す
-                img_px = np.array([[x0 + lm.x * cw / s, y0 + lm.y * ch / s] for lm in il], dtype=np.float64)
-                world = np.array([[lm.x, lm.y, lm.z] for lm in wl], dtype=np.float64)
-                vis = np.array([lm.visibility for lm in il], dtype=np.float64)
-
-                # 見えていない点はスケール推定から外す
-                wm = world.copy()
-                for i in range(len(vis)):
-                    if vis[i] < VIS_MIN:
-                        wm[i] = np.nan
-                        img_px[i] = np.nan
-                px_per_m = estimate_scale(wm, img_px)
-                if px_per_m is None or px_per_m <= 1e-6:
-                    continue
-
-                depth = f_px / px_per_m  # メートル
-                # 腰中点の画像座標（world landmarks の原点に対応する点）
-                hip_u = (img_px[23][0] + img_px[24][0]) / 2.0
-                hip_v = (img_px[23][1] + img_px[24][1]) / 2.0
-                if not (np.isfinite(hip_u) and np.isfinite(hip_v)):
-                    continue
-
-                # --- 座標変換 ---
-                # ピンホールで腰中点を3D空間へ。画像 v は下向き正なので three の Y は符号反転。
-                root_x = (hip_u - cx) * depth / f_px
-                root_y = -(hip_v - cy) * depth / f_px
-                root_z = -depth  # カメラは原点から -Z を見る → 前方は負
-                # 関節は腰原点の相対座標のまま、X軸まわり180度回転で three.js 系へ
-                joints = [[float(p3[0]), float(-p3[1]), float(-p3[2])] for p3 in world]
-
-                persons.append({
-                    "pid": pid,
-                    "root": [round(root_x, 4), round(root_y, 4), round(root_z, 4)],
-                    "joints": [[round(v, 4) for v in j] for j in joints],
-                    "vis": [round(float(v), 2) for v in vis],
-                    "depthM": round(depth, 3),
-                    "pxPerM": round(px_per_m, 1),
-                    # 2D対応点も残す。f を後から推定し直して root を再計算できるようにするため
-                    # （MediaPipe を回すのは高いので、知覚は1回・幾何は何度でも、の方針）
-                    "img": [[round(float(q[0]), 1), round(float(q[1]), 1)] if np.isfinite(q[0]) else None
-                            for q in img_px],
-                    "hipUV": [round(hip_u, 1), round(hip_v, 1)],
-                })
+                persons.append({"pid": pid, **d})
                 stats[pid] = stats.get(pid, 0) + 1
 
             if persons:
@@ -300,12 +392,21 @@ def main():
         "events": tracks.get("events"),
         "axes": "three.js: x=right y=up z=toward camera, meters, root=hip midpoint",
         "camera": {"width": W, "height": H, "fPx": round(f_px, 1), "hfovDeg": args.hfov},
+        "identityConflicts": {"detected": sum(conflicts.values()),
+                              "recovered": sum(recovered.values()),
+                              "dropped": sum(dropped.values())},
         "frames": out_frames,
     }, open(args.out, "w"))
 
+    nconf = sum(conflicts.values())
     print(
         f"done: lifted {len(out_frames)} frames, both-persons {len(both)}\n"
         f"  pid0 {stats.get(0,0)}/{attempts.get(0,0)}  pid1 {stats.get(1,0)}/{attempts.get(1,0)}\n"
+        f"  二重取得 {nconf} 件 (pid0 {conflicts.get(0,0)} / pid1 {conflicts.get(1,0)})"
+        f" → 再試行で回復 {sum(recovered.values())}  落とした {sum(dropped.values())}\n",
+        file=sys.stderr,
+    )
+    print(
         f"  depth median pid0={np.median([p['depthM'] for f in out_frames for p in f['persons'] if p['pid']==0]):.2f}m"
         f"  pid1={np.median([p['depthM'] for f in out_frames for p in f['persons'] if p['pid']==1]):.2f}m\n"
         f"  depth separation (pid0-pid1) median={np.median(seps) if seps else float('nan'):.3f}m"

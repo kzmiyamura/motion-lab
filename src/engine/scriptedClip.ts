@@ -74,26 +74,38 @@ const smoothstep = (u: number) => u * u * (3 - 2 * u);
 
 // ── 足運び ───────────────────────────────────────────────
 // サルサの足は「カウントに合わせて1歩ずつ踏む。それ以外は床に着いたまま」。
-// キーは [拍, 前後位置(体ローカルz, +が前)]。拍の 0.35 拍前から動き出して
-// 拍ちょうどに着地する。移動中だけ足首が浮く。
-type FootKey = [number, number];
-const STEP_DUR = 0.35;          // 1歩にかける拍数
+// キーは [着地拍, 前後位置(体ローカルz, +が前), 移動拍数?]。既定は拍の 0.35 拍前から
+// 動き出して拍ちょうどに着地（AND で動き出す歩は 0.5 を指定）。移動中だけ足首が浮く。
+// taps は「同じ場所で踏み直す」拍 — 位置は変えず、小さく浮かせて荷重の入れ替えを見せる
+type FootKey = [number, number, number?];
+type FootSpec = { keys: FootKey[]; taps: number[] };
+const STEP_DUR = 0.35;          // 1歩にかける既定の拍数
+const TAP_DUR = 0.25;           // 踏み直しの浮き時間
 const ANKLE_Y = 0.08;           // 接地時の足首高さ
 const STEP_LIFT = 0.07;         // 移動中に浮く高さ
+const TAP_LIFT = 0.04;          // 踏み直しの浮き
 const FOOT_LATERAL = 0.09;      // 足のスタンス幅（体ローカルx）
 
-/** 8拍周期の足前後位置と浮き。keys は拍順・先頭は「0拍時点の位置」 */
-function footAt(keys: FootKey[], beat8: number): { z: number; lift: number } {
-  let prev = keys[keys.length - 1][1];   // 周回前の最後の位置から始まる
-  for (const [kb, kz] of keys) {
-    if (beat8 >= kb) { prev = kz; continue; }
-    if (beat8 >= kb - STEP_DUR) {
-      const u = smoothstep((beat8 - (kb - STEP_DUR)) / STEP_DUR);
-      return { z: prev + (kz - prev) * u, lift: Math.sin(u * Math.PI) * STEP_LIFT };
+/** 8拍周期の足前後位置と浮き */
+function footAt(spec: FootSpec, beat8: number): { z: number; lift: number } {
+  let z = spec.keys[spec.keys.length - 1][1];   // 周回前の最後の位置から始まる
+  let lift = 0;
+  for (const [kb, kz, kd] of spec.keys) {
+    const dur = kd ?? STEP_DUR;
+    if (beat8 >= kb) { z = kz; continue; }
+    if (beat8 >= kb - dur) {
+      const u = smoothstep((beat8 - (kb - dur)) / dur);
+      lift = Math.sin(u * Math.PI) * STEP_LIFT;
+      z = z + (kz - z) * u;
     }
-    return { z: prev, lift: 0 };
+    break;
   }
-  return { z: prev, lift: 0 };
+  for (const tb of spec.taps) {
+    if (beat8 >= tb - TAP_DUR && beat8 <= tb) {
+      lift = Math.max(lift, Math.sin(((beat8 - (tb - TAP_DUR)) / TAP_DUR) * Math.PI) * TAP_LIFT);
+    }
+  }
+  return { z, lift };
 }
 
 export type Timing = 'on1' | 'on2';
@@ -107,22 +119,24 @@ const BREAK = 0.28;             // ブレイクの歩幅
  *   1 左足前ブレイク → 3 戻す。5 右足後ろブレイク → 7 戻す
  *
  * On2（Eddie Torres 系。**両足が揃う瞬間は一度もない** — ユーザー確認済み）:
- *   足は前後を通り抜け続け、常にどちらかが前・どちらかが後ろのスタッガー。
- *   1 左足を後ろへ小さく（+0.35 から通り抜けの大移動）
- *   2 右足**後ろへブレイク** / 3 左足はニュートラルを通過して前へ / 4 休符（揃わない）
- *   5 右足が後ろから前へ通り抜け / 6 左足**前へブレイク** / 7 右足後ろへ小さく / 8 休符
+ *   位置が変わる歩は 1・2・5・6 だけ。3 は 1 と同じ場所、7 は 5 と同じ場所で**踏み直し**。
+ *   8AND から左足が動き出して 1 で右足の少し後ろへ、2 は 1 の足の後ろ（ブレイク）、
+ *   4AND から右足が動き出して 5 で前へ、6 はさらに前（ブレイク）。の繰り返し
  */
-function basicFootKeys(role: 'leader' | 'follower', timing: Timing): [FootKey[], FootKey[]] {
-  let L: FootKey[], R: FootKey[];
+function basicFootKeys(role: 'leader' | 'follower', timing: Timing): [FootSpec, FootSpec] {
+  let L: FootSpec, R: FootSpec;
   if (timing === 'on1') {
-    L = [[0, 0], [1, BREAK], [3, 0]];
-    R = [[0, 0], [5, -BREAK], [7, 0]];
+    L = { keys: [[0, 0], [1, BREAK], [3, 0]], taps: [6] };
+    R = { keys: [[0, 0], [5, -BREAK], [7, 0]], taps: [2] };
   } else {
-    L = [[1, -0.05], [3, 0.15], [6, 0.35]];
-    R = [[2, -0.35], [5, 0.05], [7, -0.15]];
+    // 数値は「1 で左足は右足(+0.05)の少し後ろ = -0.05」「2 は 1 の 0.3 後ろ」
+    // 「6 は 5(+0.05) の 0.3 前」を全体が中心 0 で振動するよう配置したもの
+    L = { keys: [[1, -0.05, 0.5], [6, 0.35]], taps: [3] };   // 8AND発 → 1着地
+    R = { keys: [[2, -0.35], [5, 0.05, 0.5]], taps: [7] };   // 4AND発 → 5着地
   }
   if (role === 'leader') return [L, R];
-  const flip = (k: FootKey[]) => k.map(([b, z]) => [b, -z] as FootKey);
+  const flip = (s: FootSpec): FootSpec =>
+    ({ keys: s.keys.map(([b, z, d]) => [b, -z, d] as FootKey), taps: [...s.taps] });
   return [flip(R), flip(L)];   // [左足, 右足]
 }
 
@@ -225,9 +239,10 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
   // 体の重心の前後（リーダーの前方成分。フォロワーはワールドで同方向へ揺れる）。
   // On1: 1 で前・5 で後ろ。On2: 2 で後ろ・6 で前（ブレイクに同期）。
   // On2 は足が揃わないぶん重心も完全な中立に戻らない（先頭と末尾を同値にしてループを繋ぐ）
+  // On2 は荷重した足の位置に重心が乗る（1・3=左足-0.05、2=右足-0.35、5・7=右足+0.05、6=左足+0.35）
   const SWAY = timing === 'on1'
     ? [0, 0.12, 0.02, 0, 0, -0.12, -0.02, 0, 0]
-    : [-0.06, -0.02, -0.10, 0.06, 0.06, 0.02, 0.10, -0.06, -0.06];
+    : [0.05, -0.05, -0.18, -0.05, -0.05, 0.05, 0.18, 0.05, 0.05];
   const footL = basicFootKeys('leader', timing);
   const footF = basicFootKeys('follower', timing);
   const frames: MotionClip['frames'] = [];

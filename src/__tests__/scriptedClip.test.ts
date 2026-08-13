@@ -58,6 +58,16 @@ describe('手描きベーシックの足運び', () => {
     expect(fL2.x - fR2.x).toBeLessThan(-0.2);   // 女: 2で左足が前（世界座標では -X）
   });
 
+  it('On2: 3は1と同じ場所・7は5と同じ場所で踏み直す（位置が変わる歩は1,2,5,6だけ）', () => {
+    const c = buildScriptedBasic('on2');
+    expect(Math.abs(ankle(c, 3.4 * spb, 0, LANK).x - ankle(c, 1.3 * spb, 0, LANK).x)).toBeLessThan(0.02);
+    expect(Math.abs(ankle(c, 7.4 * spb, 0, RANK).x - ankle(c, 5.3 * spb, 0, RANK).x)).toBeLessThan(0.02);
+    // カウント1: 左足は右足の「少し後ろ」（右足は7=5の位置 +0.05、左足は -0.05）
+    const lL = ankle(c, 1.3 * spb, 0, LANK), lR = ankle(c, 1.3 * spb, 0, RANK);
+    expect(lR.x - lL.x).toBeGreaterThan(0.05);
+    expect(lR.x - lL.x).toBeLessThan(0.2);
+  });
+
   it('On2: 両足が揃う瞬間が一度もない（着地中は常に前後スタッガー）', () => {
     const c = buildScriptedBasic('on2');
     // 移動窓（拍の0.35拍前〜拍）を外した見本拍で、前後差が常に残ることを確かめる

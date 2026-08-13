@@ -117,13 +117,11 @@ def pair_distance(lead, fol, t):
     return math.hypot(a['hip'][0] - b['hip'][0], a['hip'][1] - b['hip'][1])
 
 
-def beatgrid_from_bpm(bpm):
-    """外から与えられた BPM の等間隔格子。音声が無いクリップ用。
+def beatgrid_from_bpm(bpm, source='given'):
+    """BPM から等間隔格子を作る。音声が無いクリップ用。
 
-    足首速度の周期から拍を推定する実装も試したが、音声真値のある 2fda2815 で
-    22% ずれた（山が立つのは拍ではなく小節で、割り戻しても合わない）ので採らない。
-    位相（カウント1がどこか）はどのみち決まらないが、腕の文法は全て
-    「イベント時刻 ± k拍」の相対量なので、必要なのは拍の長さだけ。
+    位相（カウント1がどこか）は決まらないが、腕の文法は全て「イベント時刻 ± k拍」の
+    相対量なので、必要なのは拍の長さだけ。firstBeatSec は 0 の飾り。
     """
     interval = 60.0 / float(bpm)
     return {
@@ -131,9 +129,45 @@ def beatgrid_from_bpm(bpm):
         'firstBeatSec': 0.0,
         'beatIntervalSec': round(interval, 4),
         'confidence': 0.0,
-        'source': 'given',
-        'note': '音声からビートが取れないため外部指定した BPM。位相は未確定',
+        'source': source,
+        'note': '音声にビートが無いため拍の長さのみ推定した格子。カウント1の位相は未確定',
     }
+
+
+def estimate_bpm_from_events(clip):
+    """技イベントの間隔から「1エイト（8拍）の長さ」を取り、拍に割り戻す。
+
+    サルサの技は8カウント単位で入るので、隣接イベント間隔は1エイトの整数倍に集まる。
+    範囲内（140〜230bpm 相当の 2.09〜3.43秒）の間隔のカーネル密度の山を1エイトとみなす。
+
+    測って落ちた対抗案（2026-08-13・真値 172.3bpm の 2fda2815 で検定）:
+      - 足首/腰/膝の速さ・加速度の包絡 × 自己相関/コム/小節割り: 誤差 3〜45% で
+        推定値が 140〜250bpm に散る。乱数と区別がつかない
+      - イベント絶対時刻の格子当て（Rayleigh）: 最良でも 163bpm（5.4%外し）、
+        走査幅ぶんの多重比較を考えると有意でない
+      - サルサのベーシック（1,2,3動く/4休む）テンプレート: 207.7bpm（17%外し）。
+        技主体のクリップではベーシックを踏んでいないので当たらない
+    この方式だけが真値クリップで誤差 3.2%（166.8 vs 172.3）。ただし根拠は間隔5〜10本で
+    薄く、n=1 でしか検定できていない。過信しないこと。
+    """
+    ts = sorted(e['t'] for e in clip.get('events', []))
+    ev = []
+    for t in ts:
+        if not ev or t - ev[-1] > 0.25:   # 同時刻の CBL+Turn は1つに畳む
+            ev.append(t)
+    lo, hi = 8 * 60.0 / BPM_MAX, 8 * 60.0 / BPM_MIN
+    gaps = [ev[i + 1] - ev[i] for i in range(len(ev) - 1)]
+    inr = [g for g in gaps if lo <= g <= hi]
+    if len(inr) < 3:
+        return None, 0
+    bw = 0.08
+    best, bestd, x = None, -1.0, lo
+    while x <= hi:
+        d = sum(math.exp(-0.5 * ((x - v) / bw) ** 2) for v in inr)
+        if d > bestd:
+            best, bestd = x, d
+        x += 0.005
+    return 8 * 60.0 / best, len(inr)
 
 
 def detect_style(clip, bg):
@@ -167,11 +201,16 @@ def detect_style(clip, bg):
 def build_timeline(clip, bpm=None):
     lead = frame_series(clip, clip['leaderPid'])
     fol = frame_series(clip, 1 - clip['leaderPid'])
-    bg = clip.get('beatGrid') or (beatgrid_from_bpm(bpm) if bpm else None)
+    bg = clip.get('beatGrid')
+    if not bg and bpm:
+        bg = beatgrid_from_bpm(bpm)
     if not bg:
-        raise SystemExit(
-            'このクリップには beatGrid がありません（元動画がほぼ無音で音声から拍が取れない）。'
-            '--bpm=<値> で拍を与えてください。動きからの推定は音声真値と 22% ずれたため採りません')
+        est, n = estimate_bpm_from_events(clip)
+        if est:
+            bg = beatgrid_from_bpm(est, source='events')
+            bg['note'] += '（イベント間隔 %d 本から推定。真値クリップでの誤差 3.2%%）' % n
+    if not bg:
+        raise SystemExit('拍が決まりません（音声にビート無し・イベントも少なすぎる）。--bpm=<値> で与えてください')
     beat = bg['beatIntervalSec']
     duration = clip['duration']
 

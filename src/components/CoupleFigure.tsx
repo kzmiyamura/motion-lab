@@ -426,7 +426,7 @@ const tmp = {
   qs: new THREE.Quaternion(),
   hold: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3(),
   v: new THREE.Vector3(), v2: new THREE.Vector3(), w2: new THREE.Vector3(),
-  pl: new THREE.Vector3(),
+  pl: new THREE.Vector3(), sh: new THREE.Vector3(),
 };
 
 /**
@@ -466,6 +466,43 @@ function pushOutOfTorso(
   const k = r / d;
   p.x = cx + dx * k;
   p.z = cz + dz * k;
+}
+
+/**
+ * 手の目標を、肩から**まっすぐ届く**位置へ回り込ませる。
+ *
+ * pushOutOfTorso だけでは足りない。目標を胴体の外へ出しても、肩と手を結ぶ線が
+ * 相手の胴体を横切っていれば、そこへ腕を運ぶ IK は必ず体を貫通する
+ * （端点が2つとも外にあることは、線分が外にあることを意味しない）。
+ *
+ * 横切っていたら、肩から円柱への**接線**の方向へ目標を寄せる。接線上なら
+ * 肩から手までが胴体をかすめるだけで、中を通らない。
+ */
+function routeAroundTorso(
+  p: THREE.Vector3, sx: number, sz: number, cx: number, cz: number,
+  yLo: number, yHi: number, r: number,
+) {
+  if (p.y < yLo - 0.10 || p.y > yHi + 0.20) return;
+  const dx = cx - sx, dz = cz - sz;
+  const d = Math.hypot(dx, dz);
+  if (d <= r + 1e-4) return;                    // 肩が胴体の中。ここでは救えない
+  const tx = p.x - sx, tz = p.z - sz;
+  const tlen = Math.hypot(tx, tz);
+  if (tlen < 1e-5) return;
+  // 肩から見た「胴体の方向」と「手の方向」の角度差が、接線の角度より小さければ横切る
+  const cos = (tx * dx + tz * dz) / (tlen * d);
+  if (cos <= 0) return;                          // 手は胴体と逆方向。無関係
+  const half = Math.asin(clamp(r / d, -1, 1));   // 接線までの角度
+  const ang = Math.acos(clamp(cos, -1, 1));
+  if (ang >= half) return;                       // すでに外を通っている
+  // 手がある側の接線へ回す（近いほうへ寄せる）
+  const cross = dx * tz - dz * tx;               // 正 = 手は胴体の左側
+  const rot = cross >= 0 ? half : -half;
+  const ux = (dx * Math.cos(rot) - dz * Math.sin(rot)) / d;
+  const uz = (dx * Math.sin(rot) + dz * Math.cos(rot)) / d;
+  const reach = Math.min(tlen, Math.sqrt(d * d - r * r));  // 接点より先へは伸ばさない
+  p.x = sx + ux * reach;
+  p.z = sz + uz * reach;
 }
 
 // 肩の可動域。肘が裏返る領域（背中側・体を横切る側）へ目標が来ないよう先に丸める
@@ -1015,12 +1052,22 @@ export function CoupleFigure({
       // 2人ぶんを交互に3回当てて1点へ収束させる。
       // 併せて**2人ぶんの胴体の外**へも押し出す — つないだ手が相手の体の中／背中側に
       // 置かれると、そこへ腕を運ぶ IK が必ず体を貫通する
+      // 肩のワールド位置を使うので、この時点の姿勢で行列を確定させる
+      rigs[0].root.updateMatrixWorld(true);
+      rigs[1].root.updateMatrixWorld(true);
       for (let it = 0; it < 3; it++) {
         for (let d = 0; d < 2; d++) {
-          const rig = rigs[d];
+          const rig = rigs[d], other = rigs[1 - d];
           const yLo = rig.root.position.y + rig.hips.position.y;
           pushOutOfTorso(tmp.hold, rig.root.position.x, rig.root.position.z,
             yLo, yLo + SHO_DY, TORSO_R);
+          // 相手の胴体を「肩から手までの線が横切らない」位置へ回り込ませる
+          const oLo = other.root.position.y + other.hips.position.y;
+          tmp.sh.copy(rig.shldr[linked[d]!].position);
+          rig.spine.localToWorld(tmp.sh);
+          routeAroundTorso(tmp.hold, tmp.sh.x, tmp.sh.z,
+            other.root.position.x, other.root.position.z,
+            oLo, oLo + SHO_DY, TORSO_R);
           clampToArm(rig.spine, rig.shldr[linked[d]!].position, tmp.hold);
         }
       }
@@ -1074,11 +1121,18 @@ export function CoupleFigure({
         rig.spine.localToWorld(tmp.v);
         // フリーの手も2人ぶんの胴体の外へ。実観測の手首がそのまま相手の体の中を
         // 指していることがある（腕の観測率が低いので当然起きる）
+        tmp.sh.copy(sh.position);
+        rig.spine.localToWorld(tmp.sh);
         for (let o = 0; o < 2; o++) {
           const or_ = rigs[o];
           const yLo = or_.root.position.y + or_.hips.position.y;
+          const r = o === d ? TORSO_R_SELF : TORSO_R;
           pushOutOfTorso(tmp.v, or_.root.position.x, or_.root.position.z,
-            yLo, yLo + SHO_DY, o === d ? TORSO_R_SELF : TORSO_R);
+            yLo, yLo + SHO_DY, r);
+          if (o !== d) {
+            routeAroundTorso(tmp.v, tmp.sh.x, tmp.sh.z,
+              or_.root.position.x, or_.root.position.z, yLo, yLo + SHO_DY, r);
+          }
         }
         clampToArm(rig.spine, sh.position, tmp.v);
         rig.spine.worldToLocal(tmp.v);

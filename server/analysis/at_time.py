@@ -19,6 +19,10 @@ for t in [float(x) for x in sys.argv[2:]]:
         print(f"  p{pid}: 腰中点 x={mid[0]:+.3f} y={mid[1]:.3f} z={mid[2]:+.3f} "
               f"肩幅={sw:.3f} 向き={yaw:+.0f}deg "
               f"手首可視 L={p['v'][I['lWrist']]:.1f} R={p['v'][I['rWrist']]:.1f}")
-    a, b = mids['0'], mids['1']
-    print(f"  差: dx={b[0]-a[0]:+.3f} dy={b[1]-a[1]:+.3f} dz={b[2]-a[2]:+.3f} "
-          f"距離={math.dist(a,b):.3f}")
+    # 取り違えを落とすようになったので、片方だけのフレームは普通に起こる
+    if '0' in mids and '1' in mids:
+        a, b = mids['0'], mids['1']
+        print(f"  差: dx={b[0]-a[0]:+.3f} dy={b[1]-a[1]:+.3f} dz={b[2]-a[2]:+.3f} "
+              f"距離={math.dist(a,b):.3f}")
+    else:
+        print(f"  ※ 居るのは p{sorted(mids)[0] if mids else '(なし)'} だけ（もう片方は欠測）")

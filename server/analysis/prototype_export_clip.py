@@ -37,6 +37,90 @@ NAMES = ["nose", "lShoulder", "rShoulder", "lElbow", "rElbow", "lWrist", "rWrist
          "lEar", "rEar", "lHeel", "rHeel", "lToe", "rToe"]
 
 
+HOLD_WINDOW_SEC = 0.35   # イベント時刻の前後この範囲で多数決する
+BACK_HAND_M = 0.35       # 相手の胴中心にこれより近い手は「背中に回した手」とみなす
+HOLD_CLOSE_M = 0.20      # ただし手どうしがこれより近ければ、胴に近くてもつないでいる
+HOLD_MAX_M = 1.20        # これ以上離れていたら手はつないでいない
+
+
+def recompute_holds(out_frames, events, leader_pid, idx):
+    """イベントごとの「つないでいる手」を3Dで決め直す。
+
+    ■ なぜ決め直すか
+    analyze_pair.py の hold は **2D画像座標の最近接**で決めている（COCO 17点に z が無いため）。
+    画面上で近いことと触れていることは別で、実測（2fda2815 t=3.40）では
+    クローズドポジションで**背中に回したリーダーの右手**が、相手の手首と画面上で重なって勝ち、
+    本当につないでいる「リーダー左手×フォロワー右手」が4通り中いちばん遠い扱いになっていた。
+
+    ■ 3Dなら分けられる2つの見分け
+    1. 補間で埋めた手首は候補にしない（上の例では相方が補間値だった＝根拠が無い）
+    2. 相手の胴中心に近すぎる手は「背中の手」として候補から外す。
+       ただし **手どうしが触れる距離（HOLD_CLOSE_M）まで近い組は外さない** —
+       クローズドポジションでは握った手も互いの体のすぐ近くにあるため。
+       全部外れてしまうときも外さない（密着時に誤って空にしないため）
+
+    絶対距離では判定しない。腕の推定誤差は median 26.5cm・p95 65cm もあるので、
+    「触れているか」ではなく **4通りのどれか** を選ぶ問題として解く。
+    """
+    fpid = 1 - leader_pid
+    W = ("lWrist", "rWrist")
+    T = ("lShoulder", "rShoulder", "lHip", "rHip")
+
+    def pos(p, name):
+        i = idx[name] * 3
+        return np.array(p["j"][i:i + 3])
+
+    def torso(p):
+        return np.mean([pos(p, n) for n in T], axis=0)
+
+    n_changed = 0
+    for ev in events:
+        votes = {}
+        for fr in out_frames:
+            if abs(fr["t"] - ev["t"]) > HOLD_WINDOW_SEC:
+                continue
+            a = fr["p"].get(str(leader_pid))
+            b = fr["p"].get(str(fpid))
+            if a is None or b is None:
+                continue
+            ta, tb = torso(a), torso(b)
+            for vmin in (1.0, 0.5):   # まず実観測だけで。無ければ補間も許す
+                cands = []
+                for lk in W:
+                    if a["v"][idx[lk]] < vmin:
+                        continue
+                    for fk in W:
+                        if b["v"][idx[fk]] < vmin:
+                            continue
+                        pa, pb = pos(a, lk), pos(b, fk)
+                        d = float(np.linalg.norm(pa - pb))
+                        # 手が触れる距離まで近いなら、胴に近くてもそれはつないだ手。
+                        # クローズドポジションでは握った手も互いの体の近くにある。
+                        back = d > HOLD_CLOSE_M and (
+                            np.linalg.norm(pa - tb) < BACK_HAND_M or
+                            np.linalg.norm(pb - ta) < BACK_HAND_M)
+                        cands.append((d, back, lk, fk))
+                if not cands:
+                    continue
+                free = [c for c in cands if not c[1]]
+                pick = min(free or cands)
+                if pick[0] <= HOLD_MAX_M:
+                    key = (pick[2], pick[3])
+                    votes[key] = votes.get(key, 0) + 1
+                break
+        if not votes:
+            continue
+        lk, fk = max(votes, key=lambda k: votes[k])
+        jp = {"lWrist": "左手", "rWrist": "右手"}
+        label = f"リーダー{jp[lk]}×フォロワー{jp[fk]}"
+        if ev.get("hold") != label:
+            if ev.get("hold") is not None:
+                ev["hold2d"] = ev["hold"]   # 元の2D判定を残す（追えるように）
+            n_changed += 1
+        ev["hold"] = label
+    return n_changed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("lifted")
@@ -114,14 +198,22 @@ def main():
     dt = float(np.median(np.diff(ts_all))) if len(ts_all) > 2 else 0.0
     eff_fps = round(1.0 / dt, 2) if dt > 1e-6 else data.get("sampledFps")
 
+    # つないでいる手は3Dで決め直す（2D最近接は背中に回した手に釣られる）
+    events = data.get("events") or []
+    leader_pid = data.get("leaderPid", 0)
+    if events:
+        idx = {n: i for i, n in enumerate(NAMES)}
+        n_changed = recompute_holds(out_frames, events, leader_pid, idx)
+        print(f"  hold を3Dで再判定: {n_changed}/{len(events)} 件を訂正", file=sys.stderr)
+
     clip = {
         "version": 1,
         "video": data.get("video"),
         "fps": eff_fps,
         "duration": out_frames[-1]["t"] if out_frames else 0.0,
-        "leaderPid": data.get("leaderPid", 0),
+        "leaderPid": leader_pid,
         "joints": NAMES,
-        "events": data.get("events") or [],
+        "events": events,
         "frames": out_frames,
     }
     if beat_grid:

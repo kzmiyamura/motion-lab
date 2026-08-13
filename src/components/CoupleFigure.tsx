@@ -446,8 +446,30 @@ function clampToArm(spine: THREE.Object3D, shoulder: THREE.Vector3, world: THREE
   spine.localToWorld(world);
 }
 
+/**
+ * 手（腕IKの目標）を胴体の外へ押し出す。**体は空間を占有している**という当たり前を、
+ * これまで誰も知らなかった。ホールド点は各自の「腕が届く箱」に丸めるだけだったので、
+ * 肩と手の間に相手の胴体があっても素通りし、腕が体を貫通する／背中へ回り込む。
+ *
+ * 胴体は腰から肩までの垂直な円柱として扱う（軸は root の x/z）。
+ */
+const TORSO_R = 0.17;        // 胴体の半径[m]。肩幅 0.37 の内側に収まる程度
+const TORSO_R_SELF = 0.13;   // 自分の胴体は少し細く見る（脇を締める姿勢を殺さないため）
+function pushOutOfTorso(
+  p: THREE.Vector3, cx: number, cz: number, yLo: number, yHi: number, r: number,
+) {
+  if (p.y < yLo - 0.10 || p.y > yHi + 0.20) return;   // 胴体の高さから外れていれば無関係
+  const dx = p.x - cx, dz = p.z - cz;
+  const d = Math.hypot(dx, dz);
+  if (d >= r) return;
+  if (d < 1e-5) { p.x = cx + r; return; }             // 芯に乗ったら適当な向きへ逃がす
+  const k = r / d;
+  p.x = cx + dx * k;
+  p.z = cz + dz * k;
+}
+
 // 肩の可動域。肘が裏返る領域（背中側・体を横切る側）へ目標が来ないよう先に丸める
-const ARM_BACK_MIN = -0.12;  // これより後ろへは手を出さない[m]
+const ARM_BACK_MIN = -0.04;  // これより後ろへは手を出さない[m]。胸の面より奥へは入れない
 const ARM_ACROSS = -0.20;    // 体の反対側へ回り込める量[m]
 const ARM_OUT = 0.62;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -990,10 +1012,15 @@ export function CoupleFigure({
         rig.shldr[k].position.set(sign * (SHO_DX + raise * 0.35), SHO_DY + raise, 0);
       }
       // 共有点を**両者の可動域の共通部分**へ落とす。片側ずつ丸めると相手側で外れるので、
-      // 2人ぶんを交互に3回当てて1点へ収束させる
+      // 2人ぶんを交互に3回当てて1点へ収束させる。
+      // 併せて**2人ぶんの胴体の外**へも押し出す — つないだ手が相手の体の中／背中側に
+      // 置かれると、そこへ腕を運ぶ IK が必ず体を貫通する
       for (let it = 0; it < 3; it++) {
         for (let d = 0; d < 2; d++) {
           const rig = rigs[d];
+          const yLo = rig.root.position.y + rig.hips.position.y;
+          pushOutOfTorso(tmp.hold, rig.root.position.x, rig.root.position.z,
+            yLo, yLo + SHO_DY, TORSO_R);
           clampToArm(rig.spine, rig.shldr[linked[d]!].position, tmp.hold);
         }
       }
@@ -1008,6 +1035,13 @@ export function CoupleFigure({
         // （両者が同じ1点を解く = 手が必ず合う）
         const ty = tmp.v.y - rig.shldr[k].position.y;
         armPole(sign, ty, tmp.pl);   // 肘の向きは手の高さで決める（定数だと頭上で裏返る）
+        // 肘は**相手のいない側**へ出す。組んでいるときに肘を相手側へ出すのは
+        // 人間はやらないし、やれば相手の体を貫通する
+        const other = rigs[1 - d].root.position;
+        tmp.v2.set(other.x, rig.shldr[k].position.y, other.z);
+        rig.spine.worldToLocal(tmp.v2);
+        tmp.v2.y = 0;
+        if (tmp.v2.lengthSq() > 1e-6) tmp.pl.addScaledVector(tmp.v2.normalize(), -0.7);
         solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
           tmp.v.x - rig.shldr[k].position.x, ty, tmp.v.z,
           tmp.pl.x, tmp.pl.y, tmp.pl.z);
@@ -1038,6 +1072,14 @@ export function CoupleFigure({
         const raise = clamp((tmp.v.y - SHO_DY) / 0.35, 0, 1) * 0.055;
         sh.position.set(sign * (SHO_DX + raise * 0.35), SHO_DY + raise, 0);
         rig.spine.localToWorld(tmp.v);
+        // フリーの手も2人ぶんの胴体の外へ。実観測の手首がそのまま相手の体の中を
+        // 指していることがある（腕の観測率が低いので当然起きる）
+        for (let o = 0; o < 2; o++) {
+          const or_ = rigs[o];
+          const yLo = or_.root.position.y + or_.hips.position.y;
+          pushOutOfTorso(tmp.v, or_.root.position.x, or_.root.position.z,
+            yLo, yLo + SHO_DY, o === d ? TORSO_R_SELF : TORSO_R);
+        }
         clampToArm(rig.spine, sh.position, tmp.v);
         rig.spine.worldToLocal(tmp.v);
         const ty = tmp.v.y - sh.position.y;

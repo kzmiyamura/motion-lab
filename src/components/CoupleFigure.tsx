@@ -688,12 +688,25 @@ function segCylDepth(
   return bu < 0 ? null : { depth: r - best, u: bu };
 }
 
+// URL クエリ `?armDump=3.2,3.6` でも有効化できる（コンソールに触れない環境向け）
+const dumpFromUrl = (() => {
+  const q = new URLSearchParams(globalThis.location?.search ?? '').get('armDump');
+  if (!q) return null;
+  const p = q.split(',').map(Number).filter((v) => Number.isFinite(v));
+  return p.length >= 2 ? ([p[0], p[1]] as [number, number]) : p.length === 1 ? p[0] : null;
+})();
+
 function dumpArms(rigs: [Rig, Rig], linked: (0 | 1 | null)[], t: number, hold: THREE.Vector3) {
   const g = globalThis as unknown as { __armDump?: number | [number, number] };
-  const w = g.__armDump;
+  const w = g.__armDump ?? dumpFromUrl;
   if (w == null) return;
   const [t0, t1] = Array.isArray(w) ? w : [w - 0.2, w + 0.2];
   if (t < t0 || t > t1) return;
+  // 同じ t でも damp の収束過程を見たいので全フレーム記録する（コンソールへは間引いて出す）
+  const dg = globalThis as unknown as { __dumpLastT?: number; __dumpFrame?: number };
+  dg.__dumpFrame = (dg.__dumpFrame ?? 0) + 1;
+  const toConsole = dg.__dumpLastT !== t;
+  dg.__dumpLastT = t;
   // 腕IKの後に呼ばれる。描画と同じ行列で測るため、ここで確定させる
   rigs[0].root.updateMatrixWorld(true);
   rigs[1].root.updateMatrixWorld(true);
@@ -726,8 +739,12 @@ function dumpArms(rigs: [Rig, Rig], linked: (0 | 1 | null)[], t: number, hold: T
       rows.push(row);
     }
   }
-  console.log(`[DUMP] t=${t.toFixed(3)} rootL=(${f2(rigs[0].root.position.x)},${f2(rigs[0].root.position.z)}) rootF=(${f2(rigs[1].root.position.x)},${f2(rigs[1].root.position.z)}) hold=(${f2(hold.x)},${f2(hold.y)},${f2(hold.z)})`);
-  console.table(rows);
+  const head = `[DUMP] t=${t.toFixed(3)} rootL=(${f2(rigs[0].root.position.x)},${f2(rigs[0].root.position.z)}) rootF=(${f2(rigs[1].root.position.x)},${f2(rigs[1].root.position.z)}) hold=(${f2(hold.x)},${f2(hold.y)},${f2(hold.z)})`;
+  if (toConsole) { console.log(head); console.table(rows); }
+  // コンソールが読めない環境向けに配列にも積む（最大500件で頭から捨てる）
+  const sink = ((globalThis as unknown as { __dumpOut?: unknown[] }).__dumpOut ??= []);
+  sink.push({ head, rows });
+  if (sink.length > 500) sink.splice(0, sink.length - 500);
 }
 
 /** 服の配色。役割の色は服の色として残すので、青＝リーダー/ピンク＝フォロワーは変わらない */
@@ -1127,13 +1144,18 @@ export function CoupleFigure({
           const yLo = rig.root.position.y + rig.hips.position.y;
           pushOutOfTorso(tmp.hold, rig.root.position.x, rig.root.position.z,
             yLo, yLo + SHO_DY, TORSO_R);
-          // 相手の胴体を「肩から手までの線が横切らない」位置へ回り込ませる
+          // 「肩から手までの線が胴体を横切らない」位置へ回り込ませる。
+          // 相手の胴体だけでなく**自分の胴体**にも当てる（実測: つなぎ腕の前腕が
+          // 自胴へ 4cm 食い込んでいた）
           const oLo = other.root.position.y + other.hips.position.y;
           tmp.sh.copy(rig.shldr[linked[d]!].position);
           rig.spine.localToWorld(tmp.sh);
           routeAroundTorso(tmp.hold, tmp.sh.x, tmp.sh.z,
             other.root.position.x, other.root.position.z,
             oLo, oLo + SHO_DY, TORSO_R);
+          routeAroundTorso(tmp.hold, tmp.sh.x, tmp.sh.z,
+            rig.root.position.x, rig.root.position.z,
+            yLo, yLo + SHO_DY, TORSO_R_SELF);
           clampToArm(rig.spine, rig.shldr[linked[d]!].position, tmp.hold);
         }
       }
@@ -1189,18 +1211,21 @@ export function CoupleFigure({
         // 指していることがある（腕の観測率が低いので当然起きる）
         tmp.sh.copy(sh.position);
         rig.spine.localToWorld(tmp.sh);
+        // 先に可動域の箱へ丸め、そのあとで胴体を避ける。逆順だと clampToArm が
+        // 目標の z を胸の前（ARM_BACK_MIN）へ引き戻し、せっかく接線へ回した線分が
+        // また胴を横切る（実測: 前腕の自胴めり込みが 12cm のまま残った）
+        clampToArm(rig.spine, sh.position, tmp.v);
         for (let o = 0; o < 2; o++) {
           const or_ = rigs[o];
           const yLo = or_.root.position.y + or_.hips.position.y;
           const r = o === d ? TORSO_R_SELF : TORSO_R;
           pushOutOfTorso(tmp.v, or_.root.position.x, or_.root.position.z,
             yLo, yLo + SHO_DY, r);
-          if (o !== d) {
-            routeAroundTorso(tmp.v, tmp.sh.x, tmp.sh.z,
-              or_.root.position.x, or_.root.position.z, yLo, yLo + SHO_DY, r);
-          }
+          // 自分の胴体にも適用する。目標を外へ出すだけでは、肩→手の線分が
+          // 自分の胴を横切るケース（実測: 前腕が自胴へ 12cm 食い込む）を防げない
+          routeAroundTorso(tmp.v, tmp.sh.x, tmp.sh.z,
+            or_.root.position.x, or_.root.position.z, yLo, yLo + SHO_DY, r);
         }
-        clampToArm(rig.spine, sh.position, tmp.v);
         rig.spine.worldToLocal(tmp.v);
         const ty = tmp.v.y - sh.position.y;
         armPole(sign, ty, tmp.pl);

@@ -348,6 +348,8 @@ export function SalsaStage3D() {
     const v = Math.min(ph.clipDuration || 0, Math.max(0, t));
     ph.clipTime = v; clipTimeRef.current = v; setClipT(v);
   };
+  // 計測用（一時）: コンソールからクリップ時刻を直接動かすフック（__armDump と対で使う）
+  (globalThis as unknown as { __clipSeek?: (t: number) => void }).__clipSeek = seek;
   /** コマ送り。止めてから1フレームぶん進める/戻す */
   const stepFrame = (dir: number) => {
     const ph = phRef.current;

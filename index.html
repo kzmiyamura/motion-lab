@@ -7,6 +7,29 @@
     <meta name="description" content="High-Precision Dance Training & Motion Analysis" />
     <meta name="theme-color" content="#080814" />
 
+    <!-- 計測用（一時）: ?armDump= 付きのときだけ、非表示タブでも描画ループが止まらない
+         よう RAF を MessageChannel へ差し替える。three が RAF を import 時に掴むため、
+         モジュール読込より前（ここ）で行う必要がある -->
+    <script>
+      if (new URLSearchParams(location.search).has('armDump')) {
+        (function () {
+          var raf = window.requestAnimationFrame.bind(window);
+          var q = [];
+          var ch = new MessageChannel();
+          ch.port1.onmessage = function () {
+            var cb = q.shift();
+            if (cb) cb(performance.now());
+          };
+          window.requestAnimationFrame = function (cb) {
+            if (document.visibilityState !== 'hidden') return raf(cb);
+            q.push(cb);
+            ch.port2.postMessage(0);
+            return 0;
+          };
+        })();
+      }
+    </script>
+
     <!-- PWA / ホーム画面追加 -->
     <link rel="icon" type="image/svg+xml" href="/pwa-icon.svg" />
     <link rel="apple-touch-icon" href="/pwa-icon.svg" />

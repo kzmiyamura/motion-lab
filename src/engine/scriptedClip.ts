@@ -72,44 +72,109 @@ const KEY_HIPY = [0.96, 0.96, 0.96, 0.96, 0.96, 0.96, 0.96, 0.96,
 const D2R = Math.PI / 180;
 const smoothstep = (u: number) => u * u * (3 - 2 * u);
 
+/** 周期テーブルの Catmull-Rom 中割り。節点で速度が 0 に落ちない = 流れが止まらない */
+function catmullCyclic(vals: number[], x: number): number {
+  const n = vals.length;
+  const t = ((x % n) + n) % n;
+  const i = Math.floor(t), u = t - i;
+  const p0 = vals[(i - 1 + n) % n], p1 = vals[i], p2 = vals[(i + 1) % n], p3 = vals[(i + 2) % n];
+  return 0.5 * ((2 * p1) + (-p0 + p2) * u
+    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u
+    + (-p0 + 3 * p1 - 3 * p2 + p3) * u * u * u);
+}
+
 // ── 足運び ───────────────────────────────────────────────
 // サルサの足は「カウントに合わせて1歩ずつ踏む。それ以外は床に着いたまま」。
 // キーは [着地拍, 前後位置(体ローカルz, +が前), 移動拍数?]。既定は拍の 0.35 拍前から
 // 動き出して拍ちょうどに着地（AND で動き出す歩は 0.5 を指定）。移動中だけ足首が浮く。
 // taps は「同じ場所で踏み直す」拍 — 位置は変えず、小さく浮かせて荷重の入れ替えを見せる
 type FootKey = [number, number, number?];
-type FootSpec = { keys: FootKey[]; taps: number[] };
+type FootSpec = { keys: FootKey[]; taps: number[]; flow?: boolean };
 const STEP_DUR = 0.35;          // 1歩にかける既定の拍数
 const TAP_DUR = 0.25;           // 踏み直しの浮き時間
 const ANKLE_Y = 0.08;           // 接地時の足首高さ
 const STEP_LIFT = 0.07;         // 移動中に浮く高さ
 const TAP_LIFT = 0.04;          // 踏み直しの浮き
 const FOOT_LATERAL = 0.09;      // 足のスタンス幅（体ローカルx）
+const FULL_STEP = 0.15;         // この距離を「一歩ぶん」として浮きの高さを按分する
+
+/**
+ * 足の移動区間。flow スペックでは区間が隙間なく連なるので、
+ * つなぎ目の速度を前後の平均に合わせて **着地しても止まらない** ようにする。
+ */
+type FootSeg = { b0: number; b1: number; z0: number; z1: number; m0: number; m1: number };
+
+function buildSegs(spec: FootSpec): FootSeg[] {
+  const ks = spec.keys;
+  const n = ks.length;
+  const raw = ks.map((k, i) => {
+    const dur = k[2] ?? STEP_DUR;
+    const z0 = ks[(i - 1 + n) % n][1];
+    return { b0: k[0] - dur, b1: k[0], z0, z1: k[1], v: (k[1] - z0) / dur };
+  });
+  // 直前のキーの着地拍と自分の踏み出し拍が一致していれば「止まらずに続く」区間
+  const cont = raw.map((s, i) => {
+    const prevEnd = ks[(i - 1 + n) % n][0];
+    return Math.abs(((s.b0 - prevEnd) % 8 + 8) % 8) < 1e-6;
+  });
+  return raw.map((s, i) => ({
+    b0: s.b0, b1: s.b1, z0: s.z0, z1: s.z1,
+    m0: cont[i] ? (raw[(i - 1 + n) % n].v + s.v) / 2 : 0,
+    m1: cont[(i + 1) % n] ? (s.v + raw[(i + 1) % n].v) / 2 : 0,
+  }));
+}
+
+const segCache = new WeakMap<FootSpec, FootSeg[]>();
+const segsOf = (spec: FootSpec) => {
+  let s = segCache.get(spec);
+  if (!s) { s = buildSegs(spec); segCache.set(spec, s); }
+  return s;
+};
 
 /** 8拍周期の足前後位置と浮き */
 function footAt(spec: FootSpec, beat8: number): { z: number; lift: number } {
-  let z = spec.keys[spec.keys.length - 1][1];   // 周回前の最後の位置から始まる
-  let lift = 0;
-  for (const [kb, kz, kd] of spec.keys) {
-    const dur = kd ?? STEP_DUR;
-    if (beat8 >= kb) { z = kz; continue; }
-    if (beat8 >= kb - dur) {
-      const u = smoothstep((beat8 - (kb - dur)) / dur);
-      lift = Math.sin(u * Math.PI) * STEP_LIFT;
-      z = z + (kz - z) * u;
+  if (!spec.flow) {
+    let z = spec.keys[spec.keys.length - 1][1];   // 周回前の最後の位置から始まる
+    let lift = 0;
+    for (const [kb, kz, kd] of spec.keys) {
+      const dur = kd ?? STEP_DUR;
+      if (beat8 >= kb) { z = kz; continue; }
+      if (beat8 >= kb - dur) {
+        const u = smoothstep((beat8 - (kb - dur)) / dur);
+        lift = Math.sin(u * Math.PI) * STEP_LIFT;
+        z = z + (kz - z) * u;
+      }
+      break;
     }
-    break;
+    for (const tb of spec.taps) {
+      if (beat8 >= tb - TAP_DUR && beat8 <= tb) {
+        lift = Math.max(lift, Math.sin(((beat8 - (tb - TAP_DUR)) / TAP_DUR) * Math.PI) * TAP_LIFT);
+      }
+    }
+    return { z, lift };
   }
-  for (const tb of spec.taps) {
-    if (beat8 >= tb - TAP_DUR && beat8 <= tb) {
-      lift = Math.max(lift, Math.sin(((beat8 - (tb - TAP_DUR)) / TAP_DUR) * Math.PI) * TAP_LIFT);
+  // 速度連続（エルミート）。キー拍は「通過点」であって止まる場所ではない
+  for (const s of segsOf(spec)) {
+    for (const off of [0, 8, -8]) {           // 拍0をまたぐ区間も拾う
+      const b = beat8 + off;
+      if (b < s.b0 || b > s.b1) continue;
+      const dur = s.b1 - s.b0;
+      const u = (b - s.b0) / dur, u2 = u * u, u3 = u2 * u;
+      const z = (2 * u3 - 3 * u2 + 1) * s.z0 + (u3 - 2 * u2 + u) * dur * s.m0
+        + (-2 * u3 + 3 * u2) * s.z1 + (u3 - u2) * dur * s.m1;
+      const scale = Math.min(1, Math.abs(s.z1 - s.z0) / FULL_STEP);
+      return { z, lift: Math.sin(u * Math.PI) * STEP_LIFT * scale };
     }
   }
-  return { z, lift };
+  // どの区間にも入らない＝荷重して床に着いたまま。直近に着地したキーの位置
+  let z = spec.keys[spec.keys.length - 1][1];
+  for (const [kb, kz] of spec.keys) if (beat8 >= kb) z = kz;
+  return { z, lift: 0 };
 }
 
 export type Timing = 'on1' | 'on2';
 const BREAK = 0.28;             // ブレイクの歩幅
+const QUARTER = 0.06;           // 靴の 1/4。3・7 はこのぶんだけずらして踏む
 
 /**
  * ベーシックの足運び（8拍・リーダー基準、z+ = 前）。フォロワーは足を入れ替えて
@@ -119,9 +184,15 @@ const BREAK = 0.28;             // ブレイクの歩幅
  *   1 左足前ブレイク → 3 戻す。5 右足後ろブレイク → 7 戻す
  *
  * On2（Eddie Torres 系。**両足が揃う瞬間は一度もない** — ユーザー確認済み）:
- *   位置が変わる歩は 1・2・5・6 だけ。3 は 1 と同じ場所、7 は 5 と同じ場所で**踏み直し**。
+ *   大きく位置が変わる歩は 1・2・5・6。3 は 1 の**靴1/4だけ前**、7 は 5 の**靴1/4だけ後ろ**
+ *   — その場の踏み直しではなく、わずかに進み続けることで流れを切らない。
  *   8AND から左足が動き出して 1 で右足の少し後ろへ、2 は 1 の足の後ろ（ブレイク）、
- *   4AND から右足が動き出して 5 で前へ、6 はさらに前（ブレイク）。の繰り返し
+ *   4AND から右足が動き出して 5 で前へ、6 はさらに前（ブレイク）。
+ *
+ *   **On2 の肝は「足が止まらない」こと**（ユーザー談）。On1 のように拍の直前だけ
+ *   素早く動いて残りを静止で埋めるとぶつ切りに見える。そこで遊脚の移動区間を
+ *   拍間いっぱいに広げ、区間どうしを隙間なく連ねて速度を繋いだ（flow: true）。
+ *   床で止まっているのは常に荷重した1本だけで、もう1本は必ず動いている。
  */
 function basicFootKeys(role: 'leader' | 'follower', timing: Timing): [FootSpec, FootSpec] {
   let L: FootSpec, R: FootSpec;
@@ -130,13 +201,18 @@ function basicFootKeys(role: 'leader' | 'follower', timing: Timing): [FootSpec, 
     R = { keys: [[0, 0], [5, -BREAK], [7, 0]], taps: [2] };
   } else {
     // 数値は「1 で左足は右足(+0.05)の少し後ろ = -0.05」「2 は 1 の 0.3 後ろ」
-    // 「6 は 5(+0.05) の 0.3 前」を全体が中心 0 で振動するよう配置したもの
-    L = { keys: [[1, -0.05, 0.5], [6, 0.35]], taps: [3] };   // 8AND発 → 1着地
-    R = { keys: [[2, -0.35], [5, 0.05, 0.5]], taps: [7] };   // 4AND発 → 5着地
+    // 「6 は 5(+0.05) の 0.3 前」を全体が中心 0 で振動するよう配置したもの。
+    // 3 は 1 の QUARTER 前、7 は 5 の QUARTER 後ろ。
+    // 荷重した足は床で止まり、遊脚は**空いている窓をまるごと使って**移動する。
+    // 荷重: 1・3・4=左 / 2・5・7・8=右 → 遊脚の窓は
+    //   左 7→1(2拍) / 2→3(1拍) / 5→6(1拍)、右 1→2(1拍) / 3→5(2拍) / 6→7(1拍)
+    // 窓が拍を隙間なく敷き詰めるので、どの瞬間も必ずどちらかの足が動いている
+    L = { keys: [[1, -0.05, 2], [3, -0.05 + QUARTER, 1], [6, 0.35, 1]], taps: [], flow: true };
+    R = { keys: [[2, -0.35, 1], [5, 0.05, 2], [7, 0.05 - QUARTER, 1]], taps: [], flow: true };
   }
   if (role === 'leader') return [L, R];
   const flip = (s: FootSpec): FootSpec =>
-    ({ keys: s.keys.map(([b, z, d]) => [b, -z, d] as FootKey), taps: [...s.taps] });
+    ({ keys: s.keys.map(([b, z, d]) => [b, -z, d] as FootKey), taps: [...s.taps], flow: s.flow });
   return [flip(R), flip(L)];   // [左足, 右足]
 }
 
@@ -240,9 +316,11 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
   // On1: 1 で前・5 で後ろ。On2: 2 で後ろ・6 で前（ブレイクに同期）。
   // On2 は足が揃わないぶん重心も完全な中立に戻らない（先頭と末尾を同値にしてループを繋ぐ）
   // On2 は荷重した足の位置に重心が乗る（1・3=左足-0.05、2=右足-0.35、5・7=右足+0.05、6=左足+0.35）
+  // On2 は荷重足の z の半分を重心に乗せる（1=左-0.05, 2=右-0.35, 3=左+0.01,
+  // 5=右+0.05, 6=左+0.35, 7=右-0.01。4・8 は荷重が変わらないので直前と同値）
   const SWAY = timing === 'on1'
     ? [0, 0.12, 0.02, 0, 0, -0.12, -0.02, 0, 0]
-    : [0.05, -0.05, -0.18, -0.05, -0.05, 0.05, 0.18, 0.05, 0.05];
+    : [-0.005, -0.025, -0.175, 0.005, 0.005, 0.025, 0.175, -0.005, -0.005];
   const footL = basicFootKeys('leader', timing);
   const footF = basicFootKeys('follower', timing);
   const frames: MotionClip['frames'] = [];
@@ -251,8 +329,10 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
     const t = i / FPS;
     const b = (t / SPB) % 8;
     const bi = Math.floor(b);
-    const s = smoothstep(b - bi);
-    const sway = SWAY[bi] + (SWAY[bi + 1] - SWAY[bi]) * s;
+    // On1 は拍ごとに落ち着くので smoothstep。On2 は重心も止めない（速度連続の中割り）
+    const sway = timing === 'on1'
+      ? SWAY[bi] + (SWAY[bi + 1] - SWAY[bi]) * smoothstep(b - bi)
+      : catmullCyclic(SWAY.slice(0, 8), b);
     // リーダーは +X を向く。前方 = +X。フォロワーは鏡（後退ブレイク）なので同じ +sway
     const lx = -0.35 + sway, fx = 0.35 + sway;
     frames.push({

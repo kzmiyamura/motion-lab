@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import type { MotionClip } from './MocapFigure';
+import type { MotionClip, ArmSegment } from './MocapFigure';
 import type { FaceAvatar } from '../engine/faceAvatar';
 import { PhotoHead, SampleHead, SAMPLE_BY_ID, DEFAULT_SKIN } from './AvatarHeads';
 
@@ -596,6 +596,25 @@ function buildHolds(clip: MotionClip): Hold[] {
   return out;
 }
 
+/**
+ * armTimeline のセグメント参照（前回カーソルから前後に歩く = 実質 O(1)）。
+ * セグメントは連続・非重複がオフライン側で保証されている。
+ */
+function segAt(segs: ArmSegment[], t: number, cur: { current: number }): ArmSegment | null {
+  if (!segs.length) return null;
+  let i = Math.min(cur.current, segs.length - 1);
+  while (i > 0 && segs[i].t0 > t) i--;
+  while (i < segs.length - 1 && segs[i].t1 <= t) i++;
+  cur.current = i;
+  const s = segs[i];
+  return t >= s.t0 - 0.05 && t <= s.t1 + 0.05 ? s : null;
+}
+
+// フェーズごとの「手を頭上へ運ぶ量」の目標。damp で滑らかに繋ぐ
+const LIFT_BY_PHASE: Record<string, number> = {
+  prep: 0.25, initiate: 0.8, rotate: 1, settle: 0.2,
+};
+
 type Rig = {
   root: THREE.Group; hips: THREE.Group; spine: THREE.Group; head: THREE.Group;
   thigh: THREE.Group[]; knee: THREE.Group[]; foot: THREE.Group[];
@@ -948,12 +967,20 @@ export function CoupleFigure({
   const guides = useMemo(
     () => [buildGuide(clip, pids[0]), buildGuide(clip, pids[1])], [clip, pids]);
   const holds = useMemo(() => buildHolds(clip), [clip]);
+  // armTimeline があればそれが唯一の腕の台本（実装順序3）。無い旧クリップは holds/events 走査。
+  // `?armTimeline=0` で旧経路へ強制フォールバック（実装順序4の前後比較用）
+  const armSegs = useMemo(() => {
+    const q = new URLSearchParams(globalThis.location?.search ?? '');
+    return q.get('armTimeline') === '0' ? undefined : clip.armTimeline?.segments;
+  }, [clip]);
+  const armCur = useRef(0);
+  const liftCur = useRef(0);
   const pair = useMemo(() => buildPair(clip, pids[0], pids[1]), [clip, pids]);
   const pairCur = useRef(0);
   const rigs = useRef<[Rig, Rig]>([newRig(), newRig()]).current;
   // つないだ手の共有点（前フレーム）。ここで鈍らせるので腕は目標をそのまま解ける
   const holdPos = useRef(new THREE.Vector3());
-  const holdSame = useRef<Hold | null>(null);
+  const holdSame = useRef<unknown>(null);
   // 肌の色は選んだサンプルに合わせる（写真の頭でも体はこの色で通す）
   const pals = useMemo<[Palette, Palette]>(() => [
     buildPalette(leaderColor, SAMPLE_BY_ID(leaderSample ?? '')?.skin ?? DEFAULT_SKIN, false),
@@ -1075,23 +1102,51 @@ export function CoupleFigure({
     rigs[0].root.updateMatrixWorld(true);
     rigs[1].root.updateMatrixWorld(true);
 
-    // ── レイヤー3: 接続。つないだ手は2人で共有する1点へ運ぶ
-    let hold: Hold | null = null;
-    for (const h of holds) { if (h.t <= t + 0.01) hold = h; else break; }
+    // ── レイヤー3: 接続。つないだ手は2人で共有する1点へ運ぶ。
+    // 目標生成は armTimeline（オフライン確定済みの台本）を再生する。旧クリップのみ
+    // holds/events 走査へフォールバック
     const linked: (0 | 1 | null)[] = [null, null];
-    if (hold && hold.leader !== null && hold.follower !== null &&
-        smp[0].inRange && smp[1].inRange) {
-      linked[0] = hold.leader; linked[1] = hold.follower;
-      // 進行中のターンを拾う。誰が回っているかで手の置き所が変わる
-      let lift = 0, turner = -1;
-      for (const ev of clip.events) {
-        if (ev.type !== 'Turn') continue;
-        const dur = 1.6 + ((ev.rotations ?? 1) - 1) * 0.5;
-        const prog = (t - (ev.t - 0.4)) / dur;
-        if (prog < 0 || prog > 1) continue;
-        const a = Math.sin(prog * Math.PI);
-        if (a > lift) { lift = a; turner = ev.by === 'leader' ? 0 : 1; }
+    let lift = 0, turner = -1, bsHand = -1;
+    let holdKey: unknown = null;
+    if (armSegs) {
+      const seg = segAt(armSegs, t, armCur);
+      if (seg && seg.hold) {
+        linked[0] = seg.hold.leader === 'R' ? 1 : 0;
+        linked[1] = seg.hold.follower === 'R' ? 1 : 0;
+        // つなぐ手のペアが同じ間はセグメントをまたいでも共有点の鈍りを維持する
+        holdKey = `${seg.hold.leader}x${seg.hold.follower}`;
       }
+      if (seg?.turn) {
+        turner = seg.turn.turner === 'leader' ? 0 : 1;
+        lift = LIFT_BY_PHASE[seg.phase] ?? 0;
+      }
+      // CBL の pass: back_support の手はフォロワーの背中へ（リーダー側のみ発生する）
+      if (seg?.phase === 'pass') {
+        bsHand = seg.leader.L === 'back_support' ? 0
+          : seg.leader.R === 'back_support' ? 1 : -1;
+      }
+    } else {
+      let hold: Hold | null = null;
+      for (const h of holds) { if (h.t <= t + 0.01) hold = h; else break; }
+      if (hold && hold.leader !== null && hold.follower !== null) {
+        linked[0] = hold.leader; linked[1] = hold.follower;
+        holdKey = hold;
+        // 進行中のターンを拾う。誰が回っているかで手の置き所が変わる
+        for (const ev of clip.events) {
+          if (ev.type !== 'Turn') continue;
+          const dur = 1.6 + ((ev.rotations ?? 1) - 1) * 0.5;
+          const prog = (t - (ev.t - 0.4)) / dur;
+          if (prog < 0 || prog > 1) continue;
+          const a = Math.sin(prog * Math.PI);
+          if (a > lift) { lift = a; turner = ev.by === 'leader' ? 0 : 1; }
+        }
+      }
+    }
+    // フェーズ境界で lift が段差にならないよう、ここでまとめて鈍らせる
+    lift = liftCur.current = damp(liftCur.current, lift, 0.2);
+
+    if (linked[0] !== null && linked[1] !== null &&
+        smp[0].inRange && smp[1].inRange) {
       rigs[0].shldr[linked[0]!].getWorldPosition(tmp.a);
       rigs[1].shldr[linked[1]!].getWorldPosition(tmp.b);
       // 平時: 両肩の中点。肩からの距離が両者で等しく最小になる＝いちばん届きやすい
@@ -1119,8 +1174,8 @@ export function CoupleFigure({
 
       // 手の揺れは**共有点の側**で吸収する。腕ごとに鈍らせると、2人が別々に
       // 遅れて別々の場所を掴むことになり、速いターンで手が離れる（実測 30〜40cm）
-      if (holdSame.current === hold) tmp.hold.lerp(holdPos.current, HOLD_LAG);
-      else holdSame.current = hold;                 // つなぐ手が替わった瞬間は追わない
+      if (holdSame.current === holdKey) tmp.hold.lerp(holdPos.current, HOLD_LAG);
+      else holdSame.current = holdKey;              // つなぐ手が替わった瞬間は追わない
 
       // 肩甲上腕リズム: 手が肩より上がるぶんだけ肩自体も上がる（1/3 ほど）。
       // これが無いと腕だけが付け根から生えて回るように見える
@@ -1185,11 +1240,34 @@ export function CoupleFigure({
       holdSame.current = null;
     }
 
+    // ── レイヤー3.5: CBL の pass 中、リーダーの空き手はフォロワーの背中を支える
+    // （armTimeline の back_support 状態。ユーザー確認済み: 右手=背中・左手=胸の高さ）
+    if (bsHand >= 0 && smp[0].inRange && smp[1].inRange) {
+      const rig = rigs[0], k = bsHand, sign = SIDE_SIGN[k];
+      const fRoot = rigs[1].root.position;
+      const fy = rigs[1].root.rotation.y;
+      const yLo = fRoot.y + rigs[1].hips.position.y;
+      // フォロワーの背面（前方の逆）× 胴体半径の少し外、胸郭の高さ
+      tmp.v.set(
+        fRoot.x - Math.sin(fy) * (TORSO_R + 0.05),
+        yLo + SHO_DY * 0.6,
+        fRoot.z - Math.cos(fy) * (TORSO_R + 0.05),
+      );
+      clampToArm(rig.spine, rig.shldr[k].position, tmp.v);
+      rig.spine.worldToLocal(tmp.v);
+      const ty = tmp.v.y - rig.shldr[k].position.y;
+      armPole(sign, ty, tmp.pl);
+      solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
+        tmp.v.x - rig.shldr[k].position.x, ty, tmp.v.z,
+        tmp.pl.x, tmp.pl.y, tmp.pl.z, 0.35);
+    }
+
     // ── レイヤー4: フリーの腕。実データがあればそれを目標に、無ければ体側で軽く構えて拍で揺れる
     for (let d = 0; d < 2; d++) {
       const rig = rigs[d], g = guides[d], s = smp[d];
       for (let k = 0; k < 2; k++) {
         if (linked[d] === k) continue;
+        if (d === 0 && k === bsHand) continue;   // back_support 中の手はレイヤー3.5が持つ
         const sign = SIDE_SIGN[k];
         const sh = rig.shldr[k];
         sh.position.set(sign * SHO_DX, SHO_DY, 0);   // 上げた肩を戻す

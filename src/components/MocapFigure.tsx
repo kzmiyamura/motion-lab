@@ -54,7 +54,23 @@ export type MotionClip = {
   frames: { t: number; p: Record<string, { r: number[]; j: number[]; v: number[] }> }[];
   // 解析で推定した拍格子（等間隔）。ハイブリッドモードの脚のビート同期に使う
   beatGrid?: { bpm: number; firstBeatSec: number; beatIntervalSec: number; confidence?: number };
+  // オフライン幾何パス（server/analysis/build_arm_timeline.py）が生成する腕タイムライン。
+  // あれば CoupleFigure のレイヤー3がこれを再生し、events の hold 走査は使わない
+  armTimeline?: ArmTimeline;
 };
+
+export type ArmHandState = 'free' | 'hold' | 'prep' | 'lead_turn' | 'back_support';
+export type ArmSegment = {
+  t0: number; t1: number;
+  phase: string;                                   // hold/shine/open/pass/close/prep/initiate/rotate/settle
+  hold: { leader: 'L' | 'R'; follower: 'L' | 'R' } | null;
+  leader: { L: ArmHandState; R: ArmHandState };
+  follower: { L: ArmHandState; R: ArmHandState };
+  turn?: { turner: 'leader' | 'follower'; rotations: number };
+  passSide?: 'left' | 'right' | null;
+  confidence?: 'observed' | 'inferred';
+};
+export type ArmTimeline = { version: number; source: string; segments: ArmSegment[] };
 
 type Track = { ts: number[]; js: Float32Array[]; vs: Float32Array[] };
 

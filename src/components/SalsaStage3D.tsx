@@ -2,7 +2,7 @@ import { useRef, useState, useCallback, useEffect, type RefObject } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { MocapFigure, type MotionClip } from './MocapFigure';
-import { buildScriptedCBL } from '../engine/scriptedClip';
+import { buildScriptedCBL, buildScriptedBasic } from '../engine/scriptedClip';
 import { CoupleFigure } from './CoupleFigure';
 import { detectFace, loadFaces, saveFaces, EMPTY_FACES, type FaceSlots } from '../engine/faceAvatar';
 import { SAMPLE_AVATARS } from './AvatarHeads';
@@ -457,9 +457,9 @@ export function SalsaStage3D() {
     }
   };
 
-  // 手描きの CBL（動画データを使わない合成クリップ）。正解の見本として再生する
-  const loadScripted = () => {
-    const c = buildScriptedCBL();
+  // 手描きの合成クリップ（動画データを使わない）。正解の見本として再生する
+  const loadScripted = (build: () => MotionClip, label: string) => {
+    const c = build();
     setClipErr(null);
     setClip(c);
     const ph = phRef.current;
@@ -470,7 +470,7 @@ export function SalsaStage3D() {
     clipTimeRef.current = 0;
     setClipMode('hybrid');
     setPlaying(true);
-    setNowLabel('手描きCBL');
+    setNowLabel(label);
   };
 
   const onSelectClip = (id: string) => {
@@ -611,7 +611,13 @@ export function SalsaStage3D() {
         >
           {clipBusy === 'hybrid' ? '⏳ 読み込み中…' : '🎥 動画のモーションで踊る'}
         </button>
-        <button className={styles.btn} onClick={loadScripted}>
+        <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedBasic('on1'), 'ベーシック On1')}>
+          ✍️ ベーシック On1
+        </button>
+        <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedBasic('on2'), 'ベーシック On2')}>
+          ✍️ ベーシック On2
+        </button>
+        <button className={styles.btn} onClick={() => loadScripted(buildScriptedCBL, '手描きCBL')}>
           ✍️ 手描きCBL
         </button>
         <button

@@ -981,6 +981,8 @@ export function CoupleFigure({
     const q = new URLSearchParams(globalThis.location?.search ?? '');
     return q.get('keyPose') !== '0';
   }, []);
+  // 手描きクリップ（scriptedClip.ts 産）は関節データ自体が振付の正解
+  const scripted = clip.armTimeline?.source === 'scripted';
   const armCur = useRef(0);
   const liftCur = useRef(0);
   const pair = useMemo(() => buildPair(clip, pids[0], pids[1]), [clip, pids]);
@@ -1075,8 +1077,9 @@ export function CoupleFigure({
       const amp = rest ? 0 : 0.16 + Math.min(0.3, at(s, g.speed) * 0.28);
       for (let k = 0; k < 2; k++) {
         const sign = SIDE_SIGN[k], ank = g.ank[k];
-        // キーポーズ方式: 足首の生観測を使わず、拍のステップ（手続き）だけで描く
-        const aw = keyPose ? 0 : clamp(at(s, ank.w), 0, 1);
+        // キーポーズ方式: 足首の**生観測**は使わない。ただし手描きクリップ（scripted）の
+        // 足首は振付として書いた正解なので、そのまま踏む
+        const aw = keyPose && !scripted ? 0 : clamp(at(s, ank.w), 0, 1);
         // 手続きの足位置（股関節ローカル）: 前後に振って、振り出す側を少し浮かす
         const sw = stepPhase * mirror * sign * amp * 0.55;
         const py = -(LEG_MAX * 0.97) + Math.max(0, stepPhase * mirror * sign) * 0.05;

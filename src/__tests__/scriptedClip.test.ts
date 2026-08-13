@@ -36,12 +36,37 @@ describe('手描きベーシックの足運び', () => {
     expect(fL.x - fR.x).toBeLessThan(-0.2);     // 女: 左足が前（-X = 女の前方）
   });
 
-  it('On2: カウント1は同じ足で方向が逆（男左足が後ろ・女右足が前）', () => {
+  it('On2: カウント1で男左足・女右足が動く（後ろへの通り抜け）', () => {
     const c = buildScriptedBasic('on2');
-    const lL = ankle(c, spb, 0, LANK), lR = ankle(c, spb, 0, RANK);
-    const fL = ankle(c, spb, 1, LANK), fR = ankle(c, spb, 1, RANK);
-    expect(lL.x - lR.x).toBeLessThan(-0.2);     // 男: 左足が後ろ
-    expect(fR.x - fL.x).toBeLessThan(-0.2);     // 女: 右足が前
+    // 前の周期の 6 で前(+0.35)に居た左足が、1 で後ろ(-0.05)へ通り抜けて着地する
+    const before = ankle(c, 0.6 * spb, 0, LANK);
+    const after = ankle(c, 1.1 * spb, 0, LANK);
+    expect(before.x - after.x).toBeGreaterThan(0.2);  // 男: 左足が前→後ろへ大きく移動
+    const fBefore = ankle(c, 0.6 * spb, 1, RANK);
+    const fAfter = ankle(c, 1.1 * spb, 1, RANK);
+    // 女はリーダーの鏡: カウント1で右足が**前**（ワールドでは -X）へ通り抜ける
+    expect(fBefore.x - fAfter.x).toBeGreaterThan(0.2);
+  });
+
+  it('On2: ブレイクは2と6（男右足が2で後ろへ、左足が6で前へ）', () => {
+    const c = buildScriptedBasic('on2');
+    const lR2 = ankle(c, 2 * spb, 0, RANK), lL2 = ankle(c, 2 * spb, 0, LANK);
+    expect(lR2.x - lL2.x).toBeLessThan(-0.2);   // 2: 右足が左足よりはっきり後ろ
+    const lL6 = ankle(c, 6 * spb, 0, LANK), lR6 = ankle(c, 6 * spb, 0, RANK);
+    expect(lL6.x - lR6.x).toBeGreaterThan(0.2); // 6: 左足が右足よりはっきり前
+    const fL2 = ankle(c, 2 * spb, 1, LANK), fR2 = ankle(c, 2 * spb, 1, RANK);
+    expect(fL2.x - fR2.x).toBeLessThan(-0.2);   // 女: 2で左足が前（世界座標では -X）
+  });
+
+  it('On2: 両足が揃う瞬間が一度もない（着地中は常に前後スタッガー）', () => {
+    const c = buildScriptedBasic('on2');
+    // 移動窓（拍の0.35拍前〜拍）を外した見本拍で、前後差が常に残ることを確かめる
+    for (const b of [0.3, 1.3, 2.3, 3.5, 4.3, 5.3, 6.3, 7.5]) {
+      const lL = ankle(c, b * spb, 0, LANK), lR = ankle(c, b * spb, 0, RANK);
+      expect(Math.abs(lL.x - lR.x), `beat ${b}`).toBeGreaterThan(0.08);
+      const fL = ankle(c, b * spb, 1, LANK), fR = ankle(c, b * spb, 1, RANK);
+      expect(Math.abs(fL.x - fR.x), `beat ${b}`).toBeGreaterThan(0.08);
+    }
   });
 
   it('移動中だけ足首が浮き、着地中は接地している', () => {

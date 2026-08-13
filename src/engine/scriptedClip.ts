@@ -100,21 +100,30 @@ export type Timing = 'on1' | 'on2';
 const BREAK = 0.28;             // ブレイクの歩幅
 
 /**
- * ベーシックの足運び（8拍）。男女で動かす足と方向が対になっているので
- * 絶対に足を踏み合わない:
- *   On1: カウント1 = リーダー左足を**前**へ / フォロワー右足を**後ろ**へ。5で逆側
- *   On2: 同じ足を**逆方向**へ（リーダー左足は後ろ、フォロワー右足は前）
- * 3・7 で出した足を元へ戻す。4・8 は休符（両足接地のまま）
+ * ベーシックの足運び（8拍・リーダー基準、z+ = 前）。フォロワーは足を入れ替えて
+ * 前後を反転する — 動く足が常に「リーダー左⇔フォロワー右」の対なので踏み合わない。
+ *
+ * On1（3・4・7・8 でニュートラルに戻る）:
+ *   1 左足前ブレイク → 3 戻す。5 右足後ろブレイク → 7 戻す
+ *
+ * On2（Eddie Torres 系。**両足が揃う瞬間は一度もない** — ユーザー確認済み）:
+ *   足は前後を通り抜け続け、常にどちらかが前・どちらかが後ろのスタッガー。
+ *   1 左足を後ろへ小さく（+0.35 から通り抜けの大移動）
+ *   2 右足**後ろへブレイク** / 3 左足はニュートラルを通過して前へ / 4 休符（揃わない）
+ *   5 右足が後ろから前へ通り抜け / 6 左足**前へブレイク** / 7 右足後ろへ小さく / 8 休符
  */
 function basicFootKeys(role: 'leader' | 'follower', timing: Timing): [FootKey[], FootKey[]] {
-  // リーダー On1: 左足が 1 で前(+)・3 で戻る。右足が 5 で後ろ(-)・7 で戻る
-  let first = BREAK, second = -BREAK;                 // [1で動く足の行き先, 5で動く足の行き先]
-  if (role === 'follower') { first = -first; second = -second; }  // 女は鏡
-  if (timing === 'on2') { first = -first; second = -second; }     // On2 は方向が逆
-  const moveOn1: FootKey[] = [[0, 0], [1, first], [3, 0]];        // 1で出す足
-  const moveOn5: FootKey[] = [[0, 0], [5, second], [7, 0]];       // 5で出す足
-  // 1で動くのは「リーダー左足・フォロワー右足」。これは On1/On2 共通
-  return role === 'leader' ? [moveOn1, moveOn5] : [moveOn5, moveOn1];  // [左足, 右足]
+  let L: FootKey[], R: FootKey[];
+  if (timing === 'on1') {
+    L = [[0, 0], [1, BREAK], [3, 0]];
+    R = [[0, 0], [5, -BREAK], [7, 0]];
+  } else {
+    L = [[1, -0.05], [3, 0.15], [6, 0.35]];
+    R = [[2, -0.35], [5, 0.05], [7, -0.15]];
+  }
+  if (role === 'leader') return [L, R];
+  const flip = (k: FootKey[]) => k.map(([b, z]) => [b, -z] as FootKey);
+  return [flip(R), flip(L)];   // [左足, 右足]
 }
 
 /** 拍位置のポーズ。整数拍のキーを smoothstep で中割りし、後半16拍は 180° 回す */
@@ -213,9 +222,12 @@ function buildSegments(): ArmSegment[] {
  */
 export function buildScriptedBasic(timing: Timing): MotionClip {
   const duration = 8 * SPB;
-  const dir = timing === 'on1' ? 1 : -1;
-  // 「1で踏み込む側」への体の揺れ（前方成分）。1で最大、3で戻り、5で逆へ
-  const SWAY = [0, 0.12, 0.02, 0, 0, -0.12, -0.02, 0, 0];
+  // 体の重心の前後（リーダーの前方成分。フォロワーはワールドで同方向へ揺れる）。
+  // On1: 1 で前・5 で後ろ。On2: 2 で後ろ・6 で前（ブレイクに同期）。
+  // On2 は足が揃わないぶん重心も完全な中立に戻らない（先頭と末尾を同値にしてループを繋ぐ）
+  const SWAY = timing === 'on1'
+    ? [0, 0.12, 0.02, 0, 0, -0.12, -0.02, 0, 0]
+    : [-0.06, -0.02, -0.10, 0.06, 0.06, 0.02, 0.10, -0.06, -0.06];
   const footL = basicFootKeys('leader', timing);
   const footF = basicFootKeys('follower', timing);
   const frames: MotionClip['frames'] = [];
@@ -225,7 +237,7 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
     const b = (t / SPB) % 8;
     const bi = Math.floor(b);
     const s = smoothstep(b - bi);
-    const sway = (SWAY[bi] + (SWAY[bi + 1] - SWAY[bi]) * s) * dir;
+    const sway = SWAY[bi] + (SWAY[bi + 1] - SWAY[bi]) * s;
     // リーダーは +X を向く。前方 = +X。フォロワーは鏡（後退ブレイク）なので同じ +sway
     const lx = -0.35 + sway, fx = 0.35 + sway;
     frames.push({

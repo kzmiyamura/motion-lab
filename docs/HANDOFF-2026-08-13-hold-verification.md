@@ -1,7 +1,18 @@
 # 引継ぎ 2026-08-13 — 実装順序2完了: hold の目視確定と幾何ルール修正
 
-`docs/arm-state-machine-design.md` の実装順序 **2 が完了**。次は **3**（CoupleFigure.tsx の
-目標生成器を armTimeline に差し替え）。
+`docs/arm-state-machine-design.md` の実装順序 **2 と 3 が完了**（3 は `a1df85b`）。次は **4**（前後比較）。
+
+## 実装順序3（同日実施・a1df85b）
+
+- `CoupleFigure.tsx` のレイヤー3が armTimeline をセグメント参照で再生する
+  （linked = seg.hold、lift = フェーズ別目標を damp、turner = seg.turn.turner）。
+  armTimeline が無い旧クリップだけ従来の holds/events 走査
+- CBL pass の `back_support`: リーダーの空き手をフォロワー背面・胸郭高さへ運ぶ（レイヤー3.5）
+- **`?armTimeline=0` で旧経路へ強制フォールバック**できる。順序4の「導入前」の数字は
+  このトグルで後からでも取れる
+- 順序4の手順: アプリでクリップを再生し `__armProbe=1`（破綻率）と `?armDump=0,99`（貫通）を
+  新旧トグルで比較 → ユーザーが技5例を目視確認。サーバー（pm2 motion-lab-server）は
+  RAM逼迫でユーザー指示により停止中なので、**起動する前にユーザーに確認**すること
 
 ## 何をやったか
 

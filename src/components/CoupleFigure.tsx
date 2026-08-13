@@ -529,6 +529,62 @@ const newRig = (): Rig => ({
   cursor: { current: 0 },
 });
 
+/**
+ * 計測用（一時）。リグが実際に作った腕の姿勢を胸郭ローカルで測る。
+ * 見た目の不満は必ず数値にしてから直す — 目視で原因を決めると外す。
+ * ブラウザで `__armProbe = 1` にすると 300 フレームごとに要約を console へ出す。
+ */
+type ArmStat = { elev: number[]; back: number[]; across: number[]; elbow: number[]; spd: number[] };
+const newStat = (): ArmStat => ({ elev: [], back: [], across: [], elbow: [], spd: [] });
+const armStats: Record<string, ArmStat> = {};
+const armPrev: Record<string, THREE.Vector3> = {};
+let armFrames = 0;
+const mv = { u: new THREE.Vector3(), f: new THREE.Vector3(), q: new THREE.Quaternion() };
+const pct = (a: number[], p: number) =>
+  a.length ? [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))] : NaN;
+
+function measureArms(rigs: [Rig, Rig], linked: (0 | 1 | null)[], dt: number) {
+  const g = globalThis as unknown as { __armProbe?: number };
+  if (!g.__armProbe) return;
+  armFrames++;
+  for (let d = 0; d < 2; d++) {
+    for (let k = 0; k < 2; k++) {
+      const sh = rigs[d].shldr[k], el = rigs[d].elbow[k];
+      if (!sh || !el) continue;
+      const key = `${d === 0 ? 'L' : 'F'}/${k === 0 ? '左' : '右'}${linked[d] === k ? '・つなぎ' : '・フリー'}`;
+      const st = (armStats[key] ??= newStat());
+      // 上腕の向き（胸郭ローカル）。ボーンの +Y が付け根向きなので -Y が上腕の伸びる先
+      mv.u.set(0, -1, 0).applyQuaternion(sh.quaternion);
+      st.elev.push((Math.acos(clamp(-mv.u.y, -1, 1)) * 180) / Math.PI); // 0=真下 180=真上
+      st.back.push(mv.u.z);                                             // 負=肘が背中側
+      st.across.push(mv.u.x * SIDE_SIGN[k]);                            // 負=体を横切る側
+      // 肘の含む角（180=まっすぐ、0=完全に畳む）。過伸展は 180 超で出る
+      st.elbow.push(180 - (el.rotation.x * 180) / Math.PI);
+      const pv = (armPrev[key] ??= new THREE.Vector3(0, -1, 0));
+      const ang = (Math.acos(clamp(pv.dot(mv.u), -1, 1)) * 180) / Math.PI;
+      st.spd.push(dt > 1e-4 ? ang / dt : 0);                            // 上腕の角速度[deg/s]
+      pv.copy(mv.u);
+    }
+  }
+  if (armFrames % 300 !== 0) return;
+  const rows = Object.entries(armStats).map(([key, s]) => ({
+    腕: key,
+    仰角中央: +pct(s.elev, 0.5).toFixed(0),
+    仰角p95: +pct(s.elev, 0.95).toFixed(0),
+    仰角max: +Math.max(...s.elev).toFixed(0),
+    背中側率: +(s.back.filter((v) => v < -0.35).length / s.back.length).toFixed(2),
+    横切り率: +(s.across.filter((v) => v < -0.35).length / s.across.length).toFixed(2),
+    肘角min: +Math.min(...s.elbow).toFixed(0),
+    肘角max: +Math.max(...s.elbow).toFixed(0),
+    角速度p95: +pct(s.spd, 0.95).toFixed(0),
+    角速度max: +Math.max(...s.spd).toFixed(0),
+    // 手を上げているのに肘が下・後ろを向いている = 人体では起きない組み合わせ
+    破綻率: +(s.elev.filter((v, i) => v > 100 && s.back[i] < -0.3).length / s.elev.length).toFixed(3),
+  }));
+  console.log(`[ARM] ${armFrames}フレーム`);
+  console.table(rows);
+}
+
 /** 服の配色。役割の色は服の色として残すので、青＝リーダー/ピンク＝フォロワーは変わらない */
 type Palette = { cloth: string; pants: string; skin: string; shoe: string; dress: boolean };
 
@@ -742,7 +798,7 @@ export function CoupleFigure({
     buildPalette(followerColor, SAMPLE_BY_ID(followerSample ?? '')?.skin ?? DEFAULT_SKIN, true),
   ], [leaderColor, followerColor, leaderSample, followerSample]);
 
-  useFrame(() => {
+  useFrame((_st, dt) => {
     const t = timeRef.current;
     const [gL, gF] = guides;
     if (!rigs[0].root || !rigs[1].root || gL.ts.length < 2 || gF.ts.length < 2) return;
@@ -969,6 +1025,8 @@ export function CoupleFigure({
           sign * 0.55, -1, -0.3, w);
       }
     }
+
+    measureArms(rigs, linked, dt);
   });
 
   return (

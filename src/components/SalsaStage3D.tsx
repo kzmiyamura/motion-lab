@@ -301,6 +301,8 @@ export function SalsaStage3D() {
   const [nowLabel, setNowLabel] = useState('—');
   const [clip, setClip] = useState<MotionClip | null>(null);
   const [clipErr, setClipErr] = useState<string | null>(null);
+  // 押してからクリップ本体が届くまで数秒かかる。無反応に見えないよう読み込み中を出す
+  const [clipBusy, setClipBusy] = useState<'mocap' | 'hybrid' | null>(null);
   const [clipMode, setClipMode] = useState<'off' | 'mocap' | 'hybrid'>('off');
   const [clipList, setClipList] = useState<ClipInfo[]>([]);
   const [clipId, setClipId] = useState<string | null>(null);
@@ -423,6 +425,7 @@ export function SalsaStage3D() {
       setClipErr('VITE_HOME_SERVER_URL が未設定です（クリップはホームサーバーから配信されます）');
       return;
     }
+    setClipBusy(mode);
     try {
       let id = idOverride ?? clipId;
       if (!id) {
@@ -446,6 +449,8 @@ export function SalsaStage3D() {
       setNowLabel('—');
     } catch (e) {
       setClipErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setClipBusy(null);
     }
   };
 
@@ -580,11 +585,19 @@ export function SalsaStage3D() {
           {playing ? '⏸ 停止' : '▶ 再生'}
         </button>
         <button className={styles.btn} onClick={replaySample}>📼 解析サンプルを再現</button>
-        <button className={`${styles.btn} ${clipMode === 'hybrid' ? styles.primary : ''}`} onClick={() => loadClip('hybrid')}>
-          🎥 動画のモーションで踊る
+        <button
+          className={`${styles.btn} ${clipMode === 'hybrid' ? styles.primary : ''}`}
+          onClick={() => loadClip('hybrid')}
+          disabled={clipBusy !== null}
+        >
+          {clipBusy === 'hybrid' ? '⏳ 読み込み中…' : '🎥 動画のモーションで踊る'}
         </button>
-        <button className={`${styles.btn} ${clipMode === 'mocap' ? styles.primary : ''}`} onClick={() => loadClip('mocap')}>
-          🦴 復元データ（デバッグ）
+        <button
+          className={`${styles.btn} ${clipMode === 'mocap' ? styles.primary : ''}`}
+          onClick={() => loadClip('mocap')}
+          disabled={clipBusy !== null}
+        >
+          {clipBusy === 'mocap' ? '⏳ 読み込み中…' : '🦴 復元データ（デバッグ）'}
         </button>
         {clipList.length > 1 && (
           <label className={styles.clipSel}>

@@ -238,16 +238,26 @@ def build_timeline(clip, bpm=None):
         post = avg_side(lead, fol, m['t'] + dur, m['t'] + dur + 1.2)
         m['dur'] = dur
         m['sidePre'], m['sidePost'] = pre, post
+        # 手が届かない距離で検出された技（シャイン中のソロターン等）は hold を発火しない。
+        # 目視確定で bb0efcb9 冒頭3件・8c312c6d 2件など6件が「そもそもつないでいない」だった
+        ds = sorted(d for d in (pair_distance(lead, fol, m['t'] + k * 0.2)
+                                for k in range(-2, int(dur / 0.2) + 3)) if d is not None)
+        m['noContact'] = bool(ds) and ds[len(ds) // 2] > ARM_REACH_PAIR
         if pre is not None and post is not None and (pre > 0) != (post > 0) and abs(pre - post) > 0.25:
             m['passSide'] = 'right' if post < 0 else 'left'   # 負 = リーダーの右
         else:
             m['passSide'] = None   # その場（手は替わらない）
+        if m.get('noContact'):
+            m['passSide'] = None   # つないでいないので手の切り替えも起きない
 
     # ── 手の対応の時系列: 通過イベントでのみ切り替える
-    #    右へ通過 → リーダー右手 × フォロワー左手（左は鏡像）
+    #    右へ通過 → リーダー左手 × フォロワー右手（左は鏡像）
+    #    2026-08-13 目視確定（実装順序2）で旧対応則（右通過→LR×FL）は鏡像に反転していた。
+    #    2fda2815 の3箇所のキーフレーム連続確認 + 手首実測 d=0.014 の1点すべてが本対応則と整合。
+    #    pass 中の leader L 固定（ユーザー確認済み）とも連続になる（旧則は pass→close で L→R が不連続だった）
     def hold_for(pass_side):
-        return {'leader': 'R', 'follower': 'L'} if pass_side == 'right' \
-            else {'leader': 'L', 'follower': 'R'}
+        return {'leader': 'L', 'follower': 'R'} if pass_side == 'right' \
+            else {'leader': 'R', 'follower': 'L'}
     # 最初の通過イベントから逆算して開始時の hold を決める
     #（通過前は「これから通る側と逆」の手をつないでいたはず）
     first_pass = next((m for m in merged if m['passSide']), None)
@@ -309,7 +319,11 @@ def build_timeline(clip, bpm=None):
 
     cursor = 0.0
     swallowed = 0
+    no_contact = 0
     for m in merged:
+        if m.get('noContact'):
+            no_contact += 1   # hold 系フェーズを張らず、区間ごと emit_idle（距離次第で shine）に任せる
+            continue
         turn = m.get('turn')
         conf = 'observed' if m['sidePre'] is not None and m['sidePost'] is not None else 'inferred'
         if m['type'] == 'CBL':
@@ -385,7 +399,7 @@ def build_timeline(clip, bpm=None):
         'style': style, 'styleConfidence': style_conf,
         'beatGrid': bg,
         'stats': {'segments': len(segs), 'inferred': inferred,
-                  'swallowedEvents': swallowed},
+                  'swallowedEvents': swallowed, 'noContactEvents': no_contact},
         'segments': segs,
     }
 

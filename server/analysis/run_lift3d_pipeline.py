@@ -72,8 +72,9 @@ def main():
     run(py, "prototype_pairfix.py", p("6_arms.json"), args.tracks, p("7_pair.json"),
         "--contact-speed", 0.03, "--contact-height", 0.22)
     extra = ["--measurements", args.measurements] if args.measurements else []
+    # tracks の2Dキーポイントは hold（つないだ手）の決め直しに使う
     run(py, "prototype_export_clip.py", p("7_pair.json"), args.out,
-        "--target-height", args.target_height, *extra)
+        "--target-height", args.target_height, "--tracks", args.tracks, *extra)
     if args.preview:
         run(py, "prototype_render3d.py", p("7_pair.json"), args.preview)
 

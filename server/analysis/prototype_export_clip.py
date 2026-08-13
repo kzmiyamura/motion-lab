@@ -23,6 +23,7 @@ Usage:
 """
 import sys
 import json
+import math
 import argparse
 
 import numpy as np
@@ -37,88 +38,128 @@ NAMES = ["nose", "lShoulder", "rShoulder", "lElbow", "rElbow", "lWrist", "rWrist
          "lEar", "rEar", "lHeel", "rHeel", "lToe", "rToe"]
 
 
-HOLD_WINDOW_SEC = 0.35   # イベント時刻の前後この範囲で多数決する
-BACK_HAND_M = 0.35       # 相手の胴中心にこれより近い手は「背中に回した手」とみなす
-HOLD_CLOSE_M = 0.20      # ただし手どうしがこれより近ければ、胴に近くてもつないでいる
-HOLD_MAX_M = 1.20        # これ以上離れていたら手はつないでいない
+HOLD_WINDOW_SEC = 0.35   # イベント時刻の前後この範囲を見る
+HOLD_2D_MAX = 0.22       # 画面上でこれ（身長比）より離れた組は握っていない ≒ 腕1本分
+HOLD_2D_CONF = 0.40      # YOLO キーポイント信頼度の下限
+BACK_HAND_M = 0.35       # 相手の胴中心にこれより近い手は「背中に回した手」とみなす（3D）
+
+COCO_WRIST = {"lWrist": 9, "rWrist": 10}
 
 
-def recompute_holds(out_frames, events, leader_pid, idx):
-    """イベントごとの「つないでいる手」を3Dで決め直す。
+def recompute_holds(out_frames, events, leader_pid, idx, tracks, aspect=1.0):
+    """イベントごとの「つないでいる手」を決め直す。
 
-    ■ なぜ決め直すか
-    analyze_pair.py の hold は **2D画像座標の最近接**で決めている（COCO 17点に z が無いため）。
-    画面上で近いことと触れていることは別で、実測（2fda2815 t=3.40）では
-    クローズドポジションで**背中に回したリーダーの右手**が、相手の手首と画面上で重なって勝ち、
-    本当につないでいる「リーダー左手×フォロワー右手」が4通り中いちばん遠い扱いになっていた。
+    ■ 何を直すか
+    analyze_pair.py の hold は **画像上の最近接**で決めている（COCO 17点に z が無いため）。
+    実測（2fda2815 t=3.40）では、クローズドポジションで**背中に回したリーダーの右手**が
+    相手の手首と画面上で重なって勝ち、本当に握っている組が4通り中いちばん遠い扱いになっていた。
 
-    ■ 3Dなら分けられる2つの見分け
-    1. 補間で埋めた手首は候補にしない（上の例では相方が補間値だった＝根拠が無い）
-    2. 相手の胴中心に近すぎる手は「背中の手」として候補から外す。
-       ただし **手どうしが触れる距離（HOLD_CLOSE_M）まで近い組は外さない** —
-       クローズドポジションでは握った手も互いの体のすぐ近くにあるため。
-       全部外れてしまうときも外さない（密着時に誤って空にしないため）
+    ■ ただし「3Dで選び直す」は誤り（14セッション目に実測して却下）
+    腕の3D推定誤差は median 26.5cm・p95 65cm あり、4通りの3D距離の大小はほぼノイズ。
+    3本の動画で測ると、3Dで選び直した組は画面上で **中央値 1.2〜1.6 肩幅** 離れており
+    （最大 9 肩幅）、元の2D判定に画像近さで 5:14 で負けていた。**画像は真実・奥行きだけが推定**。
 
-    絶対距離では判定しない。腕の推定誤差は median 26.5cm・p95 65cm もあるので、
-    「触れているか」ではなく **4通りのどれか** を選ぶ問題として解く。
+    ■ 採る方式: 画像で絞り、3Dは「背中の手」と「根拠の無い手」を落とすためだけに使う
+    1. 4通りを画像距離（肩幅で正規化）で評価し、HOLD_2D_MAX を超える組は捨てる
+    2. 補間で埋めた手首（v<1）は候補にしない。実観測だけで何も残らないときのみ補間も許す
+    3. 相手の胴中心に 3D で近すぎる手（＝背中に回した手）を落とす。全部落ちるときは落とさない
+    4. 残りの最小を採る。何も残らなければ **その瞬間は手をつないでいない**（hold=None）。
+       開いて踊る区間でも無理に4通りから選ばせていたのが、そもそもの誤りの温床だった
+
+    真値のある 2fda2815 t=3.40（クローズド）で確認: 画像で絞ると L手×F右手(0.36sw) と
+    L手×F左手(0.35sw) が並ぶが、F左手は補間値なので 2 で落ち、正解の L手×F右手 が残る。
+    背中に回ったリーダー右手は画像距離 1.13sw で 1 の時点で落ちている。
     """
+    if not tracks:
+        return 0, 0
     fpid = 1 - leader_pid
+
+    def dist2d(p, q):
+        # キーポイントは軸ごとに 0..1 正規化されている。縦長動画では x と y の1目盛りの
+        # 長さが違うので、x をアスペクト比で画素比に戻してから測る
+        return math.hypot((p[0] - q[0]) * aspect, p[1] - q[1])
+
     W = ("lWrist", "rWrist")
     T = ("lShoulder", "rShoulder", "lHip", "rHip")
+    tframes = tracks.get("frames") or []
 
-    def pos(p, name):
+    def pos3(p, name):
         i = idx[name] * 3
         return np.array(p["j"][i:i + 3])
 
-    def torso(p):
-        return np.mean([pos(p, n) for n in T], axis=0)
+    def torso3(p):
+        return np.mean([pos3(p, n) for n in T], axis=0)
 
-    n_changed = 0
+    n_changed = n_cleared = 0
     for ev in events:
-        votes = {}
-        for fr in out_frames:
-            if abs(fr["t"] - ev["t"]) > HOLD_WINDOW_SEC:
+        scores = {}   # (lk, fk) -> そのイベント窓での画像距離たち
+        for tf in tframes:
+            if abs(tf["t"] - ev["t"]) > HOLD_WINDOW_SEC:
                 continue
-            a = fr["p"].get(str(leader_pid))
-            b = fr["p"].get(str(fpid))
-            if a is None or b is None:
+            kept = {p.get("pid"): p for p in tf.get("kept", []) if p.get("kps")}
+            if leader_pid not in kept or fpid not in kept:
                 continue
-            ta, tb = torso(a), torso(b)
-            for vmin in (1.0, 0.5):   # まず実観測だけで。無ければ補間も許す
-                cands = []
-                for lk in W:
-                    if a["v"][idx[lk]] < vmin:
-                        continue
-                    for fk in W:
-                        if b["v"][idx[fk]] < vmin:
-                            continue
-                        pa, pb = pos(a, lk), pos(b, fk)
-                        d = float(np.linalg.norm(pa - pb))
-                        # 手が触れる距離まで近いなら、胴に近くてもそれはつないだ手。
-                        # クローズドポジションでは握った手も互いの体の近くにある。
-                        back = d > HOLD_CLOSE_M and (
-                            np.linalg.norm(pa - tb) < BACK_HAND_M or
-                            np.linalg.norm(pb - ta) < BACK_HAND_M)
-                        cands.append((d, back, lk, fk))
-                if not cands:
+            ka, kb = kept[leader_pid]["kps"], kept[fpid]["kps"]
+            # 尺度は身長（bbox の高さ）。肩幅は横を向いた瞬間に潰れるので使えない
+            # ── 潰れた肩幅で割ると、本当に握っている組まで「遠い」と判定されてしまう
+            bb = [kept[leader_pid].get("bbox"), kept[fpid].get("bbox")]
+            if not all(bb):
+                continue
+            hgt = sum(b[3] - b[1] for b in bb) / 2
+            if hgt < 1e-6:
+                continue
+            # 同時刻の3D（背中の手を落とすためだけに使う）
+            f3 = min(out_frames, key=lambda f: abs(f["t"] - tf["t"])) if out_frames else None
+            a3 = b3 = None
+            if f3 is not None and abs(f3["t"] - tf["t"]) <= 0.1:
+                a3, b3 = f3["p"].get(str(leader_pid)), f3["p"].get(str(fpid))
+
+            cands = []
+            for lk in W:
+                pa2 = ka[COCO_WRIST[lk]]
+                if pa2[2] < HOLD_2D_CONF:
                     continue
-                free = [c for c in cands if not c[1]]
-                pick = min(free or cands)
-                if pick[0] <= HOLD_MAX_M:
-                    key = (pick[2], pick[3])
-                    votes[key] = votes.get(key, 0) + 1
-                break
-        if not votes:
-            continue
-        lk, fk = max(votes, key=lambda k: votes[k])
+                for fk in W:
+                    pb2 = kb[COCO_WRIST[fk]]
+                    if pb2[2] < HOLD_2D_CONF:
+                        continue
+                    d2 = dist2d(pa2, pb2) / hgt
+                    if d2 > HOLD_2D_MAX:
+                        continue
+                    # 3Dで「相手の胴に張り付いた手」＝背中に回した手を見分ける
+                    back = False
+                    if a3 is not None and b3 is not None:
+                        back = (float(np.linalg.norm(pos3(a3, lk) - torso3(b3))) < BACK_HAND_M or
+                                float(np.linalg.norm(pos3(b3, fk) - torso3(a3))) < BACK_HAND_M)
+                    # 3Dが補間値の手首は「根拠が無い」— 実観測だけで決まらないときの予備に回す
+                    interp = (a3 is not None and b3 is not None and
+                              min(a3["v"][idx[lk]], b3["v"][idx[fk]]) < 1.0)
+                    cands.append((d2, back, interp, lk, fk))
+            if not cands:
+                continue
+            # 実観測 → 背中でない、の順に優先して絞る。全部落ちるときは落とさない
+            real = [c for c in cands if not c[2]] or cands
+            free = [c for c in real if not c[1]] or real
+            d2, _, _, lk, fk = min(free)
+            scores.setdefault((lk, fk), []).append(d2)
+
+        # フレームごとに勝った組を集め、まず勝ち数、同数なら距離の中央値で決める。
+        # 絞り込み（背中の手・補間値）はフレーム単位でしか効かないので、
+        # 全フレームの距離を混ぜて比べると、落としたはずの組が別フレームから紛れ込む
         jp = {"lWrist": "左手", "rWrist": "右手"}
-        label = f"リーダー{jp[lk]}×フォロワー{jp[fk]}"
+        label = None
+        if scores:
+            lk, fk = max(scores, key=lambda k: (len(scores[k]), -float(np.median(scores[k]))))
+            label = f"リーダー{jp[lk]}×フォロワー{jp[fk]}"
         if ev.get("hold") != label:
             if ev.get("hold") is not None:
-                ev["hold2d"] = ev["hold"]   # 元の2D判定を残す（追えるように）
-            n_changed += 1
+                ev["hold2d"] = ev["hold"]   # 元の判定を残す（追えるように）
+            if label is None:
+                n_cleared += 1
+            else:
+                n_changed += 1
         ev["hold"] = label
-    return n_changed
+    return n_changed, n_cleared
 
 
 def main():
@@ -132,6 +173,10 @@ def main():
                          "見た目の説得力を出す用。位置も関節も同じ倍率で拡大するので相対関係は不変。0で無効")
     ap.add_argument("--measurements", default=None,
                     help="measurements.json のパス。summary.beatGrid をクリップへ同梱する")
+    ap.add_argument("--tracks", default=None,
+                    help="measurements.tracks.json のパス（2Dキーポイント）。"
+                         "イベントの hold（つないだ手）を画像座標で決め直すのに使う。"
+                         "省略すると hold は上流の値のまま")
     args = ap.parse_args()
 
     beat_grid = None
@@ -198,13 +243,21 @@ def main():
     dt = float(np.median(np.diff(ts_all))) if len(ts_all) > 2 else 0.0
     eff_fps = round(1.0 / dt, 2) if dt > 1e-6 else data.get("sampledFps")
 
-    # つないでいる手は3Dで決め直す（2D最近接は背中に回した手に釣られる）
+    # つないでいる手を決め直す（画像で絞り、3Dは背中の手を落とすためだけに使う）
     events = data.get("events") or []
     leader_pid = data.get("leaderPid", 0)
-    if events:
+    if events and args.tracks:
+        try:
+            tracks = json.load(open(args.tracks, encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"warn: tracks 読み込み失敗 ({e}) — hold は上流の値のまま", file=sys.stderr)
+            tracks = None
         idx = {n: i for i, n in enumerate(NAMES)}
-        n_changed = recompute_holds(out_frames, events, leader_pid, idx)
-        print(f"  hold を3Dで再判定: {n_changed}/{len(events)} 件を訂正", file=sys.stderr)
+        cam = data.get("camera") or {}
+        aspect = (cam.get("width") or 1) / (cam.get("height") or 1)
+        n_changed, n_cleared = recompute_holds(out_frames, events, leader_pid, idx, tracks, aspect)
+        print(f"  hold 再判定: {n_changed}/{len(events)} 件を訂正・"
+              f"{n_cleared} 件は「つないでいない」に変更", file=sys.stderr)
 
     clip = {
         "version": 1,

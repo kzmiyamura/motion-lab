@@ -496,12 +496,17 @@ function solve2Bone(
   j2.rotation.set(sm >= 1 ? bend : damp(j2.rotation.x, bend, sm), 0, 0);
 }
 
-// ── ホールド（つないでいる手）のタイムライン。0=左手, 1=右手
-type Hold = { t: number; leader: 0 | 1; follower: 0 | 1 };
+// ── ホールド（つないでいる手）のタイムライン。0=左手, 1=右手。null=手を離している
+type Hold = { t: number; leader: 0 | 1 | null; follower: 0 | 1 | null };
 function buildHolds(clip: MotionClip): Hold[] {
   const out: Hold[] = [];
   for (const ev of [...clip.events].sort((a, b) => a.t - b.t)) {
-    if (!ev.hold) continue;
+    // hold が null のイベントは「この瞬間は手をつないでいない」という観測結果。
+    // 読み飛ばすと直前のホールドが続き、開いて踊る区間でも手が繋がったままになる
+    if (ev.hold === null || ev.hold === undefined) {
+      out.push({ t: ev.t, leader: null, follower: null });
+      continue;
+    }
     const l = /リーダー(右|左)手/.exec(ev.hold);
     const f = /フォロワー(右|左)手/.exec(ev.hold);
     if (!l || !f) continue;
@@ -856,7 +861,8 @@ export function CoupleFigure({
     let hold: Hold | null = null;
     for (const h of holds) { if (h.t <= t + 0.01) hold = h; else break; }
     const linked: (0 | 1 | null)[] = [null, null];
-    if (hold && smp[0].inRange && smp[1].inRange) {
+    if (hold && hold.leader !== null && hold.follower !== null &&
+        smp[0].inRange && smp[1].inRange) {
       linked[0] = hold.leader; linked[1] = hold.follower;
       // 進行中のターンを拾う。誰が回っているかで手の置き所が変わる
       let lift = 0, turner = -1;

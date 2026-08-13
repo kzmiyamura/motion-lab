@@ -426,6 +426,7 @@ const tmp = {
   qs: new THREE.Quaternion(),
   hold: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3(),
   v: new THREE.Vector3(), v2: new THREE.Vector3(), w2: new THREE.Vector3(),
+  pl: new THREE.Vector3(),
 };
 
 /**
@@ -494,6 +495,25 @@ function solve2Bone(
   if (sm >= 1) j1.quaternion.copy(tmp.qs);
   else j1.quaternion.slerp(tmp.qs, sm);
   j2.rotation.set(sm >= 1 ? bend : damp(j2.rotation.x, bend, sm), 0, 0);
+}
+
+/**
+ * 肘をどちらへ出すか（ポール）を手の高さで決める。**定数で固定してはいけない。**
+ *
+ * 手が腰の高さにあるときは肘は下・やや後ろ。ところが頭上へ手を上げると（ターンで
+ * 手を通すときが全部これ）、肘を下へ向けたまま解くので「上腕は真上・前腕は真下へ
+ * 折り返す」という人間の肩では作れない形になる。これが「腕がありえない動きをする」の正体。
+ *
+ * 実際の人体は、手が上がるほど肘が**外へ、そして前へ**逃げる。背中側へは回らない。
+ * ty は肩から見た手の高さ[m]（正 = 肩より上）。
+ */
+function armPole(sign: number, ty: number, out: THREE.Vector3) {
+  const up = clamp(ty / 0.30, 0, 1);   // 0 = 肩より下、1 = 頭上
+  out.set(
+    sign * (0.55 + 0.45 * up),   // 上げるほど外へ
+    -1 + up,                     // 下向きは上げるほど弱まり、頭上では 0
+    -0.3 + 0.6 * up,             // 下では やや後ろ、頭上では前へ（背中側へは回らない）
+  );
 }
 
 // ── ホールド（つないでいる手）のタイムライン。0=左手, 1=右手。null=手を離している
@@ -986,11 +1006,11 @@ export function CoupleFigure({
         rig.spine.worldToLocal(tmp.v);
         // 目標は上で可動域内に丸めてあるので、ここは鈍らせずそのまま解く
         // （両者が同じ1点を解く = 手が必ず合う）
+        const ty = tmp.v.y - rig.shldr[k].position.y;
+        armPole(sign, ty, tmp.pl);   // 肘の向きは手の高さで決める（定数だと頭上で裏返る）
         solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
-          tmp.v.x - rig.shldr[k].position.x,
-          tmp.v.y - rig.shldr[k].position.y,
-          tmp.v.z,
-          sign * 0.55, -1, -0.3); // 肘は下・やや外・やや後ろへ
+          tmp.v.x - rig.shldr[k].position.x, ty, tmp.v.z,
+          tmp.pl.x, tmp.pl.y, tmp.pl.z);
       }
     } else {
       holdSame.current = null;
@@ -1020,9 +1040,11 @@ export function CoupleFigure({
         rig.spine.localToWorld(tmp.v);
         clampToArm(rig.spine, sh.position, tmp.v);
         rig.spine.worldToLocal(tmp.v);
+        const ty = tmp.v.y - sh.position.y;
+        armPole(sign, ty, tmp.pl);
         solve2Bone(sh, rig.elbow[k], L_UPARM, L_FOREARM,
-          tmp.v.x - sh.position.x, tmp.v.y - sh.position.y, tmp.v.z,
-          sign * 0.55, -1, -0.3, w);
+          tmp.v.x - sh.position.x, ty, tmp.v.z,
+          tmp.pl.x, tmp.pl.y, tmp.pl.z, w);
       }
     }
 

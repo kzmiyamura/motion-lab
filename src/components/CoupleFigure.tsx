@@ -664,6 +664,72 @@ function measureArms(rigs: [Rig, Rig], linked: (0 | 1 | null)[], dt: number) {
   console.table(rows);
 }
 
+/**
+ * 計測用（一時）。**描画されたリグそのもの**の腕の座標と、胴体円柱への食い込みを
+ * 時刻窓で吐く。ブラウザで `__armDump = [3.2, 3.6]`（クリップ秒）にすると、
+ * 窓内の毎フレーム、肩・肘・手首のワールド座標と、上腕/前腕セグメントが
+ * どちらの胴体をどれだけ抉っているか（depth 正 = 貫通）を console.table に出す。
+ * 貫通の犯人は目視ではなくこの数字で確定させる。
+ */
+const dv = { a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3() };
+function segCylDepth(
+  a: THREE.Vector3, b: THREE.Vector3,
+  cx: number, cz: number, r: number, yLo: number, yHi: number,
+) {
+  // 線分を20分割し、胴体の高さ帯にある点の軸からの最小XZ距離を測る
+  let best = Infinity, bu = -1;
+  for (let i = 0; i <= 20; i++) {
+    const u = i / 20;
+    const y = a.y + (b.y - a.y) * u;
+    if (y < yLo || y > yHi) continue;
+    const d = Math.hypot(a.x + (b.x - a.x) * u - cx, a.z + (b.z - a.z) * u - cz);
+    if (d < best) { best = d; bu = u; }
+  }
+  return bu < 0 ? null : { depth: r - best, u: bu };
+}
+
+function dumpArms(rigs: [Rig, Rig], linked: (0 | 1 | null)[], t: number, hold: THREE.Vector3) {
+  const g = globalThis as unknown as { __armDump?: number | [number, number] };
+  const w = g.__armDump;
+  if (w == null) return;
+  const [t0, t1] = Array.isArray(w) ? w : [w - 0.2, w + 0.2];
+  if (t < t0 || t > t1) return;
+  // 腕IKの後に呼ばれる。描画と同じ行列で測るため、ここで確定させる
+  rigs[0].root.updateMatrixWorld(true);
+  rigs[1].root.updateMatrixWorld(true);
+  const rows: Record<string, unknown>[] = [];
+  const f2 = (v: number) => +v.toFixed(3);
+  for (let d = 0; d < 2; d++) {
+    for (let k = 0; k < 2; k++) {
+      const rig = rigs[d];
+      rig.shldr[k].getWorldPosition(dv.a);
+      rig.elbow[k].getWorldPosition(dv.b);
+      dv.c.set(0, -L_FOREARM, 0);
+      rig.elbow[k].localToWorld(dv.c);
+      const row: Record<string, unknown> = {
+        腕: `${d === 0 ? 'L' : 'F'}/${k === 0 ? '左' : '右'}${linked[d] === k ? '・つなぎ' : ''}`,
+        肩: `${f2(dv.a.x)},${f2(dv.a.y)},${f2(dv.a.z)}`,
+        肘: `${f2(dv.b.x)},${f2(dv.b.y)},${f2(dv.b.z)}`,
+        手首: `${f2(dv.c.x)},${f2(dv.c.y)},${f2(dv.c.z)}`,
+      };
+      // 上腕・前腕それぞれを、両者の胴体円柱と突き合わせる
+      for (let o = 0; o < 2; o++) {
+        const or_ = rigs[o];
+        const yLo = or_.root.position.y + or_.hips.position.y;
+        const r = o === d ? TORSO_R_SELF : TORSO_R;
+        const up = segCylDepth(dv.a, dv.b, or_.root.position.x, or_.root.position.z, r, yLo, yLo + SHO_DY);
+        const fo = segCylDepth(dv.b, dv.c, or_.root.position.x, or_.root.position.z, r, yLo, yLo + SHO_DY);
+        const who = o === d ? '自' : '相手';
+        row[`上腕→${who}`] = up ? f2(up.depth) : '-';
+        row[`前腕→${who}`] = fo ? f2(fo.depth) : '-';
+      }
+      rows.push(row);
+    }
+  }
+  console.log(`[DUMP] t=${t.toFixed(3)} rootL=(${f2(rigs[0].root.position.x)},${f2(rigs[0].root.position.z)}) rootF=(${f2(rigs[1].root.position.x)},${f2(rigs[1].root.position.z)}) hold=(${f2(hold.x)},${f2(hold.y)},${f2(hold.z)})`);
+  console.table(rows);
+}
+
 /** 服の配色。役割の色は服の色として残すので、青＝リーダー/ピンク＝フォロワーは変わらない */
 type Palette = { cloth: string; pants: string; skin: string; shoe: string; dress: boolean };
 
@@ -1145,6 +1211,7 @@ export function CoupleFigure({
     }
 
     measureArms(rigs, linked, dt);
+    dumpArms(rigs, linked, t, holdPos.current);
   });
 
   return (

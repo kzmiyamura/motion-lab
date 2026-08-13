@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect, type RefObject } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { MocapFigure, type MotionClip } from './MocapFigure';
+import { buildScriptedCBL } from '../engine/scriptedClip';
 import { CoupleFigure } from './CoupleFigure';
 import { detectFace, loadFaces, saveFaces, EMPTY_FACES, type FaceSlots } from '../engine/faceAvatar';
 import { SAMPLE_AVATARS } from './AvatarHeads';
@@ -456,6 +457,22 @@ export function SalsaStage3D() {
     }
   };
 
+  // 手描きの CBL（動画データを使わない合成クリップ）。正解の見本として再生する
+  const loadScripted = () => {
+    const c = buildScriptedCBL();
+    setClipErr(null);
+    setClip(c);
+    const ph = phRef.current;
+    ph.mode = 'hybrid';
+    ph.clipTime = 0;
+    ph.clipDuration = c.duration;
+    ph.playing = true;
+    clipTimeRef.current = 0;
+    setClipMode('hybrid');
+    setPlaying(true);
+    setNowLabel('手描きCBL');
+  };
+
   const onSelectClip = (id: string) => {
     setClipId(id);
     // 再生中にクリップを替えたら、同じモードのまま新しいクリップへ切り替える
@@ -593,6 +610,9 @@ export function SalsaStage3D() {
           disabled={clipBusy !== null}
         >
           {clipBusy === 'hybrid' ? '⏳ 読み込み中…' : '🎥 動画のモーションで踊る'}
+        </button>
+        <button className={styles.btn} onClick={loadScripted}>
+          ✍️ 手描きCBL
         </button>
         <button
           className={`${styles.btn} ${clipMode === 'mocap' ? styles.primary : ''}`}

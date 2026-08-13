@@ -973,6 +973,14 @@ export function CoupleFigure({
     const q = new URLSearchParams(globalThis.location?.search ?? '');
     return q.get('armTimeline') === '0' ? undefined : clip.armTimeline?.segments;
   }, [clip]);
+  // キーポーズ方式（既定ON）: 関節は手書きポーズ＋拍の手続きだけで決め、
+  // 観測データは「技イベント・立ち位置・向き・腰の高さ」の選択にだけ使う。
+  // 腕・足首の生観測を追いかけない = ノイズ由来の絡まり・貫通が原理的に出ない。
+  // `?keyPose=0` で従来の観測追従に戻せる（見比べ用）
+  const keyPose = useMemo(() => {
+    const q = new URLSearchParams(globalThis.location?.search ?? '');
+    return q.get('keyPose') !== '0';
+  }, []);
   const armCur = useRef(0);
   const liftCur = useRef(0);
   const pair = useMemo(() => buildPair(clip, pids[0], pids[1]), [clip, pids]);
@@ -1067,7 +1075,8 @@ export function CoupleFigure({
       const amp = rest ? 0 : 0.16 + Math.min(0.3, at(s, g.speed) * 0.28);
       for (let k = 0; k < 2; k++) {
         const sign = SIDE_SIGN[k], ank = g.ank[k];
-        const aw = clamp(at(s, ank.w), 0, 1);
+        // キーポーズ方式: 足首の生観測を使わず、拍のステップ（手続き）だけで描く
+        const aw = keyPose ? 0 : clamp(at(s, ank.w), 0, 1);
         // 手続きの足位置（股関節ローカル）: 前後に振って、振り出す側を少し浮かす
         const sw = stepPhase * mirror * sign * amp * 0.55;
         const py = -(LEG_MAX * 0.97) + Math.max(0, stepPhase * mirror * sign) * 0.05;
@@ -1077,7 +1086,7 @@ export function CoupleFigure({
         const rz = at(s, ank.z);
         // 膝はつま先の上を通る（人体の構造）。つま先の向きは実観測なので、
         // 固定の「前」ではなくそれを使う — 横向きのステップで膝が内へ折れなくなる
-        const fw = clamp(at(s, g.footYaw[k].w), 0, 1);
+        const fw = keyPose ? 0 : clamp(at(s, g.footYaw[k].w), 0, 1);
         const fy = at(s, g.footYaw[k].v) * fw;
         solve2Bone(rig.thigh[k], rig.knee[k], L_THIGH, L_SHIN,
           (rx) * aw, py + (ry - py) * aw, sw + (rz - sw) * aw,
@@ -1160,17 +1169,21 @@ export function CoupleFigure({
       }
       // つないだ手は物理的に**同じ1点**にある。だから片方でも手首が観測できていれば
       // そこが本当のホールド点で、合成した中点より必ず正しい。信頼度ぶんだけ実データへ寄せる
-      let dw = 0;
-      tmp.v2.set(0, 0, 0);
-      for (let d = 0; d < 2; d++) {
-        const g = guides[d], k = linked[d]!;
-        const w = clamp(at(smp[d], g.wri[k].w), 0, 1);
-        if (w <= 0.02) continue;
-        tmp.w2.set(at(smp[d], g.wri[k].x), at(smp[d], g.wri[k].y), at(smp[d], g.wri[k].z));
-        rigs[d].root.localToWorld(tmp.w2);
-        tmp.v2.addScaledVector(tmp.w2, w); dw += w;
+      // キーポーズ方式では実観測の手首へ寄せない — 幾何（両肩の中点・回転軸の真上）だけで
+      // 決めた点のほうが、ノイズ混じりの観測より「きれいな1枚」になる
+      if (!keyPose) {
+        let dw = 0;
+        tmp.v2.set(0, 0, 0);
+        for (let d = 0; d < 2; d++) {
+          const g = guides[d], k = linked[d]!;
+          const w = clamp(at(smp[d], g.wri[k].w), 0, 1);
+          if (w <= 0.02) continue;
+          tmp.w2.set(at(smp[d], g.wri[k].x), at(smp[d], g.wri[k].y), at(smp[d], g.wri[k].z));
+          rigs[d].root.localToWorld(tmp.w2);
+          tmp.v2.addScaledVector(tmp.w2, w); dw += w;
+        }
+        if (dw > 0.02) tmp.hold.lerp(tmp.v2.divideScalar(dw), Math.min(1, dw));
       }
-      if (dw > 0.02) tmp.hold.lerp(tmp.v2.divideScalar(dw), Math.min(1, dw));
 
       // 手の揺れは**共有点の側**で吸収する。腕ごとに鈍らせると、2人が別々に
       // 遅れて別々の場所を掴むことになり、速いターンで手が離れる（実測 30〜40cm）
@@ -1271,15 +1284,40 @@ export function CoupleFigure({
         const sign = SIDE_SIGN[k];
         const sh = rig.shldr[k];
         sh.position.set(sign * SHO_DX, SHO_DY, 0);   // 上げた肩を戻す
-        sh.rotation.set(-0.30 + dip * 0.10, 0, sign * (0.42 + dip * 0.06));
-        rig.elbow[k].rotation.set(damp(rig.elbow[k].rotation.x, -0.85, 0.2), 0, 0);
+        // キーポーズ方式では構えへ毎フレーム戻さない — 戻すと solve2Bone の slerp が
+        // 毎回リセットから始まり、目標へ 25% しか進まない姿勢で固まる
+        if (!keyPose) {
+          sh.rotation.set(-0.30 + dip * 0.10, 0, sign * (0.42 + dip * 0.06));
+          rig.elbow[k].rotation.set(damp(rig.elbow[k].rotation.x, -0.85, 0.2), 0, 0);
+        }
 
-        // 実観測（+ 速度ベクトルで伸ばした続き）の手首へ、信頼度ぶん寄せる。
-        // 上で手続きの構えを入れてあるので、w が落ちれば自然にそちらへ戻る
-        const w = s.inRange ? clamp(at(s, g.wri[k].w), 0, 1) : 0;
-        if (w <= 0.02) continue;
-        tmp.v.set(at(s, g.wri[k].x), at(s, g.wri[k].y), at(s, g.wri[k].z));
-        rig.root.localToWorld(tmp.v);
+        let w: number;
+        if (keyPose) {
+          // ── キーポーズ: フリーの腕は手書きの決めポーズ（胸郭ローカル）を拍で切り替える。
+          // 観測は一切見ない。目標が滑らかに動くので solve2Bone の鈍り（w）で中割りになる
+          if (!s.inRange) continue;
+          const mirror = d === 1 ? -1 : 1;
+          if (turner === d && lift > 0.25) {
+            // 自分が回っている間: 腕を横へ開いてスタイリング（相手や自分に当てない高さ）
+            tmp.v.set(sign * 0.42, 0.35, 0.10);
+          } else if (linked[d] === null) {
+            // シャイン（つないでいない）: 拍に合わせて前後に振る。脚と逆側の腕が前に出る
+            const swing = stepPhase * mirror * -sign;
+            tmp.v.set(sign * 0.32, 0.16 + Math.max(0, swing) * 0.14, 0.20 + swing * 0.16);
+          } else {
+            // 片手ホールド中の空き手: 軽く前で構える（社交ダンスの基本の構え）
+            tmp.v.set(sign * 0.30, 0.18 + dip * 0.03, 0.24);
+          }
+          rig.spine.localToWorld(tmp.v);
+          w = 0.25;
+        } else {
+          // 実観測（+ 速度ベクトルで伸ばした続き）の手首へ、信頼度ぶん寄せる。
+          // 上で手続きの構えを入れてあるので、w が落ちれば自然にそちらへ戻る
+          w = s.inRange ? clamp(at(s, g.wri[k].w), 0, 1) : 0;
+          if (w <= 0.02) continue;
+          tmp.v.set(at(s, g.wri[k].x), at(s, g.wri[k].y), at(s, g.wri[k].z));
+          rig.root.localToWorld(tmp.v);
+        }
         // 肩甲上腕リズム + 可動域。IK に無理をさせず、目標の側を人体の範囲へ丸める
         rig.spine.worldToLocal(tmp.v);
         const raise = clamp((tmp.v.y - SHO_DY) / 0.35, 0, 1) * 0.055;

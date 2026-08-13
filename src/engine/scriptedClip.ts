@@ -72,15 +72,26 @@ const KEY_HIPY = [0.96, 0.96, 0.96, 0.96, 0.96, 0.96, 0.96, 0.96,
 const D2R = Math.PI / 180;
 const smoothstep = (u: number) => u * u * (3 - 2 * u);
 
-/** 周期テーブルの Catmull-Rom 中割り。節点で速度が 0 に落ちない = 流れが止まらない */
-function catmullCyclic(vals: number[], x: number): number {
+/**
+ * 周期テーブルの単調エルミート中割り（Fritsch–Carlson）。
+ * 節点で速度が 0 に落ちないので流れは止まらないが、**行き過ぎない** —
+ * Catmull-Rom だとブレイクの底が拍の後ろへずれて音から遅れて見える。
+ * 折り返しの節点だけ接線 0（＝そこが極値）なので、2・6 の底はぴったり拍の上に来る。
+ */
+function monotoneCyclic(vals: number[], x: number): number {
   const n = vals.length;
   const t = ((x % n) + n) % n;
   const i = Math.floor(t), u = t - i;
-  const p0 = vals[(i - 1 + n) % n], p1 = vals[i], p2 = vals[(i + 1) % n], p3 = vals[(i + 2) % n];
-  return 0.5 * ((2 * p1) + (-p0 + p2) * u
-    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u
-    + (-p0 + 3 * p1 - 3 * p2 + p3) * u * u * u);
+  const p1 = vals[i], p2 = vals[(i + 1) % n];
+  const d = (k: number) => vals[(k + 1) % n] - vals[k % n];   // 区間 k の傾き
+  const tangent = (k: number) => {
+    const a = d((k - 1 + n) % n), b = d(k % n);
+    return a * b <= 0 ? 0 : (a + b) / 2;   // 折り返しなら 0 = そこが極値
+  };
+  const m1 = tangent(i), m2 = tangent((i + 1) % n);
+  const u2 = u * u, u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * p1 + (u3 - 2 * u2 + u) * m1
+    + (-2 * u3 + 3 * u2) * p2 + (u3 - u2) * m2;
 }
 
 // ── 足運び ───────────────────────────────────────────────
@@ -88,11 +99,17 @@ function catmullCyclic(vals: number[], x: number): number {
 // キーは [着地拍, 前後位置(体ローカルz, +が前), 移動拍数?]。既定は拍の 0.35 拍前から
 // 動き出して拍ちょうどに着地（AND で動き出す歩は 0.5 を指定）。移動中だけ足首が浮く。
 // taps は「同じ場所で踏み直す」拍 — 位置は変えず、小さく浮かせて荷重の入れ替えを見せる
-type FootKey = [number, number, number?];
-type FootSpec = { keys: FootKey[]; taps: number[]; flow?: boolean };
+// 4番目の 'charge' は「ため」— 前半はほとんど動かず溜め、AND で放って拍に着地する
+type FootKey = [number, number, number?, 'charge'?];
+// heelDown は「踵が床に着く拍」。サルサは 1235 67 をボールで踊り、4・8 だけ踵が下りる
+type FootSpec = { keys: FootKey[]; taps: number[]; flow?: boolean; heelDown?: number[] };
+const CHARGE_POW = 2.4;         // 「ため」の強さ。大きいほど後半に動きが寄る
+const HEEL_FALL = 1;            // 踵が下りきるまでの拍数（＝ため）
+const HEEL_RISE = 0.5;          // 踵が抜けるまでの拍数（＝AND で蹴る）
 const STEP_DUR = 0.35;          // 1歩にかける既定の拍数
 const TAP_DUR = 0.25;           // 踏み直しの浮き時間
-const ANKLE_Y = 0.08;           // 接地時の足首高さ
+const ANKLE_Y = 0.115;          // ボールで立っているときの足首高さ（踵が浮いている）
+const HEEL_DROP = 0.035;        // 踵が下りたときに足首が沈む量 → ベタ足で 0.08
 const STEP_LIFT = 0.07;         // 移動中に浮く高さ
 const TAP_LIFT = 0.04;          // 踏み直しの浮き
 const FOOT_LATERAL = 0.09;      // 足のスタンス幅（体ローカルx）
@@ -102,7 +119,9 @@ const FULL_STEP = 0.15;         // この距離を「一歩ぶん」として浮
  * 足の移動区間。flow スペックでは区間が隙間なく連なるので、
  * つなぎ目の速度を前後の平均に合わせて **着地しても止まらない** ようにする。
  */
-type FootSeg = { b0: number; b1: number; z0: number; z1: number; m0: number; m1: number };
+type FootSeg = {
+  b0: number; b1: number; z0: number; z1: number; m0: number; m1: number; charge: boolean;
+};
 
 function buildSegs(spec: FootSpec): FootSeg[] {
   const ks = spec.keys;
@@ -121,6 +140,7 @@ function buildSegs(spec: FootSpec): FootSeg[] {
     b0: s.b0, b1: s.b1, z0: s.z0, z1: s.z1,
     m0: cont[i] ? (raw[(i - 1 + n) % n].v + s.v) / 2 : 0,
     m1: cont[(i + 1) % n] ? (s.v + raw[(i + 1) % n].v) / 2 : 0,
+    charge: ks[i][3] === 'charge',
   }));
 }
 
@@ -130,6 +150,23 @@ const segsOf = (spec: FootSpec) => {
   if (!s) { s = buildSegs(spec); segCache.set(spec, s); }
   return s;
 };
+
+/**
+ * 踵の下り具合（0 = ボール立ち、1 = 踵接地）。
+ * 拍の 1 拍前から下り始めて拍でベタ足、その後 AND までに抜けてボールへ戻る。
+ * この 1 拍が「ため」の中身で、静止しているように見えないのはこの上下があるから。
+ */
+function heelAt(spec: FootSpec, beat8: number): number {
+  let h = 0;
+  for (const hb of spec.heelDown ?? []) {
+    for (const off of [0, 8, -8]) {
+      const b = beat8 + off;
+      if (b > hb - HEEL_FALL && b <= hb) h = Math.max(h, smoothstep((b - (hb - HEEL_FALL)) / HEEL_FALL));
+      if (b > hb && b < hb + HEEL_RISE) h = Math.max(h, 1 - smoothstep((b - hb) / HEEL_RISE));
+    }
+  }
+  return h;
+}
 
 /** 8拍周期の足前後位置と浮き */
 function footAt(spec: FootSpec, beat8: number): { z: number; lift: number } {
@@ -160,10 +197,17 @@ function footAt(spec: FootSpec, beat8: number): { z: number; lift: number } {
       if (b < s.b0 || b > s.b1) continue;
       const dur = s.b1 - s.b0;
       const u = (b - s.b0) / dur, u2 = u * u, u3 = u2 * u;
-      const z = (2 * u3 - 3 * u2 + 1) * s.z0 + (u3 - 2 * u2 + u) * dur * s.m0
-        + (-2 * u3 + 3 * u2) * s.z1 + (u3 - u2) * dur * s.m1;
+      // 進み具合。charge 区間は前半を溜めて後半（AND）で放つ
+      const f = s.charge
+        ? Math.pow((2 * u3 - 3 * u2 + 1) * 0 + (-2 * u3 + 3 * u2) * 1, CHARGE_POW)
+        : null;
+      const z = f === null
+        ? (2 * u3 - 3 * u2 + 1) * s.z0 + (u3 - 2 * u2 + u) * dur * s.m0
+          + (-2 * u3 + 3 * u2) * s.z1 + (u3 - u2) * dur * s.m1
+        : s.z0 + (s.z1 - s.z0) * f;
       const scale = Math.min(1, Math.abs(s.z1 - s.z0) / FULL_STEP);
-      return { z, lift: Math.sin(u * Math.PI) * STEP_LIFT * scale };
+      // 浮きは実際の進み具合に従う → 溜めの間は足が床の近くに残る
+      return { z, lift: Math.sin((f ?? u) * Math.PI) * STEP_LIFT * scale };
     }
   }
   // どの区間にも入らない＝荷重して床に着いたまま。直近に着地したキーの位置
@@ -197,8 +241,9 @@ const QUARTER = 0.06;           // 靴の 1/4。3・7 はこのぶんだけず�
 function basicFootKeys(role: 'leader' | 'follower', timing: Timing): [FootSpec, FootSpec] {
   let L: FootSpec, R: FootSpec;
   if (timing === 'on1') {
-    L = { keys: [[0, 0], [1, BREAK], [3, 0]], taps: [6] };
-    R = { keys: [[0, 0], [5, -BREAK], [7, 0]], taps: [2] };
+    // On1 も踊るのはボールの上。4・8 のニュートラルで両足とも踵が下りる
+    L = { keys: [[0, 0], [1, BREAK], [3, 0]], taps: [6], heelDown: [4, 8] };
+    R = { keys: [[0, 0], [5, -BREAK], [7, 0]], taps: [2], heelDown: [4, 8] };
   } else {
     // 数値は「1 で左足は右足(+0.05)の少し後ろ = -0.05」「2 は 1 の 0.3 後ろ」
     // 「6 は 5(+0.05) の 0.3 前」を全体が中心 0 で振動するよう配置したもの。
@@ -207,12 +252,25 @@ function basicFootKeys(role: 'leader' | 'follower', timing: Timing): [FootSpec, 
     // 荷重: 1・3・4=左 / 2・5・7・8=右 → 遊脚の窓は
     //   左 7→1(2拍) / 2→3(1拍) / 5→6(1拍)、右 1→2(1拍) / 3→5(2拍) / 6→7(1拍)
     // 窓が拍を隙間なく敷き詰めるので、どの瞬間も必ずどちらかの足が動いている
-    L = { keys: [[1, -0.05, 2], [3, -0.05 + QUARTER, 1], [6, 0.35, 1]], taps: [], flow: true };
-    R = { keys: [[2, -0.35, 1], [5, 0.05, 2], [7, 0.05 - QUARTER, 1]], taps: [], flow: true };
+    // 1・5 へ向かう歩は 7・3 の直後から窓を取るが 'charge'（ため）— 前半は溜めて
+    // ほとんど動かず、8AND・4AND で放って拍ちょうどに着地する。
+    // 溜めの間は足首も床の近くに残るので、AND の踏み出しがはっきり見える
+    // 踵が下りるのは荷重している足だけ。4 は左（3 で荷重）、8 は右（7 で荷重）
+    L = {
+      keys: [[1, -0.05, 2, 'charge'], [3, -0.05 + QUARTER, 1], [6, 0.35, 1]],
+      taps: [], flow: true, heelDown: [4],
+    };
+    R = {
+      keys: [[2, -0.35, 1], [5, 0.05, 2, 'charge'], [7, 0.05 - QUARTER, 1]],
+      taps: [], flow: true, heelDown: [8],
+    };
   }
   if (role === 'leader') return [L, R];
   const flip = (s: FootSpec): FootSpec =>
-    ({ keys: s.keys.map(([b, z, d]) => [b, -z, d] as FootKey), taps: [...s.taps], flow: s.flow });
+    ({
+      keys: s.keys.map(([b, z, d, e]) => [b, -z, d, e] as FootKey),
+      taps: [...s.taps], flow: s.flow, heelDown: s.heelDown ? [...s.heelDown] : undefined,
+    });
   return [flip(R), flip(L)];   // [左足, 右足]
 }
 
@@ -254,7 +312,8 @@ const LANK = 11, RANK = 12;
 function placeJoints(
   x: number, z: number, yaw: number, hipY: number,
   lookX: number, lookZ: number,
-  feet?: [{ z: number; lift: number }, { z: number; lift: number }],  // [左, 右] 体ローカル
+  // [左, 右] 体ローカル。heel は踵の下り具合（0 = ボール立ち、1 = 踵接地）
+  feet?: [{ z: number; lift: number; heel?: number }, { z: number; lift: number; heel?: number }],
   feetAnchor?: [number, number],  // 足の基準点（省略時は腰）。着地した足は体が揺れても
                                   // ワールドで動かない — 基準を腰にすると足が床を滑る
 ): { r: number[]; j: number[]; v: number[] } {
@@ -276,9 +335,10 @@ function placeJoints(
   if (feet) {
     const [ax, az] = feetAnchor ?? [x, z];
     const cy = Math.cos(yaw), sy = Math.sin(yaw);
-    const putFoot = (idx: number, lx: number, f: { z: number; lift: number }) => {
+    const putFoot = (idx: number, lx: number, f: { z: number; lift: number; heel?: number }) => {
       j[idx * 3] = ax + lx * cy + f.z * sy;
-      j[idx * 3 + 1] = ANKLE_Y + f.lift;
+      // 踵が下りると足首は沈む。接地点（ボール）は動かさないので踏んだ場所は変わらない
+      j[idx * 3 + 1] = ANKLE_Y - HEEL_DROP * (f.heel ?? 0) + f.lift;
       j[idx * 3 + 2] = az - lx * sy + f.z * cy;
       v[idx] = 1;
     };
@@ -323,6 +383,10 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
     : [-0.005, -0.025, -0.175, 0.005, 0.005, 0.025, 0.175, -0.005, -0.005];
   const footL = basicFootKeys('leader', timing);
   const footF = basicFootKeys('follower', timing);
+  // 足の状態に踵を足す。踵が下りると腰もその分だけ沈む＝ためが「上下の動き」になる
+  const foot = (spec: FootSpec, b: number) => ({ ...footAt(spec, b), heel: heelAt(spec, b) });
+  const heelSink = (fs: [FootSpec, FootSpec], b: number) =>
+    HEEL_DROP * Math.max(heelAt(fs[0], b), heelAt(fs[1], b));
   const frames: MotionClip['frames'] = [];
   const n = Math.round(duration * FPS);
   for (let i = 0; i <= n; i++) {
@@ -332,16 +396,16 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
     // On1 は拍ごとに落ち着くので smoothstep。On2 は重心も止めない（速度連続の中割り）
     const sway = timing === 'on1'
       ? SWAY[bi] + (SWAY[bi + 1] - SWAY[bi]) * smoothstep(b - bi)
-      : catmullCyclic(SWAY.slice(0, 8), b);
+      : monotoneCyclic(SWAY.slice(0, 8), b);
     // リーダーは +X を向く。前方 = +X。フォロワーは鏡（後退ブレイク）なので同じ +sway
     const lx = -0.35 + sway, fx = 0.35 + sway;
     frames.push({
       t,
       p: {
-        '0': placeJoints(lx, 0, 90 * D2R, 0.96, fx, 0,
-          [footAt(footL[0], b), footAt(footL[1], b)], [-0.35, 0]),
-        '1': placeJoints(fx, 0, -90 * D2R, 0.92, lx, 0,
-          [footAt(footF[0], b), footAt(footF[1], b)], [0.35, 0]),
+        '0': placeJoints(lx, 0, 90 * D2R, 0.96 - heelSink(footL, b), fx, 0,
+          [foot(footL[0], b), foot(footL[1], b)], [-0.35, 0]),
+        '1': placeJoints(fx, 0, -90 * D2R, 0.92 - heelSink(footF, b), lx, 0,
+          [foot(footF[0], b), foot(footF[1], b)], [0.35, 0]),
       },
     });
   }

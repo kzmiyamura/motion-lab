@@ -72,13 +72,28 @@ describe('手描きベーシックの足運び', () => {
     expect(lR.x - lL.x).toBeLessThan(0.2);
   });
 
-  it('On2: 足が止まらない — どの瞬間もどちらかの足が必ず動いている', () => {
+  // ある拍区間で「左右どちらかの足」が動いた量
+  const moved = (c: ReturnType<typeof buildScriptedBasic>, b0: number, b1: number) => {
+    const d = (idx: number) =>
+      Math.abs(ankle(c, b1 * spb, 0, idx).x - ankle(c, b0 * spb, 0, idx).x);
+    return Math.max(d(LANK), d(RANK));
+  };
+
+  it('On2: 3と7に「ため」がある（着いた直後は溜め、AND で放つ）', () => {
+    const c = buildScriptedBasic('on2');
+    // 3 の直後（ため）より 4AND→5（放ち）のほうがはるかに大きく動く
+    expect(moved(c, 4.5, 5)).toBeGreaterThan(moved(c, 3, 3.5) * 5);
+    // 7 の直後（ため）より 8AND→1（放ち）のほうがはるかに大きく動く
+    // 8AND→1 はループを跨ぐので、同じ位相の 0.5→1 で見る
+    expect(moved(c, 0.5, 1)).toBeGreaterThan(moved(c, 7, 7.5) * 5);
+  });
+
+  it('On2: ため以外は足が止まらない（どちらかの足が必ず動いている）', () => {
     const c = buildScriptedBasic('on2');
     for (let b = 0; b < 8; b += 0.25) {
-      const l0 = ankle(c, b * spb, 0, LANK).x, l1 = ankle(c, (b + 0.25) * spb, 0, LANK).x;
-      const r0 = ankle(c, b * spb, 0, RANK).x, r1 = ankle(c, (b + 0.25) * spb, 0, RANK).x;
-      const moved = Math.max(Math.abs(l1 - l0), Math.abs(r1 - r0));
-      expect(moved, `beat ${b}`).toBeGreaterThan(0.005);
+      // 3→4 と 7→8 は「ため」なので除く。それ以外はどこを切っても動いている
+      if ((b >= 3 && b < 4) || (b >= 7 && b < 8)) continue;
+      expect(moved(c, b, b + 0.25), `beat ${b}`).toBeGreaterThan(0.005);
     }
   });
 
@@ -103,18 +118,71 @@ describe('手描きベーシックの足運び', () => {
     }
   });
 
+  it('On2: ブレイクの底は拍の上（重心が拍から遅れない）', () => {
+    const c = buildScriptedBasic('on2');
+    const hipX = (b: number) => {
+      const f = c.frames.reduce((p, q) =>
+        (Math.abs(q.t - b * spb) < Math.abs(p.t - b * spb) ? q : p));
+      return (f.p['0'].j[7 * 3] + f.p['0'].j[8 * 3]) / 2;   // 腰中点の x
+    };
+    // 2 = 最も後ろ、6 = 最も前。前後 0.4 拍を見ても 2・6 を追い越さない
+    for (const d of [-0.4, -0.2, 0.2, 0.4]) {
+      expect(hipX(2 + d), `2${d}`).toBeGreaterThan(hipX(2) - 1e-9);
+      expect(hipX(6 + d), `6${d}`).toBeLessThan(hipX(6) + 1e-9);
+    }
+  });
+
+  it('On2: 4AND/8AND の歩は他より遅い（それでも 1・5 にぴったり着地）', () => {
+    const c = buildScriptedBasic('on2');
+    // 1 へ向かう左足は 7 から窓を取るが、溜めている間は床の近く。8AND で浮いて 1 で着地
+    expect(ankle(c, 7.4 * spb, 0, LANK).y).toBeLessThan(0.13);      // 7 直後は溜め（床の近く）
+    expect(ankle(c, 8.5 * spb, 0, LANK).y).toBeGreaterThan(0.13);   // 8AND で放って浮く
+    expect(ankle(c, 1 * spb, 0, LANK).y).toBeLessThan(0.13);        // 1 でぴったり接地
+    expect(ankle(c, 3.4 * spb, 0, RANK).y).toBeLessThan(0.13);      // 3 直後は溜め
+    expect(ankle(c, 4.5 * spb, 0, RANK).y).toBeGreaterThan(0.13);   // 4AND で放って浮く
+    expect(ankle(c, 5 * spb, 0, RANK).y).toBeLessThan(0.13);        // 5 でぴったり接地
+    // 2・6 のブレイクは 1 拍の歩 = AND の歩より速い
+    expect(ankle(c, 1.5 * spb, 0, RANK).y).toBeGreaterThan(0.13);
+    expect(ankle(c, 2 * spb, 0, RANK).y).toBeLessThan(0.13);
+  });
+
+  it('On2: 1235 67 はボール立ち・踵が下りるのは 4 と 8 だけ', () => {
+    const c = buildScriptedBasic('on2');
+    // 4 は左足（3 で荷重）、8 は右足（7 で荷重）の踵が下りる = 足首が沈む
+    const ballL = ankle(c, 3 * spb, 0, LANK).y, heelL = ankle(c, 4 * spb, 0, LANK).y;
+    expect(heelL).toBeLessThan(ballL - 0.02);
+    const ballR = ankle(c, 7 * spb, 0, RANK).y, heelR = ankle(c, 8 * spb, 0, RANK).y;
+    expect(heelR).toBeLessThan(ballR - 0.02);
+    // 1・2・3・5・6・7 は荷重足もボールのまま（踵は下りない）
+    for (const [b, idx] of [[1, LANK], [3, LANK], [2, RANK], [5, RANK], [7, RANK]] as const) {
+      expect(ankle(c, b * spb, 0, idx).y, `beat ${b}`).toBeGreaterThan(0.11);
+    }
+  });
+
+  it('On2: ためは「止まり」ではなく踵の上下（3→4 で腰が沈み 4AND で戻る）', () => {
+    const c = buildScriptedBasic('on2');
+    const hipY = (b: number) => {
+      const f = c.frames.reduce((p, q) =>
+        (Math.abs(q.t - b * spb) < Math.abs(p.t - b * spb) ? q : p));
+      return (f.p['0'].j[7 * 3 + 1] + f.p['0'].j[8 * 3 + 1]) / 2;
+    };
+    expect(hipY(4)).toBeLessThan(hipY(3) - 0.02);    // 3→4 で踵が下りて沈む
+    expect(hipY(4.5)).toBeGreaterThan(hipY(4));      // 4AND で踵が抜けて戻る
+    expect(hipY(8)).toBeLessThan(hipY(7) - 0.02);    // 7→8 も同じ
+  });
+
   it('移動中だけ足首が浮き、着地中は接地している', () => {
     const c = buildScriptedBasic('on1');
     const mid = ankle(c, 0.83 * spb, 0, LANK);  // カウント1へ移動中
     const planted = ankle(c, 2 * spb, 0, LANK); // カウント2（着地保持）
-    expect(mid.y).toBeGreaterThan(0.1);
-    expect(planted.y).toBeLessThan(0.1);
+    expect(mid.y).toBeGreaterThan(0.13);
+    expect(planted.y).toBeLessThan(0.13);
   });
 
   it('休符（4拍目）は両足とも動いていない', () => {
     const c = buildScriptedBasic('on1');
     const a = ankle(c, 3.5 * spb, 0, LANK), b = ankle(c, 4.4 * spb, 0, LANK);
     expect(Math.abs(a.x - b.x)).toBeLessThan(0.02);
-    expect(a.y).toBeLessThan(0.1);
+    expect(a.y).toBeLessThan(0.13);
   });
 });

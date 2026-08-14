@@ -360,7 +360,10 @@ function buildSegments(): ArmSegment[] {
   const half = (o: number) => [
     seg(o + 0, o + 9, 'hold', 'free'),
     seg(o + 9, o + 10, 'prep', 'free'),
-    seg(o + 10, o + 13, 'pass', 'back_support'),
+    // 通り抜けで背中を支える動き（back_support）はユーザー却下 —
+    // リーダーが途中で手を挙げるように見えるため。腕は終始
+    // 「リーダー左手 × フォロワー右手」の片手ホールドだけにする
+    seg(o + 10, o + 13, 'pass', 'free'),
     seg(o + 13, o + 16, 'close', 'free'),
   ];
   return [...half(0), ...half(16)];

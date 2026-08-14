@@ -348,6 +348,106 @@ function placeJoints(
   return { r: [], j, v };
 }
 
+/**
+ * placeJoints のワールド足版。CBL は体が回りながら進むので、足は体ローカルではなく
+ * 「踏んだワールド座標」で持つ（回っても進んでも床を滑らない）。
+ */
+function placeJointsWorld(
+  x: number, z: number, yaw: number, hipY: number,
+  lookX: number, lookZ: number,
+  feet: [{ x: number; z: number; lift: number; heel: number },
+    { x: number; z: number; lift: number; heel: number }],
+): { r: number[]; j: number[]; v: number[] } {
+  const out = placeJoints(x, z, yaw, hipY, lookX, lookZ);
+  const put = (idx: number, f: { x: number; z: number; lift: number; heel: number }) => {
+    out.j[idx * 3] = f.x;
+    out.j[idx * 3 + 1] = ANKLE_Y - HEEL_DROP * f.heel + f.lift;
+    out.j[idx * 3 + 2] = f.z;
+    out.v[idx] = 1;
+  };
+  put(LANK, feet[0]);
+  put(RANK, feet[1]);
+  return out;
+}
+
+// ── CBL の足 ─────────────────────────────────────────────
+// 体（腰の位置と向き）は既存のキーポーズのまま **一切触らない**。
+// 各カウントで荷重する足をその瞬間の腰の真下（スタンス幅ぶん横）に置き、
+// 着地したらワールドで固定する。ボール立ち・4/8 の踵・ため・遊脚が拍間を
+// 埋める仕組みは、合格済みのベーシック On2 からそのまま引き継ぐ。
+//
+// clipBeat 1 = カウント1（KEY_L[1] が 1 拍目のブレイク）。8拍ごとに繰り返す。
+const CBL_FOOT_SPEC = [
+  { count: 1, foot: 'L' as const, dur: 2, charge: true },   // 8AND から放って着地
+  { count: 2, foot: 'R' as const, dur: 1 },
+  { count: 3, foot: 'L' as const, dur: 1 },
+  { count: 5, foot: 'R' as const, dur: 2, charge: true },   // 4AND から放って着地
+  { count: 6, foot: 'L' as const, dur: 1 },
+  { count: 7, foot: 'R' as const, dur: 1 },
+];
+// 踵が下りるカウント（荷重している足だけ）。4 = 左、8 = 右
+const CBL_HEEL: Record<'L' | 'R', number> = { L: 4, R: 8 };
+
+type CblLand = {
+  beat: number; foot: 'L' | 'R'; x: number; z: number; dur: number; charge: boolean;
+};
+
+/** 体のキーポーズから、各カウントの「踏む場所」をワールドで出す */
+function cblLandings(keys: [number, number, number][]): CblLand[] {
+  const out: CblLand[] = [];
+  for (let bar = 0; bar < LOOP_BEATS / 8; bar++) {
+    for (const s of CBL_FOOT_SPEC) {
+      const beat = s.count + bar * 8;
+      const [hx, hz, yaw] = poseAt(keys, beat);
+      const lat = s.foot === 'L' ? FOOT_LATERAL : -FOOT_LATERAL;
+      out.push({
+        beat, foot: s.foot,
+        x: hx + lat * Math.cos(yaw),
+        z: hz - lat * Math.sin(yaw),
+        dur: s.dur, charge: !!s.charge,
+      });
+    }
+  }
+  return out.sort((a, b) => a.beat - b.beat);
+}
+
+/** ワールドでの足首。着地したらその場に固定、移動中だけ前の着地点から運ぶ */
+function cblFootAt(lands: CblLand[], foot: 'L' | 'R', beat: number) {
+  const mine = lands.filter((f) => f.foot === foot);
+  const n = mine.length;
+  for (let i = 0; i < n; i++) {
+    const f = mine[i], prev = mine[(i - 1 + n) % n];
+    for (const off of [0, LOOP_BEATS, -LOOP_BEATS]) {
+      const b = beat + off;
+      if (b < f.beat - f.dur || b > f.beat) continue;
+      const s = smoothstep((b - (f.beat - f.dur)) / f.dur);
+      const p = f.charge ? Math.pow(s, CHARGE_POW) : s;   // ため → AND で放つ
+      const dist = Math.hypot(f.x - prev.x, f.z - prev.z);
+      return {
+        x: prev.x + (f.x - prev.x) * p,
+        z: prev.z + (f.z - prev.z) * p,
+        lift: Math.sin(p * Math.PI) * STEP_LIFT * Math.min(1, dist / FULL_STEP),
+      };
+    }
+  }
+  let cur = mine[n - 1];
+  for (const f of mine) if (beat >= f.beat) cur = f;
+  return { x: cur.x, z: cur.z, lift: 0 };
+}
+
+/** 踵の下り具合。1235 67 はボール立ち、4・8 だけ荷重足の踵が下りる */
+function cblHeelAt(foot: 'L' | 'R', beat: number): number {
+  const c = CBL_HEEL[foot];
+  const phase = ((beat % 8) + 8) % 8;      // 0 = カウント8、1 = カウント1 …
+  let h = 0;
+  for (const off of [0, 8, -8]) {
+    const b = phase + off;
+    if (b > c - HEEL_FALL && b <= c) h = Math.max(h, smoothstep((b - (c - HEEL_FALL)) / HEEL_FALL));
+    if (b > c && b < c + HEEL_RISE) h = Math.max(h, 1 - smoothstep((b - c) / HEEL_RISE));
+  }
+  return h;
+}
+
 /** ホールドは常時「リーダー左手 × フォロワー右手」の片手。CBL の pass で背中を支える */
 function buildSegments(): ArmSegment[] {
   const hold = { leader: 'L', follower: 'R' } as const;
@@ -438,16 +538,22 @@ export function buildScriptedCBL(): MotionClip {
   const duration = LOOP_BEATS * SPB;
   const frames: MotionClip['frames'] = [];
   const n = Math.round(duration * FPS);
+  // 男の足だけを振付として焼き込む（体は既存のキーポーズのまま）。女は次の段階
+  const landsL = cblLandings(KEY_L);
   for (let i = 0; i <= n; i++) {
     const t = i / FPS;
     const beat = t / SPB;
     const [lx, lz, lyaw] = poseAt(KEY_L, beat);
     const [fx, fz, fyaw] = poseAt(KEY_F, beat);
     const hy = hipYAt(beat);
+    const heelL = cblHeelAt('L', beat), heelR = cblHeelAt('R', beat);
     frames.push({
       t,
       p: {
-        '0': placeJoints(lx, lz, lyaw, hy, fx, fz),
+        '0': placeJointsWorld(lx, lz, lyaw, hy - HEEL_DROP * Math.max(heelL, heelR), fx, fz, [
+          { ...cblFootAt(landsL, 'L', beat), heel: heelL },
+          { ...cblFootAt(landsL, 'R', beat), heel: heelR },
+        ]),
         '1': placeJoints(fx, fz, fyaw, hy - 0.04, lx, lz),
       },
     });

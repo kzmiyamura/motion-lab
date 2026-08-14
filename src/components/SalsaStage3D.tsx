@@ -617,8 +617,8 @@ export function SalsaStage3D() {
         <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedBasic('on2'), 'ベーシック On2')}>
           ✍️ ベーシック On2
         </button>
-        <button className={styles.btn} onClick={() => loadScripted(buildScriptedCBL, '手描きCBL')}>
-          ✍️ 手描きCBL
+        <button className={styles.btn} onClick={() => loadScripted(buildScriptedCBL, 'CBL On1')}>
+          ✍️ CBL On1
         </button>
         <button
           className={`${styles.btn} ${clipMode === 'mocap' ? styles.primary : ''}`}

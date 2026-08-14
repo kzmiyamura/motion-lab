@@ -318,7 +318,7 @@ const wrapPi = (a: number) => {
  * 1人ぶんの関節を置く。buildGuide が読むのは腰（位置と向き）・肩（ねじれ）・
  * 耳（頭の向き）だけなので、それ以外は v=0 のまま — 腕と脚はキーポーズ側が描く。
  */
-const LANK = 11, RANK = 12;
+const LANK = 11, RANK = 12, LTOE = 17, RTOE = 18;
 
 function placeJoints(
   x: number, z: number, yaw: number, hipY: number,
@@ -363,21 +363,29 @@ function placeJoints(
  * placeJoints のワールド足版。CBL は体が回りながら進むので、足は体ローカルではなく
  * 「踏んだワールド座標」で持つ（回っても進んでも床を滑らない）。
  */
+type WorldFoot = { x: number; z: number; lift: number; heel: number; toe?: number };
 function placeJointsWorld(
   x: number, z: number, yaw: number, hipY: number,
   lookX: number, lookZ: number,
-  feet: [{ x: number; z: number; lift: number; heel: number },
-    { x: number; z: number; lift: number; heel: number }],
+  feet: [WorldFoot, WorldFoot],
 ): { r: number[]; j: number[]; v: number[] } {
   const out = placeJoints(x, z, yaw, hipY, lookX, lookZ);
-  const put = (idx: number, f: { x: number; z: number; lift: number; heel: number }) => {
+  const put = (idx: number, toeIdx: number, f: WorldFoot) => {
     out.j[idx * 3] = f.x;
     out.j[idx * 3 + 1] = ANKLE_Y - HEEL_DROP * f.heel + f.lift;
     out.j[idx * 3 + 2] = f.z;
     out.v[idx] = 1;
+    // つま先。書くと CoupleFigure が footYaw として拾い、足の向きが体と別に決まる。
+    // toe を渡さない（= On1）ときは書かないので、これまでの見た目は変わらない
+    if (f.toe !== undefined) {
+      out.j[toeIdx * 3] = f.x + Math.sin(f.toe) * CBL_TOE_LEN;
+      out.j[toeIdx * 3 + 1] = out.j[idx * 3 + 1] * 0.6;
+      out.j[toeIdx * 3 + 2] = f.z + Math.cos(f.toe) * CBL_TOE_LEN;
+      out.v[toeIdx] = 1;
+    }
   };
-  put(LANK, feet[0]);
-  put(RANK, feet[1]);
+  put(LANK, LTOE, feet[0]);
+  put(RANK, RTOE, feet[1]);
   return out;
 }
 
@@ -398,6 +406,34 @@ const CBL_FOOT_SPEC = [
   { count: 6, foot: 'L' as const, dur: 1, fwd: 0.12 },
   { count: 7, foot: 'R' as const, dur: 1, fwd: 0 },
 ];
+// On2 の踏み出し量は **合格したベーシック On2 の着地位置そのまま**（ユーザー指摘）。
+// 腰からの相対として、ベーシックの体ローカル z をそのまま使う:
+//   2 = 後退ブレイク（右足を -0.35）、6 = 前進ブレイク（左足を +0.35）。
+// 【注意】SWAY（重心の揺れ）を差し引いてはいけない。ベーシックでは腰も一緒に
+// 揺れるので足の振れ幅は 2→6 で 0.70 になる。差し引くと半分になり、
+// 「歩幅が狭すぎる」とユーザーに指摘された（2026-08-15）
+// On2 は体のキーポーズを **5拍** 後ろへずらす。1拍ずらしでは腰が「2で前・6で後ろ」
+// （On1 のブレイク）のまま足だけ On2 になり、腰と足が逆に動いて歩幅が半分に潰れた。
+// 5拍ずらすと腰も「2で後退・6で前進」になってベーシック On2 と一致し、
+// CBL の送り出し（前進ブレイク＝合図）がカウント **6** に来る
+// —「On1 の1が On2 では6」というユーザーの説明どおり
+const CBL_ON2_SHIFT = 5;
+const CBL_ON2_FWD: Record<number, number> = {
+  1: -0.05, 2: -0.35, 3: 0.01, 5: 0.05, 6: 0.35, 7: -0.01,
+};
+// カウント7（その場の踏み直し）は、ほとんど動かないので既定の按分では足が上がらず
+// 「踏んでいる感じがしない」。7 だけ最低限の浮きを与え、つま先を外へ開く
+// （ユーザー指摘 2026-08-15: もう少し足を上げて、角度も付ける）
+const CBL_ON2_LIFT_MIN: Record<number, number> = { 7: 0.75 };
+const CBL_ON2_TOE_OUT: Record<number, number> = { 7: 32 };   // つま先の外開き（度）
+const CBL_TOE_OUT_BASE = 8;    // 常時の自然な外開き
+const CBL_TOE_LEN = 0.16;      // 足首からつま先までの距離
+const CBL_FOOT_SPEC_ON2 = CBL_FOOT_SPEC.map((s) => ({
+  ...s,
+  fwd: CBL_ON2_FWD[s.count],
+  liftMin: CBL_ON2_LIFT_MIN[s.count] ?? 0,
+  toeOut: CBL_ON2_TOE_OUT[s.count] ?? CBL_TOE_OUT_BASE,
+}));
 // CBL のスタンス幅。ベーシックの 0.09 では狭いというユーザー指摘で広げた
 const CBL_LATERAL = 0.13;
 // 踵が下りるカウント（荷重している足だけ）。4 = 左、8 = 右
@@ -405,22 +441,47 @@ const CBL_HEEL: Record<'L' | 'R', number> = { L: 4, R: 8 };
 
 type CblLand = {
   beat: number; foot: 'L' | 'R'; x: number; z: number; dur: number; charge: boolean;
+  // liftMin: 移動距離が短くても最低これだけは浮く（0〜1、STEP_LIFT に対する割合）
+  // toe: つま先の向き（ワールド・ラジアン）。undefined なら書かない（＝体の向きに従う）
+  liftMin: number; toe?: number;
 };
 
-/** 体のキーポーズから、各カウントの「踏む場所」をワールドで出す */
-function cblLandings(keys: [number, number, number][]): CblLand[] {
+/**
+ * 体のキーポーズから、各カウントの「踏む場所」をワールドで出す。
+ * On2 では体のキーポーズを CBL_ON2_SHIFT 拍だけ後ろへ動かす
+ */
+function cblLandings(keys: [number, number, number][], timing: Timing = 'on1'): CblLand[] {
   const out: CblLand[] = [];
+  const shift = timing === 'on2' ? CBL_ON2_SHIFT : 0;
+  const spec = timing === 'on2' ? CBL_FOOT_SPEC_ON2 : CBL_FOOT_SPEC;
   for (let bar = 0; bar < LOOP_BEATS / 8; bar++) {
-    for (const s of CBL_FOOT_SPEC) {
+    // On2 の基準は「腰の真下」ではなく **その小節の腰の平均位置**。
+    // ベーシックでは重心自身が ±0.175 揺れ、足はそのぶんも含めて ±0.35 に着く。
+    // 揺れている腰を基準にすると同じ数字でも歩幅が縮む（＝二重に相殺される）ので、
+    // 揺れの中心を基準にして、ベーシック On2 の着地位置をそのまま使う
+    let cx = 0, cz = 0;
+    if (timing === 'on2') {
+      for (let b = 0; b < 8; b++) {
+        const [px, pz] = poseAt(keys, bar * 8 + b - shift);
+        cx += px / 8; cz += pz / 8;
+      }
+    }
+    for (const s of spec) {
       const beat = s.count + bar * 8;
-      const [hx, hz, yaw] = poseAt(keys, beat);
+      const [hx, hz, yaw] = poseAt(keys, beat - shift);
       const lat = s.foot === 'L' ? CBL_LATERAL : -CBL_LATERAL;
+      const bx = timing === 'on2' ? cx : hx;
+      const bz = timing === 'on2' ? cz : hz;
+      // つま先は体の向きから外へ開く（左足は左へ、右足は右へ）
+      const out2 = timing === 'on2' ? (s as typeof s & { liftMin: number; toeOut: number }) : null;
       out.push({
         beat, foot: s.foot,
-        // 腰の真下（スタンス幅ぶん横）＋ 踏み込みぶん前
-        x: hx + lat * Math.cos(yaw) + s.fwd * Math.sin(yaw),
-        z: hz - lat * Math.sin(yaw) + s.fwd * Math.cos(yaw),
+        // 基準点（スタンス幅ぶん横）＋ 踏み出しぶん前
+        x: bx + lat * Math.cos(yaw) + s.fwd * Math.sin(yaw),
+        z: bz - lat * Math.sin(yaw) + s.fwd * Math.cos(yaw),
         dur: s.dur, charge: !!s.charge,
+        liftMin: out2?.liftMin ?? 0,
+        toe: out2 ? yaw + (s.foot === 'L' ? -1 : 1) * out2.toeOut * D2R : undefined,
       });
     }
   }
@@ -439,16 +500,20 @@ function cblFootAt(lands: CblLand[], foot: 'L' | 'R', beat: number) {
       const s = smoothstep((b - (f.beat - f.dur)) / f.dur);
       const p = f.charge ? Math.pow(s, CHARGE_POW) : s;   // ため → AND で放つ
       const dist = Math.hypot(f.x - prev.x, f.z - prev.z);
+      // 距離が短い歩でも liftMin ぶんは浮かせる（その場の踏み直しが「踏んで見える」）
+      const amp = Math.max(f.liftMin, Math.min(1, dist / FULL_STEP));
       return {
         x: prev.x + (f.x - prev.x) * p,
         z: prev.z + (f.z - prev.z) * p,
-        lift: Math.sin(p * Math.PI) * STEP_LIFT * Math.min(1, dist / FULL_STEP),
+        lift: Math.sin(p * Math.PI) * STEP_LIFT * amp,
+        toe: f.toe === undefined || prev.toe === undefined
+          ? undefined : prev.toe + wrapPi(f.toe - prev.toe) * p,
       };
     }
   }
   let cur = mine[n - 1];
   for (const f of mine) if (beat >= f.beat) cur = f;
-  return { x: cur.x, z: cur.z, lift: 0 };
+  return { x: cur.x, z: cur.z, lift: 0, toe: cur.toe };
 }
 
 /** 踵の下り具合。1235 67 はボール立ち、4・8 だけ荷重足の踵が下りる */
@@ -465,11 +530,14 @@ function cblHeelAt(foot: 'L' | 'R', beat: number): number {
 }
 
 /** ホールドは常時「リーダー左手 × フォロワー右手」の片手。CBL の pass で背中を支える */
-function buildSegments(): ArmSegment[] {
+function buildSegments(shift = 0): ArmSegment[] {
   const hold = { leader: 'L', follower: 'R' } as const;
   const free = { L: 'free', R: 'free' } as const;
   const seg = (b0: number, b1: number, phase: string, leaderR: 'free' | 'back_support'): ArmSegment => ({
-    t0: b0 * SPB, t1: b1 * SPB, phase, hold,
+    // On2 は体のキーポーズを 1 拍ずらすので、腕の局面も同じだけ後ろへ動かす
+    // （先頭は 0 のまま、末尾はループ長で止める → 隙間も食み出しも作らない）
+    t0: (b0 === 0 ? 0 : b0 + shift) * SPB,
+    t1: Math.min(b1 + shift, LOOP_BEATS) * SPB, phase, hold,
     leader: { L: 'hold', R: leaderR }, follower: { ...free, R: 'hold' },
     confidence: 'observed',
   });
@@ -549,19 +617,29 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
   };
 }
 
-/** 手描き CBL クリップを合成する。動画は使わない */
-export function buildScriptedCBL(): MotionClip {
+/**
+ * 手描き CBL クリップを合成する。動画は使わない。
+ *
+ * On2 は **On1 の拍の当たり方だけ**を変えたもの（ユーザー指示 2026-08-14）:
+ *   体のキーポーズをまるごと 5 拍後ろへずらす → 前進ブレイクが 1 から **6** へ、
+ *   後退ブレイクが 5 から **2** へ、CBL の合図（前進ブレイク）が 9 から **14
+ *   （＝カウント6）** へ、女の通り抜けと旋回が 13-15 から 18-20 へ移る。
+ *   足の順番・ため・踵・片手ホールドは On1 のまま。
+ *   立ち位置と通す側（女が男を追い越す向き）も On1 と同一で、触っていない。
+ */
+export function buildScriptedCBL(timing: Timing = 'on1'): MotionClip {
   const duration = LOOP_BEATS * SPB;
   const frames: MotionClip['frames'] = [];
   const n = Math.round(duration * FPS);
+  const shift = timing === 'on2' ? CBL_ON2_SHIFT : 0;
   // 男の足だけを振付として焼き込む（体は既存のキーポーズのまま）。女は次の段階
-  const landsL = cblLandings(KEY_L);
+  const landsL = cblLandings(KEY_L, timing);
   for (let i = 0; i <= n; i++) {
     const t = i / FPS;
     const beat = t / SPB;
-    const [lx, lz, lyaw] = poseAt(KEY_L, beat);
-    const [fx, fz, fyaw] = poseAt(KEY_F, beat);
-    const hy = hipYAt(beat);
+    const [lx, lz, lyaw] = poseAt(KEY_L, beat - shift);
+    const [fx, fz, fyaw] = poseAt(KEY_F, beat - shift);
+    const hy = hipYAt(beat - shift);
     const heelL = cblHeelAt('L', beat), heelR = cblHeelAt('R', beat);
     frames.push({
       t,
@@ -581,11 +659,11 @@ export function buildScriptedCBL(): MotionClip {
     leaderPid: 0,
     joints: new Array(N_JOINTS).fill('') as string[],
     events: [
-      { t: 9 * SPB, type: 'CBL', by: 'pair' },
-      { t: 25 * SPB, type: 'CBL', by: 'pair' },
+      { t: (9 + shift) * SPB, type: 'CBL', by: 'pair' },
+      { t: (25 + shift) * SPB, type: 'CBL', by: 'pair' },
     ],
     frames,
     beatGrid: { bpm: BPM, firstBeatSec: 0, beatIntervalSec: SPB, confidence: 1 },
-    armTimeline: { version: 1, source: 'scripted', segments: buildSegments() },
+    armTimeline: { version: 1, source: 'scripted', segments: buildSegments(shift) },
   };
 }

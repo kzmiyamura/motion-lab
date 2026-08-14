@@ -50,11 +50,14 @@ export function PhotoHead({ avatar, color }: { avatar: FaceAvatar; color: string
 
   return (
     <>
-      <mesh geometry={geo} position={[0, 0, 0.03]}>
+      {/* 顔メッシュは landmark 由来の奥行きが ±1.5cm 程度しかない。後頭部の球
+          （半径 0.105・中心 z=-0.05）は前面が z=+0.055 まで来るので、顔を z=+0.03 に
+          置くと球の中に埋まって見えなくなる。顔を球の前面より前へ出す */}
+      <mesh geometry={geo} position={[0, 0, 0.075]}>
         {/* 三角形の向きは分割の都合で揃わないので両面で描く */}
         <meshStandardMaterial map={tex} roughness={0.85} metalness={0} side={THREE.DoubleSide} />
       </mesh>
-      <mesh position={[0, 0, -0.03]}>
+      <mesh position={[0, 0, -0.05]}>
         <sphereGeometry args={[0.105, 20, 16]} />
         <meshStandardMaterial color={color} roughness={0.6} metalness={0.05} />
       </mesh>

@@ -6,6 +6,7 @@ import { buildScriptedCBL, buildScriptedBasic } from '../engine/scriptedClip';
 import { CoupleFigure } from './CoupleFigure';
 import { detectFace, loadFaces, saveFaces, EMPTY_FACES, type FaceSlots } from '../engine/faceAvatar';
 import { SAMPLE_AVATARS } from './AvatarHeads';
+import { SAMPLE_FACES } from '../engine/sampleFaces';
 import styles from './SalsaStage3D.module.css';
 
 // 動画から復元した3Dモーション。server/analysis/prototype_lift3d.py 系のパイプラインが書き出す
@@ -617,8 +618,11 @@ export function SalsaStage3D() {
         <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedBasic('on2'), 'ベーシック On2')}>
           ✍️ ベーシック On2
         </button>
-        <button className={styles.btn} onClick={() => loadScripted(buildScriptedCBL, 'CBL On1')}>
+        <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedCBL('on1'), 'CBL On1')}>
           ✍️ CBL On1
+        </button>
+        <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedCBL('on2'), 'CBL On2')}>
+          ✍️ CBL On2
         </button>
         <button
           className={`${styles.btn} ${clipMode === 'mocap' ? styles.primary : ''}`}
@@ -669,9 +673,17 @@ export function SalsaStage3D() {
                 value={headChoice(slot)}
                 onChange={(e) => onHeadChoice(slot, e.target.value)}
               >
-                {SAMPLE_AVATARS.map((a) => (
-                  <option key={a.id} value={a.id}>{a.label}</option>
-                ))}
+                {/* 解析済み動画から取った顔（同梱）。作り物の頭より人に見える */}
+                <optgroup label="動画から取った顔">
+                  {SAMPLE_FACES.map((f) => (
+                    <option key={f.id} value={f.id}>{f.label}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="作り物の頭">
+                  {SAMPLE_AVATARS.map((a) => (
+                    <option key={a.id} value={a.id}>{a.label}</option>
+                  ))}
+                </optgroup>
                 <option value="">顔なし（色だけ）</option>
                 {faces[slot] && <option value="photo">写真から作った顔</option>}
               </select>

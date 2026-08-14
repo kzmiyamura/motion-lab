@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildScriptedBasic } from '../engine/scriptedClip';
+import { buildScriptedBasic, buildScriptedCBL } from '../engine/scriptedClip';
 
 // 関節インデックス（MocapFigure の J と同じ）
 const LANK = 11, RANK = 12;
@@ -184,5 +184,102 @@ describe('手描きベーシックの足運び', () => {
     const a = ankle(c, 3.5 * spb, 0, LANK), b = ankle(c, 4.4 * spb, 0, LANK);
     expect(Math.abs(a.x - b.x)).toBeLessThan(0.02);
     expect(a.y).toBeLessThan(0.13);
+  });
+});
+
+describe('手描き CBL の On1 / On2', () => {
+  const spb = 60 / 170;
+  const on1 = buildScriptedCBL('on1');
+  const on2 = buildScriptedCBL('on2');
+  const hipX = (c: typeof on1, b: number, pid: 0 | 1) => {
+    const f = c.frames.reduce((p, q) =>
+      (Math.abs(q.t - b * spb) < Math.abs(p.t - b * spb) ? q : p));
+    const p = f.p[String(pid)];
+    return (p.j[7 * 3] + p.j[8 * 3]) / 2;
+  };
+
+  it('On1 は合格した振付のまま（引数なしでも同じ）', () => {
+    const def = buildScriptedCBL();
+    expect(def.frames.length).toBe(on1.frames.length);
+    for (const b of [0, 1, 5, 9, 13, 16, 25]) {
+      expect(hipX(def, b, 0)).toBeCloseTo(hipX(on1, b, 0), 10);
+      expect(hipX(def, b, 1)).toBeCloseTo(hipX(on1, b, 1), 10);
+    }
+  });
+
+  const SHIFT = 5;   // On2 は On1 を 5 拍後ろへずらしたもの
+
+  it('On2 は On1 を 5 拍後ろへずらしたもの', () => {
+    for (const b of [6, 10, 14, 20]) {
+      // フレーム量子化（30fps）ぶんの差は許す
+      expect(hipX(on2, b, 0)).toBeCloseTo(hipX(on1, b - SHIFT, 0), 2);
+      expect(hipX(on2, b, 1)).toBeCloseTo(hipX(on1, b - SHIFT, 1), 2);
+    }
+  });
+
+  it('On2 のブレイクは 2 と 6（On1 は 1 と 5）', () => {
+    // 男の前進ブレイク = 腰がいちばん前（+X）に出る拍。On1 は 1、On2 は 6
+    expect(hipX(on1, 1, 0)).toBeGreaterThan(hipX(on1, 2, 0));
+    expect(hipX(on2, 6, 0)).toBeGreaterThan(hipX(on2, 7, 0));
+    expect(hipX(on2, 6, 0)).toBeGreaterThan(hipX(on2, 5, 0));
+    // 後退ブレイク = いちばん後ろ（-X）。On1 は 5、On2 は 10（＝次の小節の2）
+    expect(hipX(on1, 5, 0)).toBeLessThan(hipX(on1, 4, 0));
+    expect(hipX(on2, 10, 0)).toBeLessThan(hipX(on2, 9, 0));
+    expect(hipX(on2, 10, 0)).toBeLessThan(hipX(on2, 11, 0));
+  });
+
+  it('On2 でも席は交換せず、女だけが男を追い越す', () => {
+    // 男は CBL の前後で同じ立ち位置に戻る（PIVOT_X = -0.30 付近）
+    expect(hipX(on2, SHIFT, 0)).toBeCloseTo(hipX(on2, 16 + SHIFT, 0), 1);
+    // 女は男を追い越して反対側へ抜ける
+    expect(hipX(on2, SHIFT, 1)).toBeGreaterThan(hipX(on2, SHIFT, 0));
+    expect(hipX(on2, 16 + SHIFT, 1)).toBeLessThan(hipX(on2, 16 + SHIFT, 0));
+  });
+
+  it('On2 の歩幅はベーシック On2 と同じ（6は左足で前・2は右足で後ろ）', () => {
+    // 男は 6（前進ブレイク）と 10（＝次の小節の2・後退ブレイク）で +X を向いている
+    const basic = buildScriptedBasic('on2');
+    const rel = (c: typeof on1, b: number, idx: number) => ankle(c, b * spb, 0, idx).x - hipX(c, b, 0);
+    // 歩幅（後退ブレイクの右足 → 前進ブレイクの左足）がベーシック On2 と同じであること
+    expect(ankle(on2, 6 * spb, 0, LANK).x - ankle(on2, 10 * spb, 0, RANK).x)
+      .toBeCloseTo(ankle(basic, 6 * spb, 0, LANK).x - ankle(basic, 2 * spb, 0, RANK).x, 1);
+    // 腰から見た前後もベーシックと同程度（ベーシックは重心が ±0.175 揺れるので rel も ±0.175）
+    // CBL の腰の揺れはベーシックとぴったり同じではないので 8cm まで許す
+    expect(Math.abs(rel(on2, 6, LANK) - rel(basic, 6, LANK))).toBeLessThan(0.08);
+    expect(Math.abs(rel(on2, 10, RANK) - rel(basic, 2, RANK))).toBeLessThan(0.08);
+    expect(rel(on2, 6, LANK)).toBeGreaterThan(0.15);    // 6: 左足が腰よりはっきり前
+    expect(rel(on2, 10, RANK)).toBeLessThan(-0.15);     // 2: 右足がはっきり後ろ
+    // 6 では左足が右足より前、2 では右足が左足より後ろ
+    expect(ankle(on2, 6 * spb, 0, LANK).x).toBeGreaterThan(ankle(on2, 6 * spb, 0, RANK).x);
+    expect(ankle(on2, 10 * spb, 0, RANK).x).toBeLessThan(ankle(on2, 10 * spb, 0, LANK).x);
+  });
+
+  it('On2 のカウント7（その場の踏み直し）は足が上がり、つま先が外を向く', () => {
+    const LTOE = 17, RTOE = 18;
+    // 男のカウント7 = 右足。2小節目の 15 拍目で見る（着地の 0.5 拍前が最高点）
+    const mid = ankle(on2, 14.5 * spb, 0, RANK);
+    const land = ankle(on2, 15 * spb, 0, RANK);
+    expect(mid.y - land.y).toBeGreaterThan(0.03);   // 3cm 以上は浮く
+    // つま先が体の向きから外（右足なので右）へ開いている
+    const toe = ankle(on2, 15 * spb, 0, RTOE);
+    expect(toe.v).toBe(1);
+    const ang = Math.atan2(toe.x - land.x, toe.z - land.z);
+    const hipAng = Math.PI / 2;   // 2小節目の 15 拍目で男は概ね +X を向いている
+    expect(ang - hipAng).toBeGreaterThan(0.3);      // 17° 以上外向き
+    // On1 はつま先を書かない = これまでの見た目のまま
+    expect(ankle(on1, 15 * spb, 0, RTOE).v).toBe(0);
+    expect(ankle(on1, 15 * spb, 0, LTOE).v).toBe(0);
+  });
+
+  it('On2 でも着地した足はワールドで滑らない', () => {
+    for (const idx of [LANK, RANK]) {
+      // 荷重中（着地の直後 0.05〜0.45 拍）は動かない。左=1,3,6 右=2,5,7（2小節目で見る）
+      const beats = idx === LANK ? [9, 11, 14] : [10, 13, 15];
+      for (const b of beats) {
+        const a = ankle(on2, (b + 0.05) * spb, 0, idx);
+        const d = ankle(on2, (b + 0.45) * spb, 0, idx);
+        expect(Math.hypot(a.x - d.x, a.z - d.z), `beat ${b}`).toBeLessThan(0.01);
+      }
+    }
   });
 });

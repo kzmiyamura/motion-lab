@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import type { MotionClip, ArmSegment } from './MocapFigure';
 import type { FaceAvatar } from '../engine/faceAvatar';
 import { PhotoHead, SampleHead, SAMPLE_BY_ID, DEFAULT_SKIN } from './AvatarHeads';
+import { SAMPLE_FACE_BY_ID } from '../engine/sampleFaces';
 
 /**
  * カップルダンスを「2体」ではなく **1つのペア** として組むリグ。
@@ -835,6 +836,8 @@ function Body({
   rig: Rig; pal: Palette; face?: FaceAvatar | null; sample?: string | null;
 }) {
   const preset = sample ? SAMPLE_BY_ID(sample) : null;
+  // 同梱の写真サンプル（解析済み動画から取った顔）。写真枠と同じ描き方をする
+  const sampleFace = sample ? SAMPLE_FACE_BY_ID(sample) : null;
   // 服＝役割色、素肌＝サンプルの肌色。上腕だけ服＝半袖に見える
   const clothMat = <meshStandardMaterial color={pal.cloth} roughness={0.62} metalness={0.02} />;
   const pantsMat = <meshStandardMaterial color={pal.pants} roughness={0.66} metalness={0.02} />;
@@ -903,7 +906,8 @@ function Body({
           {/* 頭（耳から取れる相対ヨーで回る = スポッティング） */}
           <group ref={(o) => { if (o) rig.head = o; }} position={[0, 0.58, 0]}>
             {face ? <PhotoHead avatar={face} color={pal.cloth} />
-              : preset ? <SampleHead preset={preset} /> : (
+              : sampleFace ? <PhotoHead avatar={sampleFace.avatar} color={pal.cloth} />
+                : preset ? <SampleHead preset={preset} /> : (
                 <>
                   <mesh>
                     <sphereGeometry args={[0.115, 20, 16]} />

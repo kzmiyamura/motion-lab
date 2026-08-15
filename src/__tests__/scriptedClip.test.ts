@@ -283,3 +283,171 @@ describe('手描き CBL の On1 / On2', () => {
     }
   });
 });
+
+describe('クローズドポジション', () => {
+  const spb = 60 / 170;
+
+  it('既定（片手ホールド）は closed=false と完全一致 — 合格した見た目を変えない', () => {
+    for (const t of ['on1', 'on2'] as const) {
+      expect(JSON.stringify(buildScriptedBasic(t).armTimeline))
+        .toBe(JSON.stringify(buildScriptedBasic(t, false).armTimeline));
+      expect(JSON.stringify(buildScriptedCBL(t).armTimeline))
+        .toBe(JSON.stringify(buildScriptedCBL(t, false).armTimeline));
+    }
+  });
+
+  it('ベーシックは全編クローズド: 男の右手が背中・女の左手が肩、つなぎ手はそのまま', () => {
+    for (const t of ['on1', 'on2'] as const) {
+      const segs = buildScriptedBasic(t, true).armTimeline!.segments;
+      expect(segs).toHaveLength(1);
+      expect(segs[0].leader).toEqual({ L: 'hold', R: 'closed_back' });
+      expect(segs[0].follower).toEqual({ L: 'closed_shoulder', R: 'hold' });
+      expect(segs[0].hold).toEqual({ leader: 'L', follower: 'R' });
+    }
+  });
+
+  it('CBL は女を通す局面（prep/pass/close）で組み手を離し、hold 局面だけクローズド', () => {
+    const segs = buildScriptedCBL('on1', true).armTimeline!.segments;
+    for (const s of segs) {
+      if (s.phase === 'closed') {
+        expect(s.leader.R).toBe('closed_back');
+        expect(s.follower.L).toBe('closed_shoulder');
+      } else {
+        expect(s.leader.R).toBe('free');
+        expect(s.follower.L).toBe('free');
+      }
+    }
+    // 通り抜けの間（カウント11あたり）はクローズドではない
+    const at = (b: number) => segs.find((s) => b * spb >= s.t0 && b * spb < s.t1)!;
+    expect(at(11).phase).toBe('pass');
+    expect(at(2).phase).toBe('closed');
+  });
+
+  it('CBL のクローズドは、組んでいる間だけ詰まり、通り抜けは元の間隔に戻る', () => {
+    const hip = (p: { j: Float32Array | number[] }, ax: 0 | 2) =>
+      (p.j[7 * 3 + ax] + p.j[8 * 3 + ax]) / 2;
+    const at = (clip: ReturnType<typeof buildScriptedCBL>, t: number) =>
+      clip.frames.reduce((a, b) => (Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a));
+    const gap = (clip: ReturnType<typeof buildScriptedCBL>, b: number) => {
+      const f = at(clip, b * spb);
+      return Math.hypot(hip(f.p['0'], 0) - hip(f.p['1'], 0), hip(f.p['0'], 2) - hip(f.p['1'], 2));
+    };
+    for (const t of ['on1', 'on2'] as const) {
+      const shift = t === 'on2' ? 5 : 0;
+      const open = buildScriptedCBL(t, false), cl = buildScriptedCBL(t, true);
+      // 組んでいる間（拍4 = 通り抜け前）は詰まる
+      expect(gap(cl, 4 + shift)).toBeLessThan(gap(open, 4 + shift) * 0.8);
+      // 通り抜けの最中（拍11〜13）は 1cm も変えない — 追い越す空間を潰さない
+      for (const b of [11, 12, 13]) {
+        expect(gap(cl, b + shift), `beat ${b}`).toBeCloseTo(gap(open, b + shift), 2);
+      }
+      // 男は 1 ミリも動かさない（焼き込んだ足の振付を触らない）
+      for (const b of [2, 6, 11, 14]) {
+        const a = at(open, (b + shift) * spb).p['0'], c = at(cl, (b + shift) * spb).p['0'];
+        expect(Array.from(c.j)).toEqual(Array.from(a.j));
+      }
+    }
+  });
+
+  it('ベーシックのクローズドは組める距離まで詰まる（腰の間隔 0.70m → 0.30m）', () => {
+    const hipX = (p: { j: Float32Array | number[] }) => (p.j[7 * 3] + p.j[8 * 3]) / 2;
+    const gap = (clip: ReturnType<typeof buildScriptedBasic>, t: number) => {
+      const f = clip.frames.reduce((a, b) => (Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a));
+      return Math.abs(hipX(f.p['0']) - hipX(f.p['1']));
+    };
+    for (const t of ['on1', 'on2'] as const) {
+      const open = buildScriptedBasic(t, false), cl = buildScriptedBasic(t, true);
+      for (const b of [0, 1, 2, 5, 6]) {
+        expect(gap(open, b * spb), `open beat ${b}`).toBeCloseTo(0.70, 2);
+        expect(gap(cl, b * spb), `closed beat ${b}`).toBeCloseTo(0.30, 2);
+      }
+    }
+  });
+
+  it('詰めても足の踏み方（腰から見た足の位置）は変わらない', () => {
+    const LANK_ = 11, RANK_ = 12;
+    const rel = (clip: ReturnType<typeof buildScriptedBasic>, t: number, pid: '0' | '1', idx: number) => {
+      const f = clip.frames.reduce((a, b) => (Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a));
+      const p = f.p[pid];
+      const hx = (p.j[7 * 3] + p.j[8 * 3]) / 2, hz = (p.j[7 * 3 + 2] + p.j[8 * 3 + 2]) / 2;
+      return [p.j[idx * 3] - hx, p.j[idx * 3 + 1], p.j[idx * 3 + 2] - hz];
+    };
+    for (const t of ['on1', 'on2'] as const) {
+      const open = buildScriptedBasic(t, false), cl = buildScriptedBasic(t, true);
+      for (const b of [1, 2, 3, 5, 6, 7]) {
+        for (const pid of ['0', '1'] as const) {
+          for (const idx of [LANK_, RANK_]) {
+            const a = rel(open, b * spb, pid, idx), c = rel(cl, b * spb, pid, idx);
+            for (let i = 0; i < 3; i++) expect(c[i], `${t} ${pid} beat ${b}`).toBeCloseTo(a[i], 5);
+          }
+        }
+      }
+    }
+  });
+});
+
+describe('CBL On2 の女の足', () => {
+  const spb = 60 / 170;
+  const on2 = buildScriptedCBL('on2');
+  const on1 = buildScriptedCBL('on1');
+  const at = (clip: typeof on2, b: number, pid: 0 | 1, idx: number) => {
+    const t = b * spb;
+    const f = clip.frames.reduce((a, c) => (Math.abs(c.t - t) < Math.abs(a.t - t) ? c : a));
+    const p = f.p[String(pid)];
+    return { x: p.j[idx * 3], y: p.j[idx * 3 + 1], z: p.j[idx * 3 + 2], v: p.v[idx] };
+  };
+  const dist = (a: { x: number; z: number }, b: { x: number; z: number }) =>
+    Math.hypot(a.x - b.x, a.z - b.z);
+
+  it('On1 の女は据え置き（足を焼き込まない＝合格した見た目のまま）', () => {
+    expect(at(on1, 6, 1, LANK).v).toBe(0);
+    expect(at(on1, 6, 1, RANK).v).toBe(0);
+  });
+
+  it('On2 は女にも足が焼き込まれている', () => {
+    for (const b of [6, 10, 14, 22]) {
+      expect(at(on2, b, 1, LANK).v, `beat ${b}`).toBe(1);
+      expect(at(on2, b, 1, RANK).v, `beat ${b}`).toBe(1);
+    }
+  });
+
+  it('On2: 女の歩幅は男と同じ（男の左足の鏡が女の右足）', () => {
+    // 男の左足のブレイク（14 = カウント6）と、その鏡である女の右足を比べる。
+    // CBL は2人とも移動しているので、値そのものはベーシックの 0.70 にはならない —
+    // 見るのは「男女で同じか」
+    const lead = dist(at(on2, 14, 0, LANK), at(on2, 10, 0, LANK));
+    const foll = dist(at(on2, 14, 1, RANK), at(on2, 10, 1, RANK));
+    expect(lead).toBeGreaterThan(0.3);
+    expect(Math.abs(foll - lead)).toBeLessThan(0.05);
+  });
+
+  it('On2: 女の荷重した足は床で滑らない', () => {
+    // 女の荷重足は男の鏡（男が左のカウントで女は右）
+    for (const [b, idx] of [[13, LANK], [14, RANK], [15, LANK]] as const) {
+      expect(dist(at(on2, b + 0.05, 1, idx), at(on2, b + 0.45, 1, idx)), `beat ${b}`)
+        .toBeLessThan(0.02);
+    }
+  });
+
+  it('On2: 女の足は腰の下にある（腰だけ動いて脚が伸びていない）', () => {
+    for (const b of [10, 12, 14, 15]) {
+      const f = on2.frames.reduce((a, c) =>
+        (Math.abs(c.t - b * spb) < Math.abs(a.t - b * spb) ? c : a));
+      const p = f.p['1'];
+      const hip = { x: (p.j[7 * 3] + p.j[8 * 3]) / 2, z: (p.j[7 * 3 + 2] + p.j[8 * 3 + 2]) / 2 };
+      for (const idx of [LANK, RANK]) {
+        expect(dist(hip, at(on2, b, 1, idx)), `beat ${b}`).toBeLessThan(0.55);
+      }
+    }
+  });
+
+  it('On2: 男女で足を踏み合わない', () => {
+    for (const b of [10, 11, 13, 14, 15]) {
+      for (const li of [LANK, RANK]) {
+        for (const fi of [LANK, RANK]) {
+          expect(dist(at(on2, b, 0, li), at(on2, b, 1, fi)), `beat ${b}`).toBeGreaterThan(0.10);
+        }
+      }
+    }
+  });
+});

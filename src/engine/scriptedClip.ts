@@ -120,9 +120,10 @@ const TAP_DUR = 0.25;           // 踏み直しの浮き時間
 const ANKLE_Y = 0.115;          // ボールで立っているときの足首高さ（踵が浮いている）
 const HEEL_DROP = 0.035;        // 踵が下りたときに足首が沈む量 → ベタ足で 0.08
 const STEP_LIFT = 0.07;         // 移動中に浮く高さ
-const TAP_LIFT = 0.04;          // 踏み直しの浮き
+const TAP_LIFT = 0.075;         // 踏み直しの浮き（その場で踏むのが見えるよう歩幅移動より高く）
 const FOOT_LATERAL = 0.09;      // 足のスタンス幅（体ローカルx）
 const FULL_STEP = 0.15;         // この距離を「一歩ぶん」として浮きの高さを按分する
+const FLOW_LIFT_MIN = 0.60;     // 短い歩でも STEP_LIFT のこれだけは浮く（On2 の 3・7 用）
 
 /**
  * 足の移動区間。flow スペックでは区間が隙間なく連なるので、
@@ -214,7 +215,9 @@ function footAt(spec: FootSpec, beat8: number): { z: number; lift: number } {
         ? (2 * u3 - 3 * u2 + 1) * s.z0 + (u3 - 2 * u2 + u) * dur * s.m0
           + (-2 * u3 + 3 * u2) * s.z1 + (u3 - u2) * dur * s.m1
         : s.z0 + (s.z1 - s.z0) * f;
-      const scale = Math.min(1, Math.abs(s.z1 - s.z0) / FULL_STEP);
+      // 距離按分だけだと 3・7（靴1/4ぶんの踏み直し）がほとんど浮かず「その場で踏んでいる
+      // のが分かりにくい」。短い歩にも下限を与える（ユーザー指摘 2026-08-15）
+      const scale = Math.max(FLOW_LIFT_MIN, Math.min(1, Math.abs(s.z1 - s.z0) / FULL_STEP));
       // 浮きは実際の進み具合に従う → 溜めの間は足が床の近くに残る
       return { z, lift: Math.sin((f ?? u) * Math.PI) * STEP_LIFT * scale };
     }
@@ -450,10 +453,17 @@ type CblLand = {
  * 体のキーポーズから、各カウントの「踏む場所」をワールドで出す。
  * On2 では体のキーポーズを CBL_ON2_SHIFT 拍だけ後ろへ動かす
  */
-function cblLandings(keys: [number, number, number][], timing: Timing = 'on1'): CblLand[] {
+function cblLandings(
+  keys: [number, number, number][], timing: Timing = 'on1', mirror = false,
+): CblLand[] {
   const out: CblLand[] = [];
   const shift = timing === 'on2' ? CBL_ON2_SHIFT : 0;
-  const spec = timing === 'on2' ? CBL_FOOT_SPEC_ON2 : CBL_FOOT_SPEC;
+  const base = timing === 'on2' ? CBL_FOOT_SPEC_ON2 : CBL_FOOT_SPEC;
+  // 女はリーダーの鏡。ベーシックと同じ作り方で、**足の左右を入れ替え、前後を反転**する
+  // （男が前へ踏むカウントで女は後ろへ踏む）。横幅は足の名前に従うのでここでは触らない
+  const spec = mirror
+    ? base.map((s) => ({ ...s, foot: s.foot === 'L' ? ('R' as const) : ('L' as const), fwd: -s.fwd }))
+    : base;
   for (let bar = 0; bar < LOOP_BEATS / 8; bar++) {
     // On2 の基準は「腰の真下」ではなく **その小節の腰の平均位置**。
     // ベーシックでは重心自身が ±0.175 揺れ、足はそのぶんも含めて ±0.35 に着く。
@@ -516,9 +526,19 @@ function cblFootAt(lands: CblLand[], foot: 'L' | 'R', beat: number) {
   return { x: cur.x, z: cur.z, lift: 0, toe: cur.toe };
 }
 
+/**
+ * 女の足首（ワールド）。クローズドで腰を男へ寄せた（dx,dz）ぶんは足も一緒に動かす —
+ * 動かさないと腰だけが移動して脚が引き伸ばされる
+ */
+function fFoot(lands: CblLand[], foot: 'L' | 'R', beat: number, dx: number, dz: number): WorldFoot {
+  const f = cblFootAt(lands, foot, beat);
+  return { ...f, x: f.x + dx, z: f.z + dz, heel: cblHeelAt(foot, beat, true) };
+}
+
 /** 踵の下り具合。1235 67 はボール立ち、4・8 だけ荷重足の踵が下りる */
-function cblHeelAt(foot: 'L' | 'R', beat: number): number {
-  const c = CBL_HEEL[foot];
+function cblHeelAt(foot: 'L' | 'R', beat: number, mirror = false): number {
+  // 女は荷重する足が男と逆（4 は右、8 は左）
+  const c = CBL_HEEL[mirror ? (foot === 'L' ? 'R' : 'L') : foot];
   const phase = ((beat % 8) + 8) % 8;      // 0 = カウント8、1 = カウント1 …
   let h = 0;
   for (const off of [0, 8, -8]) {
@@ -529,8 +549,41 @@ function cblHeelAt(foot: 'L' | 'R', beat: number): number {
   return h;
 }
 
+/**
+ * クローズドポジションの空き手。
+ *   リーダー右手 → フォロワーの左肩甲骨（closed_back）
+ *   フォロワー左手 → リーダーの右肩（closed_shoulder）
+ * つないだ手（リーダー左 × フォロワー右）は片手ホールドのときと同じ。
+ * どちらの手も**肩より下**に置く（手を挙げて見えると却下される。back_support の教訓）。
+ */
+/**
+ * クローズドで踊るときの腰の間隔の半分（0.15 = 腰の間隔 0.30m）。片手のときは 0.35。
+ * **腕の長さで決まる値**: 男の右肩から女の背中までは「腰の間隔 + 胴半径 0.18」で、
+ * 腕は 0.52m しか届かない。0.40m 間隔だと 0.61m 先になり、腕が伸び切って
+ * 水平に突き出す = 「手を挙げている」ように見える。0.30m なら 0.48m で肘が曲がる。
+ */
+const CLOSED_HALF_GAP = 0.15;
+
+/**
+ * CBL でクローズドに組んでいる度合い（1 = 組んで詰まっている、0 = 通り抜けの間隔）。
+ * 16拍で1周。0〜8拍は組み、9〜15拍の通り抜けでは離れる（腕の局面と同じ区切り）。
+ * 境目は 1 拍かけて滑らかに渡す。
+ */
+function closedAmt(beat: number): number {
+  const u = ((beat % 16) + 16) % 16;
+  if (u <= 8) return 1;
+  if (u < 9) return 1 - smoothstep(u - 8);
+  if (u < 15) return 0;
+  return smoothstep(u - 15);
+}
+
+const CLOSED_HANDS = {
+  leader: { L: 'hold', R: 'closed_back' },
+  follower: { L: 'closed_shoulder', R: 'hold' },
+} as const;
+
 /** ホールドは常時「リーダー左手 × フォロワー右手」の片手。CBL の pass で背中を支える */
-function buildSegments(shift = 0): ArmSegment[] {
+function buildSegments(shift = 0, closed = false): ArmSegment[] {
   const hold = { leader: 'L', follower: 'R' } as const;
   const free = { L: 'free', R: 'free' } as const;
   const seg = (b0: number, b1: number, phase: string, leaderR: 'free' | 'back_support'): ArmSegment => ({
@@ -538,11 +591,15 @@ function buildSegments(shift = 0): ArmSegment[] {
     // （先頭は 0 のまま、末尾はループ長で止める → 隙間も食み出しも作らない）
     t0: (b0 === 0 ? 0 : b0 + shift) * SPB,
     t1: Math.min(b1 + shift, LOOP_BEATS) * SPB, phase, hold,
-    leader: { L: 'hold', R: leaderR }, follower: { ...free, R: 'hold' },
+    // クローズドで踊るのは女が通り抜けない局面だけ。prep/pass/close は相手を送り出すので
+    // 背中と肩の手をいったん離す（実際のCBLも同じで、クローズドのままでは通せない）
+    ...(phase === 'closed'
+      ? { leader: { ...CLOSED_HANDS.leader }, follower: { ...CLOSED_HANDS.follower } }
+      : { leader: { L: 'hold', R: leaderR }, follower: { ...free, R: 'hold' } }),
     confidence: 'observed',
   });
   const half = (o: number) => [
-    seg(o + 0, o + 9, 'hold', 'free'),
+    seg(o + 0, o + 9, closed ? 'closed' : 'hold', 'free'),
     seg(o + 9, o + 10, 'prep', 'free'),
     // 通り抜けで背中を支える動き（back_support）はユーザー却下 —
     // リーダーが途中で手を挙げるように見えるため。腕は終始
@@ -557,8 +614,11 @@ function buildSegments(shift = 0): ArmSegment[] {
  * 手描きベーシック（8拍ループ・On1/On2）。動画は使わない。
  * 体の前後の揺れは足のブレイクに同期し、足は正しい側・正しい方向へ踏む。
  */
-export function buildScriptedBasic(timing: Timing): MotionClip {
+export function buildScriptedBasic(timing: Timing, closed = false): MotionClip {
   const duration = 8 * SPB;
+  // 立ち位置。クローズドは組める距離まで詰める（腰の間隔 0.70m → 0.40m）。
+  // これが無いと男の手が女の背中に届かず、腕が可動域で止まって前に残る
+  const half = closed ? CLOSED_HALF_GAP : 0.35;
   // 体の重心の前後（リーダーの前方成分。フォロワーはワールドで同方向へ揺れる）。
   // On1: 1 で前・5 で後ろ。On2: 2 で後ろ・6 で前（ブレイクに同期）。
   // On2 は足が揃わないぶん重心も完全な中立に戻らない（先頭と末尾を同値にしてループを繋ぐ）
@@ -585,14 +645,14 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
       ? SWAY[bi] + (SWAY[bi + 1] - SWAY[bi]) * smoothstep(b - bi)
       : monotoneCyclic(SWAY.slice(0, 8), b);
     // リーダーは +X を向く。前方 = +X。フォロワーは鏡（後退ブレイク）なので同じ +sway
-    const lx = -0.35 + sway, fx = 0.35 + sway;
+    const lx = -half + sway, fx = half + sway;
     frames.push({
       t,
       p: {
         '0': placeJoints(lx, 0, 90 * D2R, 0.96 - heelSink(footL, b), fx, 0,
-          [foot(footL[0], b), foot(footL[1], b)], [-0.35, 0]),
+          [foot(footL[0], b), foot(footL[1], b)], [-half, 0]),
         '1': placeJoints(fx, 0, -90 * D2R, 0.92 - heelSink(footF, b), lx, 0,
-          [foot(footF[0], b), foot(footF[1], b)], [0.35, 0]),
+          [foot(footF[0], b), foot(footF[1], b)], [half, 0]),
       },
     });
   }
@@ -608,9 +668,11 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
     armTimeline: {
       version: 1, source: 'scripted',
       segments: [{
-        t0: 0, t1: duration, phase: 'hold',
+        t0: 0, t1: duration, phase: closed ? 'closed' : 'hold',
         hold: { leader: 'L', follower: 'R' },
-        leader: { L: 'hold', R: 'free' }, follower: { L: 'free', R: 'hold' },
+        ...(closed
+          ? { leader: { ...CLOSED_HANDS.leader }, follower: { ...CLOSED_HANDS.follower } }
+          : { leader: { L: 'hold', R: 'free' }, follower: { L: 'free', R: 'hold' } }),
         confidence: 'observed',
       }],
     },
@@ -627,18 +689,24 @@ export function buildScriptedBasic(timing: Timing): MotionClip {
  *   足の順番・ため・踵・片手ホールドは On1 のまま。
  *   立ち位置と通す側（女が男を追い越す向き）も On1 と同一で、触っていない。
  */
-export function buildScriptedCBL(timing: Timing = 'on1'): MotionClip {
+export function buildScriptedCBL(timing: Timing = 'on1', closed = false): MotionClip {
   const duration = LOOP_BEATS * SPB;
   const frames: MotionClip['frames'] = [];
   const n = Math.round(duration * FPS);
   const shift = timing === 'on2' ? CBL_ON2_SHIFT : 0;
-  // 男の足だけを振付として焼き込む（体は既存のキーポーズのまま）。女は次の段階
+  // 足を振付として焼き込む（体は既存のキーポーズのまま）。
+  // 女は **On2 だけ**。On1 の女はユーザー合格済みの見た目なので触らない
   const landsL = cblLandings(KEY_L, timing);
+  const landsF = timing === 'on2' ? cblLandings(KEY_F, timing, true) : null;
   for (let i = 0; i <= n; i++) {
     const t = i / FPS;
     const beat = t / SPB;
     const [lx, lz, lyaw] = poseAt(KEY_L, beat - shift);
-    const [fx, fz, fyaw] = poseAt(KEY_F, beat - shift);
+    const [rawFx, rawFz, fyaw] = poseAt(KEY_F, beat - shift);
+    // クローズドのときは組んでいる間だけ女を男へ寄せる。通り抜け（9〜15拍）は
+    // 元の間隔に戻す — 詰めたままでは女が男を追い越せない
+    const g = closed ? 1 - (1 - CLOSED_HALF_GAP / 0.35) * closedAmt(beat - shift) : 1;
+    const fx = lx + (rawFx - lx) * g, fz = lz + (rawFz - lz) * g;
     const hy = hipYAt(beat - shift);
     const heelL = cblHeelAt('L', beat), heelR = cblHeelAt('R', beat);
     frames.push({
@@ -648,7 +716,12 @@ export function buildScriptedCBL(timing: Timing = 'on1'): MotionClip {
           { ...cblFootAt(landsL, 'L', beat), heel: heelL },
           { ...cblFootAt(landsL, 'R', beat), heel: heelR },
         ]),
-        '1': placeJoints(fx, fz, fyaw, hy - 0.04, lx, lz),
+        '1': landsF
+          ? placeJointsWorld(fx, fz, fyaw, hy - 0.04, lx, lz, [
+            fFoot(landsF, 'L', beat, fx - rawFx, fz - rawFz),
+            fFoot(landsF, 'R', beat, fx - rawFx, fz - rawFz),
+          ])
+          : placeJoints(fx, fz, fyaw, hy - 0.04, lx, lz),
       },
     });
   }
@@ -664,6 +737,6 @@ export function buildScriptedCBL(timing: Timing = 'on1'): MotionClip {
     ],
     frames,
     beatGrid: { bpm: BPM, firstBeatSec: 0, beatIntervalSec: SPB, confidence: 1 },
-    armTimeline: { version: 1, source: 'scripted', segments: buildSegments(shift) },
+    armTimeline: { version: 1, source: 'scripted', segments: buildSegments(shift, closed) },
   };
 }

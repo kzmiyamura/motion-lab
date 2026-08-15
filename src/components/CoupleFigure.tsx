@@ -456,6 +456,13 @@ function clampToArm(spine: THREE.Object3D, shoulder: THREE.Vector3, world: THREE
  */
 const TORSO_R = 0.17;        // 胴体の半径[m]。肩幅 0.37 の内側に収まる程度
 const TORSO_R_SELF = 0.13;   // 自分の胴体は少し細く見る（脇を締める姿勢を殺さないため）
+// CBL の入れ替わり（prep/pass/close）の間だけ自胴を太く見る。
+// 体が回りながらすれ違うので、平時の 0.13 だと腕が自分の脇腹に埋まる
+const TORSO_R_SELF_PASS = 0.165;
+// フォロワーのニュートラルポジション（胸郭ローカル [横, 肩からの高さ, 前]）。
+// 肘は下ろしたまま、上腕を体側から離して**脇を開ける** — ここが空くから
+// リーダーの手が背中へ回る（ユーザー指示 2026-08-15）
+const NEUTRAL_HAND = [0.26, -0.14, 0.22] as const;
 function pushOutOfTorso(
   p: THREE.Vector3, cx: number, cz: number, yLo: number, yHi: number, r: number,
 ) {
@@ -770,7 +777,7 @@ function dumpArms(rigs: [Rig, Rig], linked: (0 | 1 | null)[], t: number, hold: T
 /** 服の配色。役割の色は服の色として残すので、青＝リーダー/ピンク＝フォロワーは変わらない */
 type Palette = { cloth: string; pants: string; skin: string; shoe: string; dress: boolean };
 
-function buildPalette(color: string, skin: string, dress: boolean): Palette {
+function buildPalette(color: string, skin: string, dress: boolean, shoe?: string): Palette {
   const c = new THREE.Color(color);
   return {
     cloth: color,
@@ -778,7 +785,7 @@ function buildPalette(color: string, skin: string, dress: boolean): Palette {
     skin,
     // サルサシューズ: リーダーは黒のラテン（低いキューバンヒール）、
     // フォロワーはタンのストラップ付きヒール（この配色が実物でいちばん多い）
-    shoe: dress ? '#b5834f' : '#17181f',
+    shoe: shoe ?? (dress ? '#b5834f' : '#17181f'),
     dress,
   };
 }
@@ -955,6 +962,7 @@ function Body({
 export function CoupleFigure({
   clip, timeRef, leaderColor, followerColor,
   leaderFace, followerFace, leaderSample, followerSample,
+  leaderShoe, followerShoe,
 }: {
   clip: MotionClip;
   timeRef: { current: number };
@@ -964,6 +972,9 @@ export function CoupleFigure({
   followerFace?: FaceAvatar | null;
   leaderSample?: string | null;
   followerSample?: string | null;
+  /** 靴の色。背景と同化して見えないときのために外から差し替えられる */
+  leaderShoe?: string;
+  followerShoe?: string;
 }) {
   // 添字 0 = リーダー, 1 = フォロワー
   const pids = useMemo<[number, number]>(
@@ -997,9 +1008,9 @@ export function CoupleFigure({
   const holdSame = useRef<unknown>(null);
   // 肌の色は選んだサンプルに合わせる（写真の頭でも体はこの色で通す）
   const pals = useMemo<[Palette, Palette]>(() => [
-    buildPalette(leaderColor, SAMPLE_BY_ID(leaderSample ?? '')?.skin ?? DEFAULT_SKIN, false),
-    buildPalette(followerColor, SAMPLE_BY_ID(followerSample ?? '')?.skin ?? DEFAULT_SKIN, true),
-  ], [leaderColor, followerColor, leaderSample, followerSample]);
+    buildPalette(leaderColor, SAMPLE_BY_ID(leaderSample ?? '')?.skin ?? DEFAULT_SKIN, false, leaderShoe),
+    buildPalette(followerColor, SAMPLE_BY_ID(followerSample ?? '')?.skin ?? DEFAULT_SKIN, true, followerShoe),
+  ], [leaderColor, followerColor, leaderSample, followerSample, leaderShoe, followerShoe]);
 
   useFrame((_st, dt) => {
     const t = timeRef.current;
@@ -1123,6 +1134,10 @@ export function CoupleFigure({
     // holds/events 走査へフォールバック
     const linked: (0 | 1 | null)[] = [null, null];
     let lift = 0, turner = -1, bsHand = -1;
+    // クローズドポジションで相手に置く手（-1 = 置かない）
+    let closedL = -1, closedF = -1;
+    // 入れ替わり中（女が男を追い越す prep/pass/close）。腕を自胴から余分に逃がす
+    let passing = false;
     let holdKey: unknown = null;
     if (armSegs) {
       const seg = segAt(armSegs, t, armCur);
@@ -1141,6 +1156,11 @@ export function CoupleFigure({
         bsHand = seg.leader.L === 'back_support' ? 0
           : seg.leader.R === 'back_support' ? 1 : -1;
       }
+      passing = seg?.phase === 'prep' || seg?.phase === 'pass' || seg?.phase === 'close';
+      // クローズドポジション: リーダーの手 → フォロワーの肩甲骨 / フォロワーの手 → リーダーの肩
+      closedL = seg?.leader.L === 'closed_back' ? 0 : seg?.leader.R === 'closed_back' ? 1 : -1;
+      closedF = seg?.follower.L === 'closed_shoulder' ? 0
+        : seg?.follower.R === 'closed_shoulder' ? 1 : -1;
     } else {
       let hold: Hold | null = null;
       for (const h of holds) { if (h.t <= t + 0.01) hold = h; else break; }
@@ -1217,6 +1237,8 @@ export function CoupleFigure({
         for (let d = 0; d < 2; d++) {
           const rig = rigs[d], other = rigs[1 - d];
           const yLo = rig.root.position.y + rig.hips.position.y;
+          // 入れ替わり中は自胴を太めに見る（脇を締めた平時の構えは 0.13 のまま残す）
+          const selfR = passing ? TORSO_R_SELF_PASS : TORSO_R_SELF;
           pushOutOfTorso(tmp.hold, rig.root.position.x, rig.root.position.z,
             yLo, yLo + SHO_DY, TORSO_R);
           // 「肩から手までの線が胴体を横切らない」位置へ回り込ませる。
@@ -1230,7 +1252,14 @@ export function CoupleFigure({
             oLo, oLo + SHO_DY, TORSO_R);
           routeAroundTorso(tmp.hold, tmp.sh.x, tmp.sh.z,
             rig.root.position.x, rig.root.position.z,
-            yLo, yLo + SHO_DY, TORSO_R_SELF);
+            yLo, yLo + SHO_DY, selfR);
+          // 入れ替わりの間は肩→手の線だけでなく**手そのもの**も自胴の外へ出す。
+          // 体が回りながら相手とすれ違うので、線分は胴を横切らないのに
+          // 手だけが自分の脇腹に入り込む姿勢が作れてしまう
+          if (passing) {
+            pushOutOfTorso(tmp.hold, rig.root.position.x, rig.root.position.z,
+              yLo, yLo + SHO_DY, selfR);
+          }
           clampToArm(rig.spine, rig.shldr[linked[d]!].position, tmp.hold);
         }
       }
@@ -1282,12 +1311,57 @@ export function CoupleFigure({
         tmp.pl.x, tmp.pl.y, tmp.pl.z, 0.35);
     }
 
+    // ── レイヤー3.6: クローズドポジション。
+    // リーダーの手はフォロワーの左肩甲骨（背面・肩より 10cm 下）、
+    // フォロワーは肘を下ろしたニュートラルポジションで脇を開けて待つ。
+    // **どちらの手も肩より上へは行かない**
+    // （back_support が「手を挙げて見える」で却下された教訓）
+    if ((closedL >= 0 || closedF >= 0) && smp[0].inRange && smp[1].inRange) {
+      const place = (d: 0 | 1, k: number, target: THREE.Vector3) => {
+        const rig = rigs[d], sign = SIDE_SIGN[k];
+        clampToArm(rig.spine, rig.shldr[k].position, target);
+        rig.spine.worldToLocal(target);
+        const ty = Math.min(target.y - rig.shldr[k].position.y, 0);   // 肩より上へは上げない
+        armPole(sign, ty, tmp.pl);
+        solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
+          target.x - rig.shldr[k].position.x, ty, target.z,
+          tmp.pl.x, tmp.pl.y, tmp.pl.z, 0.35);
+      };
+      if (closedL >= 0) {
+        // フォロワーの背中側（前方の逆）、肩甲骨の高さ。左肩甲骨なので体の左へ寄せる
+        const f = rigs[1], fy = f.root.rotation.y;
+        const yLo = f.root.position.y + f.hips.position.y;
+        // 肩甲骨の下あたり（肩より 10cm 下）。ここより高いと腕が水平に伸びて
+        // 「手を挙げている」ように見える。胴からの浮きも 1cm に抑えて届く範囲に収める
+        tmp.v.set(
+          f.root.position.x - Math.sin(fy) * (TORSO_R + 0.01) + Math.cos(fy) * SHO_DX * 0.7,
+          yLo + SHO_DY - 0.10,
+          f.root.position.z - Math.cos(fy) * (TORSO_R + 0.01) - Math.sin(fy) * SHO_DX * 0.7,
+        );
+        place(0, closedL, tmp.v);
+      }
+      if (closedF >= 0) {
+        // フォロワーはニュートラルポジション（ユーザー指示）。
+        // 肘を下ろしたまま**脇を開けて**構えると、そこが空くのでリーダーの手が
+        // 背中へ回せる。相手の肩を掴みに行かせない — 掴ませると腕が上がる
+        tmp.v.set(
+          SIDE_SIGN[closedF] * NEUTRAL_HAND[0],
+          rigs[1].shldr[closedF].position.y + NEUTRAL_HAND[1],
+          NEUTRAL_HAND[2],
+        );
+        rigs[1].spine.localToWorld(tmp.v);
+        place(1, closedF, tmp.v);
+      }
+    }
+
     // ── レイヤー4: フリーの腕。実データがあればそれを目標に、無ければ体側で軽く構えて拍で揺れる
     for (let d = 0; d < 2; d++) {
       const rig = rigs[d], g = guides[d], s = smp[d];
       for (let k = 0; k < 2; k++) {
         if (linked[d] === k) continue;
         if (d === 0 && k === bsHand) continue;   // back_support 中の手はレイヤー3.5が持つ
+        if (d === 0 && k === closedL) continue;  // クローズドの手はレイヤー3.6が持つ
+        if (d === 1 && k === closedF) continue;
         const sign = SIDE_SIGN[k];
         const sh = rig.shldr[k];
         sh.position.set(sign * SHO_DX, SHO_DY, 0);   // 上げた肩を戻す
@@ -1341,7 +1415,7 @@ export function CoupleFigure({
         for (let o = 0; o < 2; o++) {
           const or_ = rigs[o];
           const yLo = or_.root.position.y + or_.hips.position.y;
-          const r = o === d ? TORSO_R_SELF : TORSO_R;
+          const r = o === d ? (passing ? TORSO_R_SELF_PASS : TORSO_R_SELF) : TORSO_R;
           pushOutOfTorso(tmp.v, or_.root.position.x, or_.root.position.z,
             yLo, yLo + SHO_DY, r);
           // 自分の胴体にも適用する。目標を外へ出すだけでは、肩→手の線分が

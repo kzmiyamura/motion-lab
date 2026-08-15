@@ -59,7 +59,10 @@ export type MotionClip = {
   armTimeline?: ArmTimeline;
 };
 
-export type ArmHandState = 'free' | 'hold' | 'prep' | 'lead_turn' | 'back_support';
+// closed_back      … クローズドポジション: リーダー右手をフォロワーの左肩甲骨へ
+// closed_shoulder  … クローズドポジション: フォロワー左手をリーダーの右肩へ
+export type ArmHandState =
+  'free' | 'hold' | 'prep' | 'lead_turn' | 'back_support' | 'closed_back' | 'closed_shoulder';
 export type ArmSegment = {
   t0: number; t1: number;
   phase: string;                                   // hold/shine/open/pass/close/prep/initiate/rotate/settle

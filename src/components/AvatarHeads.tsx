@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { buildFaceGeometry, type FaceAvatar } from '../engine/faceAvatar';
 
@@ -38,8 +38,72 @@ export const DEFAULT_SKIN = '#e8b98f';
 
 const R = 0.115;  // 頭の半径。CoupleFigure の素の球と揃える
 
-/** 写真から作った顔。後頭部は色つきの球のまま残して「頭」として成立させる */
+/**
+ * 画像の矩形領域の平均色。外れ値（ハイライト・影）に引っ張られないよう、
+ * 明るさで中央 60% に入る画素だけを平均する。
+ */
+export function regionAverage(
+  data: Uint8ClampedArray, w: number, h: number,
+  x0: number, y0: number, x1: number, y1: number,
+): string {
+  const px: { r: number; g: number; b: number; l: number }[] = [];
+  for (let y = Math.max(0, y0 | 0); y < Math.min(h, y1 | 0); y++) {
+    for (let x = Math.max(0, x0 | 0); x < Math.min(w, x1 | 0); x++) {
+      const i = (y * w + x) * 4;
+      if (data[i + 3] < 200) continue;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      px.push({ r, g, b, l: 0.299 * r + 0.587 * g + 0.114 * b });
+    }
+  }
+  if (!px.length) return DEFAULT_SKIN;
+  px.sort((a, b) => a.l - b.l);
+  const lo = Math.floor(px.length * 0.2), hi = Math.max(lo + 1, Math.ceil(px.length * 0.8));
+  let r = 0, g = 0, b = 0;
+  for (let i = lo; i < hi; i++) { r += px[i].r; g += px[i].g; b += px[i].b; }
+  const n = hi - lo;
+  const hex = (v: number) => Math.round(v / n).toString(16).padStart(2, '0');
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
+}
+
+/**
+ * 顔写真から「頭全体」の色を拾う。
+ * 髪 = 上端の帯（切り出しは頭のまわりなので、ここはほぼ髪か帽子）、
+ * 肌 = 両頬のあたり。これで後頭部と髪を顔と地続きの色にできる。
+ */
+function useHeadColors(src: string, fallback: string) {
+  const [c, setC] = useState<{ skin: string; hair: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth, h = img.naturalHeight;
+      if (!alive || !w || !h) return;
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const ctx = cv.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(img, 0, 0);
+      const d = ctx.getImageData(0, 0, w, h).data;
+      const hair = regionAverage(d, w, h, w * 0.25, 0, w * 0.75, h * 0.12);
+      // 頬は鼻の左右。中央（鼻筋のハイライト）と輪郭の外は避ける
+      const cheekL = regionAverage(d, w, h, w * 0.18, h * 0.5, w * 0.34, h * 0.66);
+      const cheekR = regionAverage(d, w, h, w * 0.66, h * 0.5, w * 0.82, h * 0.66);
+      const mix = (a: string, b: string) => {
+        const p = (s: string, i: number) => parseInt(s.slice(1 + i * 2, 3 + i * 2), 16);
+        const v = [0, 1, 2].map((i) => Math.round((p(a, i) + p(b, i)) / 2));
+        return `#${v.map((x) => x.toString(16).padStart(2, '0')).join('')}`;
+      };
+      setC({ skin: mix(cheekL, cheekR), hair });
+    };
+    img.src = src;
+    return () => { alive = false; };
+  }, [src]);
+  return c ?? { skin: fallback, hair: fallback };
+}
+
+/** 写真から作った顔。後頭部と髪は写真から拾った色で作り、顔と地続きの頭にする */
 export function PhotoHead({ avatar, color }: { avatar: FaceAvatar; color: string }) {
+  const { skin, hair } = useHeadColors(avatar.image, color);
   const geo = useMemo(() => buildFaceGeometry(avatar), [avatar]);
   const tex = useMemo(() => {
     const t = new THREE.TextureLoader().load(avatar.image);
@@ -57,9 +121,16 @@ export function PhotoHead({ avatar, color }: { avatar: FaceAvatar; color: string
         {/* 三角形の向きは分割の都合で揃わないので両面で描く */}
         <meshStandardMaterial map={tex} roughness={0.85} metalness={0} side={THREE.DoubleSide} />
       </mesh>
+      {/* 頭蓋。写真の頬から拾った肌色なので、顔の縁で色が途切れない */}
       <mesh position={[0, 0, -0.05]}>
         <sphereGeometry args={[0.105, 20, 16]} />
-        <meshStandardMaterial color={color} roughness={0.6} metalness={0.05} />
+        <meshStandardMaterial color={skin} roughness={0.7} metalness={0} />
+      </mesh>
+      {/* 髪。頭蓋と同じ中心・少し大きい球のキャップを後ろへ倒し、
+          前は顔メッシュ（z=+0.075）より手前に出ないところで止める */}
+      <mesh position={[0, 0, -0.05]} rotation={[-0.5, 0, 0]}>
+        <sphereGeometry args={[0.112, 24, 18, 0, Math.PI * 2, 0, Math.PI * 0.5]} />
+        <meshStandardMaterial color={hair} roughness={0.9} metalness={0} side={THREE.DoubleSide} />
       </mesh>
     </>
   );

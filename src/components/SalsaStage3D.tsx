@@ -315,6 +315,12 @@ export function SalsaStage3D() {
   const autoOrbitRef = useRef(false);
   const [autoOrbit, setAutoOrbit] = useState(false);
   const [preset, setPreset] = useState('正面');
+  // 見た目の色。リーダーの黒い靴は暗い背景に沈むので、どちらも変えられるようにする
+  const [bgColor, setBgColor] = useState('#0a0e18');
+  // クローズドポジション（組んで踊る）。手描きクリップの腕だけが変わる
+  const [closed, setClosed] = useState(false);
+  const [leaderShoe, setLeaderShoe] = useState('#17181f');
+  const [followerShoe, setFollowerShoe] = useState('#b5834f');
   const stageRef = useRef<HTMLDivElement>(null);
   // 写真から作った顔。端末の localStorage に置くだけで、どこへも送信しない
   const [faces, setFaces] = useState<FaceSlots>(EMPTY_FACES);
@@ -459,6 +465,29 @@ export function SalsaStage3D() {
   };
 
   // 手描きの合成クリップ（動画データを使わない）。正解の見本として再生する
+  /** いま出している手描きクリップ。クローズドの切り替えで同じものを組み直すため覚えておく */
+  const scriptedRef = useRef<{ kind: 'basic' | 'cbl'; timing: 'on1' | 'on2' } | null>(null);
+  const buildScripted = (kind: 'basic' | 'cbl', timing: 'on1' | 'on2', cl: boolean) =>
+    kind === 'basic' ? buildScriptedBasic(timing, cl) : buildScriptedCBL(timing, cl);
+
+  const loadScriptedMove = (kind: 'basic' | 'cbl', timing: 'on1' | 'on2', label: string) => {
+    scriptedRef.current = { kind, timing };
+    loadScripted(() => buildScripted(kind, timing, closed), label);
+  };
+
+  /** クローズド ⇄ 片手ホールドの切り替え。振付は同じなので再生位置は保ったまま組み直す */
+  const toggleClosed = () => {
+    const next = !closed;
+    setClosed(next);
+    const s = scriptedRef.current;
+    if (!s) return;
+    const at = clipTimeRef.current;
+    const c = buildScripted(s.kind, s.timing, next);
+    setClip(c);
+    clipTimeRef.current = at;
+    phRef.current.clipTime = at;
+  };
+
   const loadScripted = (build: () => MotionClip, label: string) => {
     const c = build();
     setClipErr(null);
@@ -551,15 +580,19 @@ export function SalsaStage3D() {
         onPointerCancel={onPointerUp}
       >
         <Canvas shadows camera={{ position: [0, 1.5, 4.3], fov: 42 }} dpr={[1, 2]}>
-          <color attach="background" args={['#0a0e18']} />
-          <fog attach="fog" args={['#0a0e18', 5, 11]} />
+          <color attach="background" args={[bgColor]} />
+          <fog attach="fog" args={[bgColor, 5, 11]} />
           <ambientLight intensity={0.55} />
           <directionalLight position={[3, 6, 4]} intensity={1.15} />
           <directionalLight position={[-4, 3, -2]} intensity={0.35} color="#4d7cff" />
           {/* 床 */}
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
             <circleGeometry args={[6, 48]} />
-            <meshStandardMaterial color="#11172a" roughness={0.9} />
+            {/* 床は背景から作る。背景を明るくしたときに床だけ黒く残らないように */}
+            <meshStandardMaterial
+              color={`#${new THREE.Color(bgColor).lerp(new THREE.Color('#ffffff'), 0.08).getHexString()}`}
+              roughness={0.9}
+            />
           </mesh>
           {clipMode === 'mocap' && clip ? (
             <>
@@ -576,6 +609,8 @@ export function SalsaStage3D() {
               followerFace={faces.follower}
               leaderSample={faces.sample.leader}
               followerSample={faces.sample.follower}
+              leaderShoe={leaderShoe}
+              followerShoe={followerShoe}
             />
           ) : (
             <>
@@ -612,17 +647,24 @@ export function SalsaStage3D() {
         >
           {clipBusy === 'hybrid' ? '⏳ 読み込み中…' : '🎥 動画のモーションで踊る'}
         </button>
-        <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedBasic('on1'), 'ベーシック On1')}>
+        <button className={styles.btn} onClick={() => loadScriptedMove('basic', 'on1', 'ベーシック On1')}>
           ✍️ ベーシック On1
         </button>
-        <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedBasic('on2'), 'ベーシック On2')}>
+        <button className={styles.btn} onClick={() => loadScriptedMove('basic', 'on2', 'ベーシック On2')}>
           ✍️ ベーシック On2
         </button>
-        <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedCBL('on1'), 'CBL On1')}>
+        <button className={styles.btn} onClick={() => loadScriptedMove('cbl', 'on1', 'CBL On1')}>
           ✍️ CBL On1
         </button>
-        <button className={styles.btn} onClick={() => loadScripted(() => buildScriptedCBL('on2'), 'CBL On2')}>
+        <button className={styles.btn} onClick={() => loadScriptedMove('cbl', 'on2', 'CBL On2')}>
           ✍️ CBL On2
+        </button>
+        {/* 組む／離す。ベーシック・CBL のどちらでも、振付はそのままで腕だけが変わる */}
+        <button
+          className={`${styles.btn} ${closed ? styles.primary : ''}`}
+          onClick={toggleClosed}
+        >
+          {closed ? '🙌 クローズドを解除' : '🤝 クローズドで組む'}
         </button>
         <button
           className={`${styles.btn} ${clipMode === 'mocap' ? styles.primary : ''}`}
@@ -699,6 +741,25 @@ export function SalsaStage3D() {
             </label>
           </span>
         ))}
+        {/* 色。既定だとリーダーの黒い靴が暗い背景に沈むので、その場で変えられるようにする */}
+        <label className={styles.clipSel}>
+          👞 リーダーの靴
+          <input type="color" value={leaderShoe} onChange={(e) => setLeaderShoe(e.target.value)} />
+        </label>
+        <label className={styles.clipSel}>
+          👠 フォロワーの靴
+          <input type="color" value={followerShoe} onChange={(e) => setFollowerShoe(e.target.value)} />
+        </label>
+        <label className={styles.clipSel}>
+          🎨 背景
+          <input type="color" value={bgColor} onChange={(e) => setBgColor(e.target.value)} />
+        </label>
+        <button
+          className={styles.btn}
+          onClick={() => { setLeaderShoe('#17181f'); setFollowerShoe('#b5834f'); setBgColor('#0a0e18'); }}
+        >
+          ↩ 色を既定に戻す
+        </button>
       </div>
 
       {/* 見返し用: 速い動きは等速だと追えないので、スロー・コマ送り・シークを出す */}

@@ -489,11 +489,12 @@ const CLOSED_BACK_ANG = 40 * (Math.PI / 180);
 // 体を 10cm 空けると肩から肩甲骨まで 0.55m あり、腕 0.522m では届かない。
 // ここで 8cm 稼いで 0.47m にする（肘が 64° 曲がる余地が生まれる）
 const CLOSED_SHO_FWD = 0.08;
-// クローズドで男が上体を前へ傾ける角度[rad]。胸郭（spine）だけを傾けるので
-// 肩は SHO_DY(0.40) × sin(12°) = **8.3cm** 女へ寄り、足（hips の子）は動かない。
-// この 8.3cm ぶん腰の間隔を広げられる = 男が女の足を踏まない
-// （scriptedClip.ts の CLOSED_HALF_GAP がこの値と対になっている）
-const CLOSED_LEAN = 12 * (Math.PI / 180);
+// クローズドで男が上体を**左へ振る**角度[rad]（ユーザー図 2026-08-17 の読み取り値 40°）。
+// 上から見て、女への直線から 40° ずらす = 女は男の正面ではなく**やや右前**に立つ。
+// - 顔が正対しない（正対したまま近いのは「気持ち悪い」と却下された）
+// - 右肩が前に出るので、女の背中へ回す右手が届きやすい
+// 回すのは胸郭（spine）だけ。骨盤は女を向いたままなので足運びは変わらない
+const CLOSED_YAW = 40 * (Math.PI / 180);
 function pushOutOfTorso(
   p: THREE.Vector3, cx: number, cz: number, yLo: number, yHi: number, r: number,
 ) {
@@ -1060,11 +1061,11 @@ export function CoupleFigure({
     const rest = ((Math.floor(beat) % 4) + 4) % 4 === 3;
     const stepPhase = Math.sin(beat * Math.PI);
 
-    // 腕の台本は上体の傾け（クローズドの前傾）にも要るので、ここで先に引く
+    // 腕の台本は上体の向き（クローズドで斜めに構える）にも要るので、ここで先に引く
     const seg = armSegs ? segAt(armSegs, t, armCur) : null;
-    // クローズドで男が上体を前へ傾けている度合い（0〜1）。手を女の背中へ回すのは
-    // 男だけなので、傾けるのも男だけ
-    const leanAmt = seg && seg.phase === 'closed' &&
+    // クローズドで男が上体を斜めに構えている度合い（0〜1）。手を女の背中へ回すのは
+    // 男だけなので、振るのも男だけ
+    const closedAmt = seg && seg.phase === 'closed' &&
       (seg.leader.L === 'closed_back' || seg.leader.R === 'closed_back') ? 1 : 0;
 
     // ── レイヤー1: 移動。先に2人ぶんの目標を出し、ペアの距離を拘束してから流す
@@ -1112,7 +1113,11 @@ export function CoupleFigure({
       // 観測が無いフレームだけ 0（＝腰と同じ向き）へ戻す
       const tw = clamp(at(s, g.twist.w), 0, 1);
       const twist = at(s, g.twist.v) * tw;
-      rig.spine.rotation.y = damp(rig.spine.rotation.y, twist, 0.3);
+      // クローズドでは男だけ上体を左へ振る（ユーザー図 2026-08-17）。骨盤は動かさないので
+      // 合格済みの足運びはそのまま。顔（head は spine の子）も一緒に振れるので、
+      // 「顔が正対したまま近い」不快さが消える
+      const closedYaw = d === 0 ? CLOSED_YAW * closedAmt : 0;
+      rig.spine.rotation.y = damp(rig.spine.rotation.y, twist + closedYaw, 0.3);
 
       // ── 支持脚の判定 → キューバンモーション。
       // 低いほうの足首が体重を受けている。観測が無ければ拍のステップ位相で代用する
@@ -1125,12 +1130,8 @@ export function CoupleFigure({
       rig.spine.position.y = damp(rig.spine.position.y, -dip * 0.02, 0.3);
       rig.spine.position.x = damp(rig.spine.position.x, -support * 0.022, 0.25);
       rig.spine.rotation.z = damp(rig.spine.rotation.z, -support * 0.055, 0.25);
-      // クローズドの前傾（ユーザー指示 2026-08-17「男がすこし上体を斜めにすれば
-      // 背中に手も届きやすい。男女間の距離も斜めの分が広くなる」）。
-      // 胸郭だけを CLOSED_LEAN 傾けると肩が SHO_DY×sin だけ女へ寄るので、そのぶん
-      // 腰の間隔を広げられる（= 足を踏まない）。脚は hips の子なので足は動かない
-      rig.spine.rotation.x = damp(
-        rig.spine.rotation.x, d === 0 ? CLOSED_LEAN * leanAmt : 0, 0.2);
+      // 前傾（rotation.x）は入れない。顔が正対したまま女へ近づくので、
+      // ユーザーに「気持ち悪い」と却下された（2026-08-17）。斜めは**上から見た向き**
 
       // 脚: 足首の実観測があればそこへIKで運び、無ければ拍のステップで埋める
       const amp = rest ? 0 : 0.16 + Math.min(0.3, at(s, g.speed) * 0.28);

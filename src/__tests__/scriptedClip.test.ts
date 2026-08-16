@@ -458,8 +458,10 @@ describe('クローズドポジション', () => {
 
   // 0.37 は「見えている胴体（カプセル半径 0.135）どうしを 10cm 空ける」距離
   // （ユーザー指示 2026-08-16）。腕が届かないぶんは肩の前出しで補うので、
-  // ここを詰めて解決してはいけない
-  it('ベーシックのクローズドは組める距離まで詰まる（腰の間隔 0.70m → 0.37m）', () => {
+  // ここを詰めて解決してはいけない。
+  // 2026-08-17: 男が上体を 12° 前傾する（肩が 8.3cm 女へ寄る）ぶん、腰は 8.3cm
+  // 広げて 0.4532m にした。足を踏まないための余裕なので、ここを詰め直さない
+  it('ベーシックのクローズドは組める距離まで詰まる（腰の間隔 0.70m → 0.45m）', () => {
     const hipX = (p: { j: Float32Array | number[] }) => (p.j[7 * 3] + p.j[8 * 3]) / 2;
     const gap = (clip: ReturnType<typeof buildScriptedBasic>, t: number) => {
       const f = clip.frames.reduce((a, b) => (Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a));
@@ -469,8 +471,27 @@ describe('クローズドポジション', () => {
       const open = buildScriptedBasic(t, false), cl = buildScriptedBasic(t, true);
       for (const b of [0, 1, 2, 5, 6]) {
         expect(gap(open, b * spb), `open beat ${b}`).toBeCloseTo(0.70, 2);
-        expect(gap(cl, b * spb), `closed beat ${b}`).toBeCloseTo(0.37, 2);
+        expect(gap(cl, b * spb), `closed beat ${b}`).toBeCloseTo(0.4532, 2);
       }
+    }
+  });
+
+  // 前傾ぶん腰を広げた目的は「男が女の足を踏まない」こと。実測 On1 25.0cm /
+  // On2 20.3cm（広げる前は 16.7 / 12.0cm）。詰め直したらここで落ちる
+  it('クローズドでも男女の足は 18cm 以上あく（踏まない）', () => {
+    for (const t of ['on1', 'on2'] as const) {
+      const c = buildScriptedBasic(t, true);
+      let min = Infinity, minT = 0;
+      for (const f of c.frames) {
+        for (const li of [LANK, RANK]) {
+          for (const fi of [LANK, RANK]) {
+            const a = f.p['0'].j, b = f.p['1'].j;
+            const d = Math.hypot(a[li * 3] - b[fi * 3], a[li * 3 + 2] - b[fi * 3 + 2]);
+            if (d < min) { min = d; minT = f.t; }
+          }
+        }
+      }
+      expect(min, `${t} @ t=${minT.toFixed(2)}`).toBeGreaterThan(0.18);
     }
   });
 

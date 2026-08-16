@@ -48,6 +48,12 @@ const SIDE_SIGN = [1, -1] as const;
 // 上限は「手をつなげる距離」で決まる: 肩からホールド点までが腕の長さを超えたら
 // どう解いても手は離れる。腕 0.55m × 2 を少し内側に取る
 const PAIR_MIN = 0.58, PAIR_MAX = 1.02;
+// クローズドで組んでいる間だけ下限を外す。腰の間隔 0.30m は「男の腕（0.52m）が
+// 女の背中に届く距離」として逆算した**振付の値**で、観測の復元誤差ではない。
+// 0.58 に押し戻すと男の右肩から女の背中まで 0.775m になり、腕は 0.522m しか無いので
+// 手が 25cm 手前（女の腹の前）で止まる = 「背中に手が回っていない」の正体。
+// 手描きクリップの closed 区間にだけ効くので、CBL の通り抜けや動画は従来どおり
+const PAIR_MIN_CLOSED = 0.20;
 const ARM_REACH = (L_UPARM + L_FOREARM) * 0.95;
 // つないだ手の追従の鈍らせ量（0 = 即時）。腕ごとではなく共有点の側で鈍らせる
 const HOLD_LAG = 0.5;
@@ -354,9 +360,21 @@ type PairGuide = {
 };
 const MAX_PAIR_TURN = Math.PI * 4;   // [rad/s] = 720deg/s。人が相手を回り込める上限
 
+/**
+ * この時刻のペア距離の下限[m]。手描きクリップのクローズド区間だけ下限を外す
+ * （そこだけは距離そのものが振付。理由は PAIR_MIN_CLOSED のコメント）。
+ */
+function pairFloorAt(clip: MotionClip, t: number): number {
+  const segs = clip.armTimeline?.source === 'scripted' ? clip.armTimeline.segments : null;
+  if (!segs) return PAIR_MIN;
+  let cur: ArmSegment | null = null;
+  for (const s of segs) { if (s.t0 <= t) cur = s; else break; }
+  return cur?.phase === 'closed' ? PAIR_MIN_CLOSED : PAIR_MIN;
+}
+
 function buildPair(clip: MotionClip, pid0: number, pid1: number): PairGuide {
   const ts: number[] = [], cx: number[] = [], cz: number[] = [];
-  const th: number[] = [], d: number[] = [];
+  const th: number[] = [], d: number[] = [], floor: number[] = [];
   let prev: number | null = null;
   for (const f of clip.frames) {
     const a = f.p[String(pid0)], b = f.p[String(pid1)];
@@ -372,7 +390,7 @@ function buildPair(clip: MotionClip, pid0: number, pid1: number): PairGuide {
     }
     prev = a2;
     ts.push(f.t); cx.push((ax + bx) / 2); cz.push((az + bz) / 2);
-    th.push(a2); d.push(Math.hypot(dx, dz));
+    th.push(a2); d.push(Math.hypot(dx, dz)); floor.push(pairFloorAt(clip, f.t));
   }
 
   // 単発の飛びを中央値で潰してから、残った速すぎる回り込みを頭打ちにする。
@@ -398,7 +416,7 @@ function buildPair(clip: MotionClip, pid0: number, pid1: number): PairGuide {
     ts: new Float32Array(ts),
     cx: smooth(lcx, 7), cz: smooth(lcz, 7),
     th: smooth(th2, 7),
-    d: smooth(median(d, 5).map((v) => clamp(v, PAIR_MIN, PAIR_MAX)), 7),
+    d: smooth(median(d, 5).map((v, i) => clamp(v, floor[i], PAIR_MAX)), 7),
   };
 }
 
@@ -463,6 +481,16 @@ const TORSO_R_SELF_PASS = 0.165;
 // 肘は下ろしたまま、上腕を体側から離して**脇を開ける** — ここが空くから
 // リーダーの手が背中へ回る（ユーザー指示 2026-08-15）
 const NEUTRAL_HAND = [0.26, -0.14, 0.22] as const;
+// リーダーの手を置く肩甲骨。女の腰中点から見た極座標（半径[m]・真後ろから左へ回した角度）。
+// 半径は**見えている胴体（カプセル半径 0.135）の外側**に取る。内側だと手が女の体の
+// 中で止まり、背中へ回っていないように見える。実測 0.195/40° で手首は女の背面より
+// 2cm 奥・体から 6cm 外、肘角 64°（＝回り込んだ形）
+const CLOSED_BACK_R = 0.195;
+const CLOSED_BACK_ANG = 40 * (Math.PI / 180);
+// 相手を抱くと肩甲骨が外転して肩が前へ出る[m]。
+// 体を 10cm 空けると肩から肩甲骨まで 0.55m あり、腕 0.522m では届かない。
+// ここで 8cm 稼いで 0.47m にする（肘が 64° 曲がる余地が生まれる）
+const CLOSED_SHO_FWD = 0.08;
 function pushOutOfTorso(
   p: THREE.Vector3, cx: number, cz: number, yLo: number, yHi: number, r: number,
 ) {
@@ -1317,14 +1345,19 @@ export function CoupleFigure({
     // **どちらの手も肩より上へは行かない**
     // （back_support が「手を挙げて見える」で却下された教訓）
     if ((closedL >= 0 || closedF >= 0) && smp[0].inRange && smp[1].inRange) {
-      const place = (d: 0 | 1, k: number, target: THREE.Vector3) => {
+      const place = (d: 0 | 1, k: number, target: THREE.Vector3, fwd = 0) => {
         const rig = rigs[d], sign = SIDE_SIGN[k];
+        // 肩を前へ出す（肩甲骨の外転）。組みに入る瞬間に飛ばないよう鈍らせる
+        rig.shldr[k].position.set(
+          sign * SHO_DX, SHO_DY, damp(rig.shldr[k].position.z, fwd, 0.25),
+        );
         clampToArm(rig.spine, rig.shldr[k].position, target);
         rig.spine.worldToLocal(target);
         const ty = Math.min(target.y - rig.shldr[k].position.y, 0);   // 肩より上へは上げない
         armPole(sign, ty, tmp.pl);
+        // 肩の z も引く。引かないと肩を前へ出したぶんだけ手が奥へ行き過ぎる
         solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
-          target.x - rig.shldr[k].position.x, ty, target.z,
+          target.x - rig.shldr[k].position.x, ty, target.z - rig.shldr[k].position.z,
           tmp.pl.x, tmp.pl.y, tmp.pl.z, 0.35);
       };
       if (closedL >= 0) {
@@ -1332,13 +1365,19 @@ export function CoupleFigure({
         const f = rigs[1], fy = f.root.rotation.y;
         const yLo = f.root.position.y + f.hips.position.y;
         // 肩甲骨の下あたり（肩より 10cm 下）。ここより高いと腕が水平に伸びて
-        // 「手を挙げている」ように見える。胴からの浮きも 1cm に抑えて届く範囲に収める
+        // 「手を挙げている」ように見える。
+        // 左右は「背中の真後ろ」ではなく**背中の左寄り**（CLOSED_BACK_ANG）に置く。
+        // 真後ろだと肩から一直線で、肘が伸び切って突き刺さったように見える
+        const ca = Math.cos(CLOSED_BACK_ANG), sa = Math.sin(CLOSED_BACK_ANG);
+        // 背中の向き = 前方の逆、左の向き = 女から見た左
+        const bx = -Math.sin(fy), bz = -Math.cos(fy);
+        const lx = Math.cos(fy), lz = -Math.sin(fy);
         tmp.v.set(
-          f.root.position.x - Math.sin(fy) * (TORSO_R + 0.01) + Math.cos(fy) * SHO_DX * 0.7,
+          f.root.position.x + (bx * ca + lx * sa) * CLOSED_BACK_R,
           yLo + SHO_DY - 0.10,
-          f.root.position.z - Math.cos(fy) * (TORSO_R + 0.01) - Math.sin(fy) * SHO_DX * 0.7,
+          f.root.position.z + (bz * ca + lz * sa) * CLOSED_BACK_R,
         );
-        place(0, closedL, tmp.v);
+        place(0, closedL, tmp.v, CLOSED_SHO_FWD);
       }
       if (closedF >= 0) {
         // フォロワーはニュートラルポジション（ユーザー指示）。

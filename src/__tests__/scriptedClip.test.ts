@@ -323,6 +323,98 @@ describe('クローズドポジション', () => {
     expect(at(2).phase).toBe('closed');
   });
 
+  // 「女の3を逆方向にした」の再発防止（ユーザー指示 2026-08-16
+  // 「1・2・3 共々前に出す」「3 の足は 2 のもう少し前」）。**3 以外は触らない**
+  it('CBL On2: 女の 3 は 2 のもう少し前に置く', () => {
+    const LANK_ = 11, RANK_ = 12;
+    const clip = buildScriptedCBL('on2', false);
+    const at = (b: number) => {
+      const f = clip.frames.reduce((a, x) =>
+        (Math.abs(x.t - b * spb) < Math.abs(a.t - b * spb) ? x : a));
+      const p = f.p['1'];
+      let lx = p.j[7 * 3] - p.j[8 * 3], lz = p.j[7 * 3 + 2] - p.j[8 * 3 + 2];
+      const n = Math.hypot(lx, lz) || 1; lx /= n; lz /= n;
+      return {
+        L: [p.j[LANK_ * 3], p.j[LANK_ * 3 + 2]],
+        R: [p.j[RANK_ * 3], p.j[RANK_ * 3 + 2]],
+        fwd: [-lz, lx],
+      };
+    };
+    // 女は 1・3 が右足、5・7 が左足
+    const along = (b0: number, b1: number, foot: 'L' | 'R') => {
+      const a = at(b0), c = at(b1);
+      return (c[foot][0] - a[foot][0]) * c.fwd[0] + (c[foot][1] - a[foot][1]) * c.fwd[1];
+    };
+    expect(along(1, 3, 'R'), '1→3 は前へ').toBeGreaterThan(0);
+    // **3 の足は 2 の足のもう少し前**（ユーザー指示）。1 基準で置くと 2 より後ろになる
+    const a2 = at(2), a3 = at(3);
+    const past2 = (a3.R[0] - a2.L[0]) * a3.fwd[0] + (a3.R[1] - a2.L[1]) * a3.fwd[1];
+    expect(past2, '3 の足は 2 より前').toBeGreaterThan(0);
+  });
+
+  // 「女の足が重心の下に無い」の再発防止（2026-08-16）。
+  // 着地の基準を小節ごとの固定平均で取ると、小節の中で移動する人（CBL で男を
+  // 追い越す女）の足が体から置き去りになる。修正前は足の中点が体の 15.8cm 前
+  // （男は 4.9cm）で、両足が同じ側に揃うフレームが 30%（男 14%）あった
+  it('CBL On2: 足の中点は体の下にある（女が置き去りにならない）', () => {
+    const LANK_ = 11, RANK_ = 12;
+    const under = (clip: ReturnType<typeof buildScriptedCBL>, pid: '0' | '1') => {
+      let sum = 0, both = 0, n = 0;
+      for (const f of clip.frames) {
+        const p = f.p[pid];
+        const hx = (p.j[7 * 3] + p.j[8 * 3]) / 2, hz = (p.j[7 * 3 + 2] + p.j[8 * 3 + 2]) / 2;
+        let lx = p.j[7 * 3] - p.j[8 * 3], lz = p.j[7 * 3 + 2] - p.j[8 * 3 + 2];
+        const d = Math.hypot(lx, lz) || 1; lx /= d; lz /= d;
+        // 体の前方 = 左右軸を 90° 回したもの
+        const fwd = (idx: number) =>
+          (p.j[idx * 3] - hx) * -lz + (p.j[idx * 3 + 2] - hz) * lx;
+        const a = fwd(LANK_), b = fwd(RANK_);
+        // **符号つきで平均する**。置き去り = 足が体の片側へ寄り続けること。
+        // 絶対値で見ると、歩けば必ず出る前後の振れまで拾ってしまい、
+        // 「1・2・3 は前へ歩く」という振付そのものを不合格にしてしまう
+        sum += (a + b) / 2; n++;
+        if (Math.min(a, b) > 0.10 || Math.max(a, b) < -0.10) both++;
+      }
+      return { mean: Math.abs(sum / n), bothPct: both / n };
+    };
+    const clip = buildScriptedCBL('on2', false);
+    const l = under(clip, '0'), f = under(clip, '1');
+    // 女の「置き去り具合」は男を超えない（超えたら基準の取り方が壊れている）。
+    // bothPct は見ない — 1・2・3 で前へ歩けば両足が前に揃う瞬間は必ず出る。
+    // 見るのは「片側へ寄り続けていないか」だけ
+    expect(f.mean, '足の中点の前後ズレ').toBeLessThan(Math.max(l.mean, 0.08) * 1.5);
+    void f.bothPct;
+  });
+
+  // 「女がジャンプしている」の再発防止（2026-08-16）。
+  // 踵が下りて足首が HEEL_DROP(3.5cm) 沈むとき、腰も同じだけ沈めないと
+  // 支持脚だけが伸び縮みして体が上下する。修正前は女だけ幅 6.5cm・0.98cm/f で、
+  // 男（3.0cm・0.14cm/f）の 7 倍暴れていた
+  it('CBL: 支持脚の伸びは男女で同じように収まる（女が跳ねない）', () => {
+    const LANK_ = 11, RANK_ = 12;
+    const stretch = (clip: ReturnType<typeof buildScriptedCBL>, pid: '0' | '1') => {
+      let min = Infinity, max = -Infinity, jerk = 0, prev: number | null = null;
+      for (const f of clip.frames) {
+        const p = f.p[pid];
+        const v = (p.j[7 * 3 + 1] + p.j[8 * 3 + 1]) / 2
+          - Math.min(p.j[LANK_ * 3 + 1], p.j[RANK_ * 3 + 1]);
+        min = Math.min(min, v); max = Math.max(max, v);
+        if (prev !== null) jerk = Math.max(jerk, Math.abs(v - prev));
+        prev = v;
+      }
+      return { span: max - min, jerk };
+    };
+    for (const t of ['on1', 'on2'] as const) {
+      for (const closed of [false, true]) {
+        const clip = buildScriptedCBL(t, closed);
+        const l = stretch(clip, '0'), f = stretch(clip, '1');
+        const tag = `${t} ${closed ? 'closed' : 'open'}`;
+        expect(f.span, `${tag} 伸びの幅`).toBeCloseTo(l.span, 2);
+        expect(f.jerk, `${tag} 1フレームの変化`).toBeLessThanOrEqual(l.jerk + 1e-4);
+      }
+    }
+  });
+
   it('CBL のクローズドは、組んでいる間だけ詰まり、通り抜けは元の間隔に戻る', () => {
     const hip = (p: { j: Float32Array | number[] }, ax: 0 | 2) =>
       (p.j[7 * 3 + ax] + p.j[8 * 3 + ax]) / 2;
@@ -349,7 +441,10 @@ describe('クローズドポジション', () => {
     }
   });
 
-  it('ベーシックのクローズドは組める距離まで詰まる（腰の間隔 0.70m → 0.30m）', () => {
+  // 0.37 は「見えている胴体（カプセル半径 0.135）どうしを 10cm 空ける」距離
+  // （ユーザー指示 2026-08-16）。腕が届かないぶんは肩の前出しで補うので、
+  // ここを詰めて解決してはいけない
+  it('ベーシックのクローズドは組める距離まで詰まる（腰の間隔 0.70m → 0.37m）', () => {
     const hipX = (p: { j: Float32Array | number[] }) => (p.j[7 * 3] + p.j[8 * 3]) / 2;
     const gap = (clip: ReturnType<typeof buildScriptedBasic>, t: number) => {
       const f = clip.frames.reduce((a, b) => (Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a));
@@ -359,7 +454,7 @@ describe('クローズドポジション', () => {
       const open = buildScriptedBasic(t, false), cl = buildScriptedBasic(t, true);
       for (const b of [0, 1, 2, 5, 6]) {
         expect(gap(open, b * spb), `open beat ${b}`).toBeCloseTo(0.70, 2);
-        expect(gap(cl, b * spb), `closed beat ${b}`).toBeCloseTo(0.30, 2);
+        expect(gap(cl, b * spb), `closed beat ${b}`).toBeCloseTo(0.37, 2);
       }
     }
   });
@@ -399,9 +494,33 @@ describe('CBL On2 の女の足', () => {
   const dist = (a: { x: number; z: number }, b: { x: number; z: number }) =>
     Math.hypot(a.x - b.x, a.z - b.z);
 
-  it('On1 の女は据え置き（足を焼き込まない＝合格した見た目のまま）', () => {
-    expect(at(on1, 6, 1, LANK).v).toBe(0);
-    expect(at(on1, 6, 1, RANK).v).toBe(0);
+  // 2026-08-16: 手続き生成だとリグが拍ごとに足を出し続けて 4・8 で休めない
+  // （振付には 4・8 の歩が無い）というユーザー指摘で、On1 の女も焼き込みへ変更
+  it('On1 の女にも足が焼き込まれている（4・8 で休むため）', () => {
+    expect(at(on1, 6, 1, LANK).v).toBe(1);
+    expect(at(on1, 6, 1, RANK).v).toBe(1);
+  });
+
+  it('CBL: 女は 4・8 で足を動かさない（休む）', () => {
+    for (const t of ['on1', 'on2'] as const) {
+      const clip = buildScriptedCBL(t, false);
+      const spb = clip.beatGrid.beatIntervalSec;
+      const foot = (b: number, idx: number) => {
+        const f = clip.frames.reduce((a, x) =>
+          (Math.abs(x.t - b * spb) < Math.abs(a.t - b * spb) ? x : a));
+        return [f.p['1'].j[idx * 3], f.p['1'].j[idx * 3 + 2]];
+      };
+      // 4・8 の前後 0.4 拍で足がほとんど動かない = 休んでいる。
+      // 拍 12・16・28 は**通り抜けの最中**で女が実際に移動しているので除く
+      // （男の同じ拍も 10〜16cm 動く）。焼き込み前の女は毎拍出し続けていた
+      for (const b of [4, 8, 20, 24]) {
+        for (const idx of [LANK, RANK]) {
+          const a = foot(b - 0.4, idx), c = foot(b + 0.4, idx);
+          expect(Math.hypot(a[0] - c[0], a[1] - c[1]), `${t} 拍${b} joint${idx}`)
+            .toBeLessThan(t === 'on1' ? 0.12 : 0.30);
+        }
+      }
+    }
   });
 
   it('On2 は女にも足が焼き込まれている', () => {

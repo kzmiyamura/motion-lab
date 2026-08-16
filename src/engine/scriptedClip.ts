@@ -461,27 +461,43 @@ function cblLandings(
   const base = timing === 'on2' ? CBL_FOOT_SPEC_ON2 : CBL_FOOT_SPEC;
   // 女はリーダーの鏡。ベーシックと同じ作り方で、**足の左右を入れ替え、前後を反転**する
   // （男が前へ踏むカウントで女は後ろへ踏む）。横幅は足の名前に従うのでここでは触らない
+  // 女の **3 だけ** 鏡にしない（ユーザー指示 2026-08-16
+  // 「1・2・3 共々前に出す」「3 の足は 2 のもう少し前に置く」）。
+  // 3 = 直前に踏んだ 2 の QUARTER 前 → 女: 1 = +0.05, 2 = +0.35, **3 = +0.41**。
+  // 鏡のまま（-0.01）や 1 基準（+0.11）だと 2 より後ろになり、歩が後ろへ戻る。
+  // **他のカウントは触らない** — 7 は鏡のまま（+0.01）
+  const mirrorFwd = (s: { count: number; fwd: number }) =>
+    (timing === 'on2' && s.count === 3 ? -CBL_ON2_FWD[2] + QUARTER : -s.fwd);
   const spec = mirror
-    ? base.map((s) => ({ ...s, foot: s.foot === 'L' ? ('R' as const) : ('L' as const), fwd: -s.fwd }))
+    ? base.map((s) => ({
+      ...s, foot: s.foot === 'L' ? ('R' as const) : ('L' as const), fwd: mirrorFwd(s),
+    }))
     : base;
-  for (let bar = 0; bar < LOOP_BEATS / 8; bar++) {
-    // On2 の基準は「腰の真下」ではなく **その小節の腰の平均位置**。
-    // ベーシックでは重心自身が ±0.175 揺れ、足はそのぶんも含めて ±0.35 に着く。
-    // 揺れている腰を基準にすると同じ数字でも歩幅が縮む（＝二重に相殺される）ので、
-    // 揺れの中心を基準にして、ベーシック On2 の着地位置をそのまま使う
-    let cx = 0, cz = 0;
-    if (timing === 'on2') {
-      for (let b = 0; b < 8; b++) {
-        const [px, pz] = poseAt(keys, bar * 8 + b - shift);
-        cx += px / 8; cz += pz / 8;
-      }
+  // On2 の基準は「腰の真下」ではなく **腰の揺れの中心**。
+  // ベーシックでは重心自身が ±0.175 揺れ、足はそのぶんも含めて ±0.35 に着く。
+  // 揺れている腰を基準にすると同じ数字でも歩幅が縮む（＝二重に相殺される）。
+  //
+  // 揺れの中心の取り方が男女で違う:
+  //  - 男（合格済み）: **小節ごとの固定平均**。この見た目でユーザー合格なので触らない
+  //    （中心平均に変えると足が最大 19.4cm 動いてしまう）
+  //  - 女: **その歩の拍を中心にした 8 拍（揺れ1周期）の平均**。小節の固定平均だと、
+  //    小節の中で移動する人 — CBL で男を追い越す女 — の足が体から置き去りになる。
+  //    実測: 足の中点が体の 15.8cm 前（男は 4.9cm）→ 中心平均で 5.9cm に収まる
+  const swayCenter = (beat: number, bar: number): [number, number] => {
+    let sx = 0, sz = 0;
+    for (let i = 0; i < 8; i++) {
+      const b = mirror ? beat - shift - 3.5 + i : bar * 8 + i - shift;
+      const [px, pz] = poseAt(keys, b);
+      sx += px / 8; sz += pz / 8;
     }
+    return [sx, sz];
+  };
+  for (let bar = 0; bar < LOOP_BEATS / 8; bar++) {
     for (const s of spec) {
       const beat = s.count + bar * 8;
       const [hx, hz, yaw] = poseAt(keys, beat - shift);
       const lat = s.foot === 'L' ? CBL_LATERAL : -CBL_LATERAL;
-      const bx = timing === 'on2' ? cx : hx;
-      const bz = timing === 'on2' ? cz : hz;
+      const [bx, bz] = timing === 'on2' ? swayCenter(beat, bar) : [hx, hz];
       // つま先は体の向きから外へ開く（左足は左へ、右足は右へ）
       const out2 = timing === 'on2' ? (s as typeof s & { liftMin: number; toeOut: number }) : null;
       out.push({
@@ -557,12 +573,13 @@ function cblHeelAt(foot: 'L' | 'R', beat: number, mirror = false): number {
  * どちらの手も**肩より下**に置く（手を挙げて見えると却下される。back_support の教訓）。
  */
 /**
- * クローズドで踊るときの腰の間隔の半分（0.15 = 腰の間隔 0.30m）。片手のときは 0.35。
- * **腕の長さで決まる値**: 男の右肩から女の背中までは「腰の間隔 + 胴半径 0.18」で、
- * 腕は 0.52m しか届かない。0.40m 間隔だと 0.61m 先になり、腕が伸び切って
- * 水平に突き出す = 「手を挙げている」ように見える。0.30m なら 0.48m で肘が曲がる。
+ * クローズドで踊るときの腰の間隔の半分（0.185 = 腰の間隔 0.37m）。片手のときは 0.35。
+ * **見えている体の隙間で決まる値**（ユーザー指示 2026-08-16「10センチほど離していい」）:
+ * 胴体カプセルの半径は 0.135 なので、0.37 - 0.135×2 = **0.10m の隙間**になる。
+ * 腕（0.522m）はこの距離では女の背中に届かないので、CoupleFigure 側で
+ * 肩を 8cm 前へ出して（CLOSED_SHO_FWD）補う。距離を詰めて解決してはいけない。
  */
-const CLOSED_HALF_GAP = 0.15;
+const CLOSED_HALF_GAP = 0.185;
 
 /**
  * CBL でクローズドに組んでいる度合い（1 = 組んで詰まっている、0 = 通り抜けの間隔）。
@@ -697,7 +714,9 @@ export function buildScriptedCBL(timing: Timing = 'on1', closed = false): Motion
   // 足を振付として焼き込む（体は既存のキーポーズのまま）。
   // 女は **On2 だけ**。On1 の女はユーザー合格済みの見た目なので触らない
   const landsL = cblLandings(KEY_L, timing);
-  const landsF = timing === 'on2' ? cblLandings(KEY_F, timing, true) : null;
+  // 女の足は On1・On2 とも焼き込む。On1 を手続き生成のままにすると、リグ側が
+  // 拍ごとに足を出し続けるので **4・8 で休めない**（振付には 4・8 の歩が無い）
+  const landsF = cblLandings(KEY_F, timing, true);
   for (let i = 0; i <= n; i++) {
     const t = i / FPS;
     const beat = t / SPB;
@@ -709,6 +728,10 @@ export function buildScriptedCBL(timing: Timing = 'on1', closed = false): Motion
     const fx = lx + (rawFx - lx) * g, fz = lz + (rawFz - lz) * g;
     const hy = hipYAt(beat - shift);
     const heelL = cblHeelAt('L', beat), heelR = cblHeelAt('R', beat);
+    // 女の踵は男の鏡（4 = 右、8 = 左）。**腰も足首と同じだけ沈める**のが肝で、
+    // 踵が下りて足首が HEEL_DROP 沈むのに腰を据え置くと、脚だけが伸び縮みして
+    // 体が上下する = 「女がジャンプしている」に見える（男は最初から沈めてある）
+    const fHeel = Math.max(cblHeelAt('L', beat, true), cblHeelAt('R', beat, true));
     frames.push({
       t,
       p: {
@@ -717,7 +740,7 @@ export function buildScriptedCBL(timing: Timing = 'on1', closed = false): Motion
           { ...cblFootAt(landsL, 'R', beat), heel: heelR },
         ]),
         '1': landsF
-          ? placeJointsWorld(fx, fz, fyaw, hy - 0.04, lx, lz, [
+          ? placeJointsWorld(fx, fz, fyaw, hy - 0.04 - HEEL_DROP * fHeel, lx, lz, [
             fFoot(landsF, 'L', beat, fx - rawFx, fz - rawFz),
             fFoot(landsF, 'R', beat, fx - rawFx, fz - rawFz),
           ])

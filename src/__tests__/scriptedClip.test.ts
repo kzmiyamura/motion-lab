@@ -350,6 +350,21 @@ describe('クローズドポジション', () => {
     const a2 = at(2), a3 = at(3);
     const past2 = (a3.R[0] - a2.L[0]) * a3.fwd[0] + (a3.R[1] - a2.L[1]) * a3.fwd[1];
     expect(past2, '3 の足は 2 より前').toBeGreaterThan(0);
+
+    // **前に出すのは「送り出されるときの 3」だけ**（ユーザー指摘 2026-08-16:
+    // 「CBL に入る前の 3 まで前に出てしまってる。送り出されるときの 3 とは別」）。
+    // 女が通り抜けるのは拍 1〜4 と 17〜20（腰の移動 30〜45cm/拍 で実測）なので、
+    // 送り出される 3 = 拍 3・19、CBL に入る前の 3 = 拍 11・27
+    for (const b of [3, 19]) {
+      const p2 = at(b - 1), p3 = at(b);
+      const d = (p3.R[0] - p2.L[0]) * p3.fwd[0] + (p3.R[1] - p2.L[1]) * p3.fwd[1];
+      expect(d, `拍${b}（送り出される3）は 2 より前`).toBeGreaterThan(0);
+    }
+    for (const b of [11, 27]) {
+      const p2 = at(b - 1), p3 = at(b);
+      const d = (p3.R[0] - p2.L[0]) * p3.fwd[0] + (p3.R[1] - p2.L[1]) * p3.fwd[1];
+      expect(d, `拍${b}（CBL に入る前の3）は前に出さない`).toBeLessThan(0);
+    }
   });
 
   // 「女の足が重心の下に無い」の再発防止（2026-08-16）。

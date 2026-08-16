@@ -5,6 +5,7 @@ import type { MotionClip, ArmSegment } from './MocapFigure';
 import type { FaceAvatar } from '../engine/faceAvatar';
 import { PhotoHead, SampleHead, SAMPLE_BY_ID, DEFAULT_SKIN } from './AvatarHeads';
 import { SAMPLE_FACE_BY_ID } from '../engine/sampleFaces';
+import { NEUTRAL_HAND } from '../engine/armPose';
 
 /**
  * カップルダンスを「2体」ではなく **1つのペア** として組むリグ。
@@ -477,10 +478,7 @@ const TORSO_R_SELF = 0.13;   // 自分の胴体は少し細く見る（脇を締
 // CBL の入れ替わり（prep/pass/close）の間だけ自胴を太く見る。
 // 体が回りながらすれ違うので、平時の 0.13 だと腕が自分の脇腹に埋まる
 const TORSO_R_SELF_PASS = 0.165;
-// フォロワーのニュートラルポジション（胸郭ローカル [横, 肩からの高さ, 前]）。
-// 肘は下ろしたまま、上腕を体側から離して**脇を開ける** — ここが空くから
-// リーダーの手が背中へ回る（ユーザー指示 2026-08-15）
-const NEUTRAL_HAND = [0.26, -0.14, 0.22] as const;
+// フォロワーのニュートラルポジションは engine/armPose.ts（テストから測れるように分離した）
 // リーダーの手を置く肩甲骨。女の腰中点から見た極座標（半径[m]・真後ろから左へ回した角度）。
 // 半径は**見えている胴体（カプセル半径 0.135）の外側**に取る。内側だと手が女の体の
 // 中で止まり、背中へ回っていないように見える。実測 0.195/40° で手首は女の背面より
@@ -1424,6 +1422,14 @@ export function CoupleFigure({
             // シャイン（つないでいない）: 拍に合わせて前後に振る。脚と逆側の腕が前に出る
             const swing = stepPhase * mirror * -sign;
             tmp.v.set(sign * 0.32, 0.16 + Math.max(0, swing) * 0.14, 0.20 + swing * 0.16);
+          } else if (d === 1) {
+            // **フォロワーの空き手は常にニュートラルポジション**（ユーザー指示 2026-08-16:
+            // 「基本的に女性は何もしてないときはニュートラルに。脇を開けてないと
+            //   クローズドで背中に手を回せない」）。
+            // クローズド中（レイヤー3.6）と同じ的なので、組む前後で手が飛ばない
+            tmp.v.set(
+              sign * NEUTRAL_HAND[0], SHO_DY + NEUTRAL_HAND[1] + dip * 0.03, NEUTRAL_HAND[2],
+            );
           } else {
             // 片手ホールド中の空き手: 軽く前で構える（社交ダンスの基本の構え）
             tmp.v.set(sign * 0.30, 0.18 + dip * 0.03, 0.24);

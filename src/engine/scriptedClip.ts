@@ -466,12 +466,15 @@ function cblLandings(
   // 3 = 直前に踏んだ 2 の QUARTER 前 → 女: 1 = +0.05, 2 = +0.35, **3 = +0.41**。
   // 鏡のまま（-0.01）や 1 基準（+0.11）だと 2 より後ろになり、歩が後ろへ戻る。
   // **他のカウントは触らない** — 7 は鏡のまま（+0.01）
-  const mirrorFwd = (s: { count: number; fwd: number }) =>
-    (timing === 'on2' && s.count === 3 ? -CBL_ON2_FWD[2] + QUARTER : -s.fwd);
+  // **送り出される 3 だけ**（ユーザー指摘 2026-08-16:
+  // 「CBL に入る前の 3 まで前に出てしまってる。送り出されるときの 3 とは別」）。
+  // On2 は体を 5 拍ずらすので、女が通り抜けるのは拍 1〜4 と 17〜20（腰の移動で実測:
+  // 1拍あたり 30〜45cm。他の拍は 0〜13cm）。つまり送り出される 3 は **拍 3 と 19**
+  // ＝ **偶数 bar**。CBL に入る前の 3（拍 11・27 = 奇数 bar）は鏡のまま（-0.01）
+  const mirrorFwd = (s: { count: number; fwd: number }, bar: number) =>
+    (timing === 'on2' && s.count === 3 && bar % 2 === 0 ? -CBL_ON2_FWD[2] + QUARTER : -s.fwd);
   const spec = mirror
-    ? base.map((s) => ({
-      ...s, foot: s.foot === 'L' ? ('R' as const) : ('L' as const), fwd: mirrorFwd(s),
-    }))
+    ? base.map((s) => ({ ...s, foot: s.foot === 'L' ? ('R' as const) : ('L' as const) }))
     : base;
   // On2 の基準は「腰の真下」ではなく **腰の揺れの中心**。
   // ベーシックでは重心自身が ±0.175 揺れ、足はそのぶんも含めて ±0.35 に着く。
@@ -498,13 +501,14 @@ function cblLandings(
       const [hx, hz, yaw] = poseAt(keys, beat - shift);
       const lat = s.foot === 'L' ? CBL_LATERAL : -CBL_LATERAL;
       const [bx, bz] = timing === 'on2' ? swayCenter(beat, bar) : [hx, hz];
+      const fwd = mirror ? mirrorFwd(s, bar) : s.fwd;
       // つま先は体の向きから外へ開く（左足は左へ、右足は右へ）
       const out2 = timing === 'on2' ? (s as typeof s & { liftMin: number; toeOut: number }) : null;
       out.push({
         beat, foot: s.foot,
         // 基準点（スタンス幅ぶん横）＋ 踏み出しぶん前
-        x: bx + lat * Math.cos(yaw) + s.fwd * Math.sin(yaw),
-        z: bz - lat * Math.sin(yaw) + s.fwd * Math.cos(yaw),
+        x: bx + lat * Math.cos(yaw) + fwd * Math.sin(yaw),
+        z: bz - lat * Math.sin(yaw) + fwd * Math.cos(yaw),
         dur: s.dur, charge: !!s.charge,
         liftMin: out2?.liftMin ?? 0,
         toe: out2 ? yaw + (s.foot === 'L' ? -1 : 1) * out2.toeOut * D2R : undefined,

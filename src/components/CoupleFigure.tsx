@@ -1343,12 +1343,29 @@ export function CoupleFigure({
     // **どちらの手も肩より上へは行かない**
     // （back_support が「手を挙げて見える」で却下された教訓）
     if ((closedL >= 0 || closedF >= 0) && smp[0].inRange && smp[1].inRange) {
-      const place = (d: 0 | 1, k: number, target: THREE.Vector3, fwd = 0) => {
+      const place = (d: 0 | 1, k: number, target: THREE.Vector3, fwd = 0, avoid = false) => {
         const rig = rigs[d], sign = SIDE_SIGN[k];
         // 肩を前へ出す（肩甲骨の外転）。組みに入る瞬間に飛ばないよう鈍らせる
         rig.shldr[k].position.set(
           sign * SHO_DX, SHO_DY, damp(rig.shldr[k].position.z, fwd, 0.25),
         );
+        // 相手の胴体を避ける。クローズドは腰の間隔が 0.37m しかないので、
+        // 体の前 0.30m に置くニュートラルの手は**そのままだと相手の胸に 10cm めり込む**
+        //（相手の胴半径 0.17 → 表面は自分の中心から 0.20m）。
+        // リーダーの背中へ回す手は「相手の体を回り込む」のが目的なので避けさせない
+        if (avoid) {
+          const other = rigs[1 - d];
+          const oLo = other.root.position.y + other.hips.position.y;
+          pushOutOfTorso(target, other.root.position.x, other.root.position.z,
+            oLo, oLo + SHO_DY, TORSO_R);
+          tmp.sh.copy(rig.shldr[k].position);
+          rig.spine.localToWorld(tmp.sh);
+          routeAroundTorso(target, tmp.sh.x, tmp.sh.z,
+            other.root.position.x, other.root.position.z, oLo, oLo + SHO_DY, TORSO_R);
+          const yLo = rig.root.position.y + rig.hips.position.y;
+          pushOutOfTorso(target, rig.root.position.x, rig.root.position.z,
+            yLo, yLo + SHO_DY, TORSO_R_SELF);
+        }
         clampToArm(rig.spine, rig.shldr[k].position, target);
         rig.spine.worldToLocal(target);
         const ty = Math.min(target.y - rig.shldr[k].position.y, 0);   // 肩より上へは上げない
@@ -1387,7 +1404,7 @@ export function CoupleFigure({
           NEUTRAL_HAND[2],
         );
         rigs[1].spine.localToWorld(tmp.v);
-        place(1, closedF, tmp.v);
+        place(1, closedF, tmp.v, 0, true);   // 相手の胴を避ける（組むと 0.37m しか離れていない）
       }
     }
 

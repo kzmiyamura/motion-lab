@@ -518,6 +518,103 @@ function cblLandings(
   return out.sort((a, b) => a.beat - b.beat);
 }
 
+// 脚の長さ（CoupleFigure と同じ）。足首が腰からこれ以上離れると膝が伸び切り、
+// IK が解けずに関節が裏返る。補正はこの内側でしか動かさない
+const LEG_MAX = 0.46 + 0.44;
+const LEG_SAFE = LEG_MAX * 0.92;      // 伸び切る手前で止める
+const SUPPORT_MARGIN = 0.03;          // 支える足は腰より最低これだけ後ろ
+const FOOT_CLEAR = 0.12;              // 相手の足との最小距離（踏まない）
+const FOOT_SELF_MIN = 0.08;           // 自分の両足が重ならない最小距離
+
+/**
+ * **支えの拘束**（ユーザー指示 2026-08-16「どんなときでも重心を支えられる形に」）。
+ *
+ * 着地の瞬間に「腰より後ろにある足」が1本も無いと、両足が重心より前に出て
+ * 後ろ足体重の支えのない格好になる。そういう拍だけ、**いま置く足を後ろへ引いて**
+ * 支えを作る。足りている拍は 1mm も動かさない。
+ *
+ * 引くのは体の前後方向だけで、次の制約の内側に収める:
+ *  - 腰から足首まで `LEG_SAFE` 以内（膝が伸び切って裏返らない）
+ *  - 相手の足から `FOOT_CLEAR` 以上（踏まない）
+ *  - 自分のもう一方の足から `FOOT_SELF_MIN` 以上（足が重ならない）
+ */
+function clampToSupport(
+  lands: CblLand[], keys: [number, number, number][], shift: number,
+  hipY: (beat: number) => number, others: CblLand[],
+): CblLand[] {
+  const out = lands.map((l) => ({ ...l }));
+  const bySeq = [...out].sort((a, b) => a.beat - b.beat);
+  for (const f of bySeq) {
+    const [hx, hz, yaw] = poseAt(keys, f.beat - shift);
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);          // 体の前方（単位ベクトル）
+    // この瞬間に床にある「もう一方の足」= 直前に踏んだ逆足
+    const prev = bySeq
+      .filter((o) => o.foot !== f.foot && o.beat <= f.beat)
+      .sort((a, b) => b.beat - a.beat)[0]
+      ?? bySeq.filter((o) => o.foot !== f.foot).sort((a, b) => b.beat - a.beat)[0];
+    if (!prev) continue;
+    const proj = (p: { x: number; z: number }) => (p.x - hx) * fx + (p.z - hz) * fz;
+    const pSelf = proj(f), pPrev = proj(prev);
+    if (Math.min(pSelf, pPrev) <= -SUPPORT_MARGIN) continue;   // すでに支えがある
+    // いま置く足を、腰の SUPPORT_MARGIN 後ろまで引く
+    let need = pSelf + SUPPORT_MARGIN;
+    if (need <= 0) continue;
+    // 制約: 脚が届く / 相手を踏まない / 自分の足と重ならない
+    // 脚の伸びは**着地の瞬間だけでなく、その足が床にある間ずっと**見る。
+    // 腰は踏んでいる間も進むので、着地時に届いていても途中で伸び切ることがある。
+    // 既存の振付は 88〜90cm と限界近くまで使っているので、上限は
+    // 「補正前のこの足の最大」を超えないこと（＝これ以上は伸ばさない）とする
+    const nextSame = bySeq
+      .filter((o) => o.foot === f.foot && o.beat > f.beat)
+      .sort((a, b) => a.beat - b.beat)[0];
+    const until = nextSame ? nextSame.beat - nextSame.dur : f.beat + 4;
+    const legMax = (dx: number, dz: number) => {
+      let m = 0;
+      for (let b = f.beat; b <= until; b += 0.25) {
+        const [px, pz] = poseAt(keys, b - shift);
+        m = Math.max(m, Math.hypot(f.x - dx - px, f.z - dz - pz, hipY(b - shift) - ANKLE_Y));
+      }
+      return m;
+    };
+    const legCap = Math.min(LEG_MAX * 0.98, Math.max(legMax(0, 0), LEG_SAFE));
+    const ok = (d: number) => {
+      const x = f.x - fx * d, z = f.z - fz * d;
+      if (legMax(fx * d, fz * d) > legCap) return false;
+      // 足が床にある間ずっと、**動いている足も含めて**重ならない。
+      // 着地点どうしの比較だけでは、遊脚が通り過ぎる瞬間の接触を見落とす
+      const other = f.foot === 'L' ? 'R' : 'L';
+      // 運んでいる間（前の着地点 → 新しい着地点）も見る。
+      // 着いてからだけ見ると、遊脚が相手の足の上を通る瞬間を見落とす
+      const from = bySeq
+        .filter((o) => o.foot === f.foot && o.beat < f.beat)
+        .sort((a, b) => b.beat - a.beat)[0] ?? f;
+      for (let u = 0; u <= 1; u += 0.25) {
+        const sx = from.x + (x - from.x) * u, sz = from.z + (z - from.z) * u;
+        const b = f.beat - f.dur * (1 - u);
+        const o = cblFootAt(bySeq, other, b);
+        if (Math.hypot(sx - o.x, sz - o.z) < FOOT_SELF_MIN) return false;
+        for (const of_ of ['L', 'R'] as const) {
+          const p = cblFootAt(others, of_, b);
+          if (Math.hypot(sx - p.x, sz - p.z) < FOOT_CLEAR) return false;
+        }
+      }
+      for (let b = f.beat; b <= until; b += 0.25) {
+        const o = cblFootAt(bySeq, other, b);
+        if (Math.hypot(x - o.x, z - o.z) < FOOT_SELF_MIN) return false;
+        for (const of_ of ['L', 'R'] as const) {
+          const p = cblFootAt(others, of_, b);
+          if (Math.hypot(x - p.x, z - p.z) < FOOT_CLEAR) return false;
+        }
+      }
+      return true;
+    };
+    while (need > 0.005 && !ok(need)) need -= 0.01;           // 通る量まで譲る
+    if (need <= 0.005) continue;
+    f.x -= fx * need; f.z -= fz * need;
+  }
+  return out;
+}
+
 /** ワールドでの足首。着地したらその場に固定、移動中だけ前の着地点から運ぶ */
 function cblFootAt(lands: CblLand[], foot: 'L' | 'R', beat: number) {
   const mine = lands.filter((f) => f.foot === foot);
@@ -720,7 +817,10 @@ export function buildScriptedCBL(timing: Timing = 'on1', closed = false): Motion
   const landsL = cblLandings(KEY_L, timing);
   // 女の足は On1・On2 とも焼き込む。On1 を手続き生成のままにすると、リグ側が
   // 拍ごとに足を出し続けるので **4・8 で休めない**（振付には 4・8 の歩が無い）
-  const landsF = cblLandings(KEY_F, timing, true);
+  // 女は「重心を支えられる形」に補正する（男は合格済みなので触らない）
+  const landsF = clampToSupport(
+    cblLandings(KEY_F, timing, true), KEY_F, shift, hipYAt, landsL,
+  );
   for (let i = 0; i <= n; i++) {
     const t = i / FPS;
     const beat = t / SPB;

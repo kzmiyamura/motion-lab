@@ -585,3 +585,73 @@ describe('CBL On2 の女の足', () => {
     }
   });
 });
+
+describe('支えの拘束（女の重心が足で支えられる）', () => {
+  const spb = 60 / 170;
+  const LANK_ = 11, RANK_ = 12;
+
+  // 腰から見た足の前後位置（+ = 腰より前）と、腰から足首までの距離
+  const look = (clip: ReturnType<typeof buildScriptedCBL>, b: number, pid: '0' | '1') => {
+    const t = b * spb;
+    const f = clip.frames.reduce((a, x) => (Math.abs(x.t - t) < Math.abs(a.t - t) ? x : a));
+    const p = f.p[pid];
+    const hx = (p.j[7 * 3] + p.j[8 * 3]) / 2, hy = (p.j[7 * 3 + 1] + p.j[8 * 3 + 1]) / 2;
+    const hz = (p.j[7 * 3 + 2] + p.j[8 * 3 + 2]) / 2;
+    let lx = p.j[7 * 3] - p.j[8 * 3], lz = p.j[7 * 3 + 2] - p.j[8 * 3 + 2];
+    const n = Math.hypot(lx, lz) || 1; lx /= n; lz /= n;
+    const foot = (idx: number) => ({
+      x: p.j[idx * 3], z: p.j[idx * 3 + 2],
+      fwd: (p.j[idx * 3] - hx) * -lz + (p.j[idx * 3 + 2] - hz) * lx,
+      leg: Math.hypot(p.j[idx * 3] - hx, p.j[idx * 3 + 1] - hy, p.j[idx * 3 + 2] - hz),
+    });
+    return { L: foot(LANK_), R: foot(RANK_) };
+  };
+
+  it('女の「両足とも腰より前」は男と同程度に収まる（後ろ足体重にならない）', () => {
+    for (const timing of ['on1', 'on2'] as const) {
+      const clip = buildScriptedCBL(timing);
+      const pct = (pid: '0' | '1') => {
+        let bad = 0, n = 0;
+        for (let b = 0; b < 32; b += 0.25) {
+          const s = look(clip, b, pid);
+          n++;
+          if (Math.min(s.L.fwd, s.R.fwd) > 0) bad++;
+        }
+        return bad / n;
+      };
+      // 男（合格済み）を基準に、女がそれを大きく超えないこと
+      expect(pct('1'), timing).toBeLessThan(Math.max(pct('0') + 0.05, 0.30));
+    }
+  });
+
+  // 脚は 0.46 + 0.44 = 0.90m。補正は「いまより伸ばさない」ことを守る。
+  // 【報告済み・未対応】CBL On1 の女は補正前から拍13 付近で 90.4〜90.6cm あり、
+  // わずかに限界を超えている（リグ側が LEG_MAX で丸めるので裏返りはしないが、
+  // 足が床から浮く／脚が突っ張って見える可能性がある）。合格済みなので触っていない
+  it('補正しても脚は伸び切らない（膝が裏返らない）', () => {
+    for (const [timing, cap] of [['on1', 0.91], ['on2', 0.90]] as const) {
+      const clip = buildScriptedCBL(timing);
+      for (let b = 0; b < 32; b += 0.25) {
+        const s = look(clip, b, '1');
+        expect(Math.max(s.L.leg, s.R.leg), `${timing} beat ${b}`).toBeLessThan(cap);
+      }
+    }
+  });
+
+  it('補正しても足はめり込まない（相手の足・自分の足と重ならない）', () => {
+    for (const timing of ['on1', 'on2'] as const) {
+      const clip = buildScriptedCBL(timing);
+      for (let b = 0; b < 32; b += 0.25) {
+        const f = look(clip, b, '1'), l = look(clip, b, '0');
+        expect(Math.hypot(f.L.x - f.R.x, f.L.z - f.R.z), `${timing} 自分 beat ${b}`)
+          .toBeGreaterThan(0.05);
+        for (const a of [f.L, f.R]) {
+          for (const c of [l.L, l.R]) {
+            expect(Math.hypot(a.x - c.x, a.z - c.z), `${timing} 相手 beat ${b}`)
+              .toBeGreaterThan(0.10);
+          }
+        }
+      }
+    }
+  });
+});

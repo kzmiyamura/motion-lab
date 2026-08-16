@@ -14,6 +14,21 @@
 Claude はこのリポジトリのコードを自由に読み書き・修正してよい。
 コミット・プッシュも許可する。
 
+## git の認証（2026-08-16 に SSH へ移行）
+
+**リモートは SSH**（`git@github.com:kzmiyamura/motion-lab.git`）。
+Claude Code のセッションからそのまま `git push` できる。
+
+HTTPS だと push できない。GitHub はパスワード認証を廃止しており、
+資格情報の入力には TTY が必要だが、Claude Code のシェル（`!` 付き実行を含む）は
+TTY を持たないため `fatal: could not read Username ... Device not configured` で落ちる。
+`osascript` で Terminal.app を開けば TTY は得られるが、Personal Access Token の
+入力が毎回要る。SSH 鍵（`~/.ssh/id_ed25519`・パスフレーズなし）なら TTY 不要。
+
+- 接続確認: `ssh -T git@github.com` → `Hi kzmiyamura!` が返れば OK
+- リモートが `https://` に戻っていたら:
+  `git remote set-url origin git@github.com:kzmiyamura/motion-lab.git`
+
 ## 技術スタック
 
 - React 19 / TypeScript 5.9 / Vite 7

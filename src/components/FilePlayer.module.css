@@ -909,6 +909,58 @@
   border-radius: 8px;
 }
 
+.confirmBox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
+  border-radius: 8px;
+}
+
+.confirmText {
+  font-size: 0.78rem;
+  color: var(--color-ui-text-bright);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.confirmBtns {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.confirmYes,
+.confirmNo {
+  flex: 1;
+  padding: 0.5rem 0;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.confirmYes {
+  background: rgba(200, 60, 60, 0.18);
+  border: 1.5px solid rgba(224, 96, 96, 0.6);
+  color: #e06060;
+}
+.confirmNo {
+  background: transparent;
+  border: 1.5px solid color-mix(in srgb, var(--color-ui-text) 40%, transparent);
+  color: var(--color-ui-text);
+}
+.confirmYes:disabled,
+.confirmNo:disabled { opacity: 0.5; cursor: default; }
+
+.confirmResult {
+  font-size: 0.72rem;
+  color: var(--color-ui-text);
+  margin: 0;
+  line-height: 1.5;
+}
+
 .shareBtn {
   padding: 0.5rem 1rem;
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);

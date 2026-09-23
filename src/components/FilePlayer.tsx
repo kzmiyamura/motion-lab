@@ -135,6 +135,9 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
   const [homeUploadStatus, setHomeUploadStatus] = useState<HomeUploadStatus>('idle');
   const [homeUploadStats, setHomeUploadStats] = useState<HomeUploadStats | null>(null);
   const [homeUploadError, setHomeUploadError] = useState('');
+  /** ThinkCentre 保存完了後の「端末内コピーを消すか」確認の状態 */
+  type LocalCopyPrompt = 'ask' | 'deleting' | 'deleted' | 'kept' | null;
+  const [localCopyPrompt, setLocalCopyPrompt] = useState<LocalCopyPrompt>(null);
 
   // Share state
   const [sharingId, setSharingId] = useState<string | null>(null);
@@ -145,6 +148,8 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
   const prevBlobUrl = useRef<string | null>(null);
   /** アップロード用に元の File オブジェクトを保持（Drive ファイルは null） */
   const sourceFileRef = useRef<File | null>(null);
+  /** 開いているファイルの IndexedDB 上の id（端末内コピー。無ければ null） */
+  const storedFileIdRef = useRef<number | null>(null);
   const stepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [beat1VideoTime, setBeat1VideoTime] = useState<number | null>(null);
   const prevTimeRef = useRef(0);
@@ -359,6 +364,9 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
     stopPseudoCycle();
     if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
     prevBlobUrl.current = url;
+    storedFileIdRef.current = null;
+    setHomeUploadStatus('idle');
+    setLocalCopyPrompt(null);
     setThinkCentreVideoId(null);
     setSource({ name, url, isVideo: mimeType.startsWith('video/') });
     setBaseBpm(bpm);
@@ -476,7 +484,10 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
     openFileSource(file.name, url, file.type);
     setIsSaving(true);
     saveFile(file.name, file, file.type)
-      .then(() => listFiles())
+      .then(id => {
+        if (sourceFileRef.current === file) storedFileIdRef.current = id;
+        return listFiles();
+      })
       .then(setStoredFiles)
       .catch(() => {})
       .finally(() => setIsSaving(false));
@@ -495,11 +506,16 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
     sourceFileRef.current = new File([sf.blob], sf.name, { type: sf.mimeType });
     setUploadStatus('idle');
     openFileSource(sf.name, url, sf.mimeType);
+    storedFileIdRef.current = sf.id;
   };
 
   const handleStoredFileDelete = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
     await deleteFile(id).catch(() => {});
+    if (storedFileIdRef.current === id) {
+      storedFileIdRef.current = null;
+      setLocalCopyPrompt(null);
+    }
     setStoredFiles(await listFiles().catch(() => []));
   };
 
@@ -859,9 +875,26 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
     try {
       await uploadVideoToHomeServer(HOME_SERVER_URL, file, stats => setHomeUploadStats(stats));
       setHomeUploadStatus('done');
+      // 端末内コピーがあれば、消すかどうかを聞く
+      setLocalCopyPrompt(storedFileIdRef.current != null ? 'ask' : null);
     } catch (e) {
       setHomeUploadError(e instanceof Error ? e.message : '保存に失敗しました。');
       setHomeUploadStatus('error');
+    }
+  };
+
+  /** ThinkCentre 保存後、アプリ内（IndexedDB）の端末内コピーを削除する。再生中の動画はそのまま */
+  const handleDeleteLocalCopy = async () => {
+    const id = storedFileIdRef.current;
+    if (id == null) return;
+    setLocalCopyPrompt('deleting');
+    try {
+      await deleteFile(id);
+      storedFileIdRef.current = null;
+      setStoredFiles(await listFiles().catch(() => []));
+      setLocalCopyPrompt('deleted');
+    } catch {
+      setLocalCopyPrompt('ask');
     }
   };
 
@@ -1348,9 +1381,39 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
               )}
             </>
           ) : homeUploadStatus === 'done' ? (
-            <p className={styles.uploadSuccess}>
-              ✅ ThinkCentre に保存しました。変換が完了すると Home タブから再生できます。
-            </p>
+            <div className={styles.uploadDoneWrap}>
+              <p className={styles.uploadSuccess}>
+                ✅ ThinkCentre に保存しました。変換が完了すると Home タブから再生できます。
+              </p>
+              {(localCopyPrompt === 'ask' || localCopyPrompt === 'deleting') && (
+                <div className={styles.confirmBox}>
+                  <p className={styles.confirmText}>
+                    アプリ内に保存した動画（{fmtBytes(sourceFileRef.current.size)}）を消しますか？
+                  </p>
+                  <div className={styles.confirmBtns}>
+                    <button
+                      className={styles.confirmYes}
+                      onClick={handleDeleteLocalCopy}
+                      disabled={localCopyPrompt === 'deleting'}
+                    >
+                      {localCopyPrompt === 'deleting' ? '削除中…' : 'Yes'}
+                    </button>
+                    <button
+                      className={styles.confirmNo}
+                      onClick={() => setLocalCopyPrompt('kept')}
+                      disabled={localCopyPrompt === 'deleting'}
+                    >
+                      No
+                    </button>
+                  </div>
+                </div>
+              )}
+              {localCopyPrompt === 'deleted' && (
+                <p className={styles.confirmResult}>
+                  🗑 アプリ内の動画を消しました（今の再生はこのまま続けられます）。写真アプリの元動画は写真アプリから削除してください。
+                </p>
+              )}
+            </div>
           ) : (
             <div className={styles.uploadProgressWrap}>
               <div className={styles.uploadProgressBar}>

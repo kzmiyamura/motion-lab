@@ -337,7 +337,14 @@ TURN_MAX_ROTATIONS = 3     # 連続回転の上限（それ以上はジッタの
 CBL_MIN_SEP = 0.08         # 交差前後で必要な左右分離（正規化X。ジッタの往復を弾く）
 CBL_WINDOW_SEC = 2.0       # 交差の前後この秒数内に十分な分離があること
 CBL_PIVOT_SUPPRESS_SEC = 1.2  # CBLの±この秒数内のリーダーのターンはCBLのピボット動作として棄却
-EVENT_COOLDOWN_SEC = 2.5   # 同種イベントの最小間隔
+EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔
+# CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
+# 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
+CBL_COOLDOWN_SEC = 1.0
+# ターンの向きの目安（spin）を見る窓: イベント時刻の前後
+SPIN_PRE_SEC = 0.4
+SPIN_POST_SEC = 1.6
+SPIN_KP_MIN = 0.3
 
 
 def detect_turns(draw_frames, pid):
@@ -421,10 +428,58 @@ def detect_cbl(draw_frames):
         sign_prev = 1 if d_prev > 0 else -1
         ok_before = any(d * sign_prev >= CBL_MIN_SEP for d in before)
         ok_after = any(d * -sign_prev >= CBL_MIN_SEP for d in after)
-        if ok_before and ok_after and t_cur - last_event > EVENT_COOLDOWN_SEC:
+        if ok_before and ok_after and t_cur - last_event > CBL_COOLDOWN_SEC:
             events.append(round(t_cur, 2))
             last_event = t_cur
     return events
+
+
+def face_side(p):
+    """顔が画面右を向いていれば +1、左なら -1、読めなければ 0（鼻と耳/肩の中点のX差）"""
+    k = p.get("kps")
+    if not k or k[0][2] < SPIN_KP_MIN:
+        return 0
+    refs = [k[i][0] for i in (3, 4) if k[i][2] >= SPIN_KP_MIN]  # 左耳・右耳
+    if not refs:
+        refs = [(k[5][0] + k[6][0]) / 2]  # 耳が無ければ肩の中点
+    off = k[0][0] - sum(refs) / len(refs)
+    if abs(off) < 0.004:
+        return 0
+    return 1 if off > 0 else -1
+
+
+def spin_hint(draw_frames, pid, t_center):
+    """ターン候補の回る向きと回転量の目安: {"seq": "RRL", "netDeg": 360} or None
+
+    shDx の符号が変わる瞬間（真横向き）に顔が画面の右/左どちらを向いているかで、
+    正面↔背中をどちら回りで通過したかが決まる（上から見て時計回り = 右回り = R）:
+      正面→背中 を画面右向きで通過 = 左回り / 画面左向き = 右回り
+      背中→正面 を画面右向きで通過 = 右回り / 画面左向き = 左回り
+    反転ごとに ±180° を足すので、半回転して戻る動きは 0° になり1回転と区別できる。
+    10fps 間引きのため速いターンで真横を取りこぼし、回転量は ±180° ずれることがある
+    （9/23 の2本で向きは女性のターン10件中9件一致・量は目安）。確定は Claude がストリップで行う
+    """
+    series = []
+    for df in draw_frames:
+        if not (t_center - SPIN_PRE_SEC <= df["t"] <= t_center + SPIN_POST_SEC):
+            continue
+        for p in df["kept"]:
+            if p.get("pid") == pid and abs(p["shDx"]) >= TURN_FLIP_MARGIN:
+                series.append((p["shDx"], p))
+    seq, net = "", 0
+    for (d0, p0), (d1, p1) in zip(series, series[1:]):
+        if (d0 > 0) == (d1 > 0):
+            continue
+        near, far = (p0, p1) if abs(d0) <= abs(d1) else (p1, p0)
+        side = face_side(near) or face_side(far)
+        if side == 0:
+            seq += "?"
+            continue
+        front_to_back = d0 > 0
+        right_turn = (side < 0) if front_to_back else (side > 0)
+        seq += "R" if right_turn else "L"
+        net += 180 if right_turn else -180
+    return {"seq": seq, "netDeg": net} if seq else None
 
 
 HOLD_DIST = 0.07       # 手首間の正規化距離がこれ未満なら「つないでいる」
@@ -537,7 +592,8 @@ def detect_events(draw_frames, leader_pid):
             if by == "leader" and any(abs(t - ft) <= CBL_PIVOT_SUPPRESS_SEC for ft in follower_turn_times):
                 continue
             events.append({"t": t, "type": "Turn", "by": by, "rotations": rotations,
-                           "hold": detect_hold(draw_frames, t, leader_pid)})
+                           "hold": detect_hold(draw_frames, t, leader_pid),
+                           "spin": spin_hint(draw_frames, pid, t)})
     events.sort(key=lambda e: e["t"])
     return events
 

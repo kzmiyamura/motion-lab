@@ -40,66 +40,148 @@ export interface HomeServerFolder {
   createdAt: string;
 }
 
-/**
- * 動画ファイルを ThinkCentre サーバーへアップロードする（XHRで進捗取得）
- * @returns アップロードされた動画の id
- */
-export function uploadVideoToHomeServer(
-  baseUrl: string,
-  file: File,
-  onProgress?: (stats: HomeUploadStats) => void,
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const form = new FormData();
-    form.append('file', file, file.name);
-    form.append('title', file.name);
+/** 1チャンクあたりの再試行回数（通信の瞬断対策） */
+const CHUNK_MAX_ATTEMPTS = 4;
+/** 途中再開用: ファイルごとの uploadId を覚えておく localStorage キー */
+const RESUME_KEY_PREFIX = 'motionlab-home-upload:';
 
+function resumeKeyOf(file: File): string {
+  return `${RESUME_KEY_PREFIX}${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function loadResumeId(file: File): string | null {
+  try { return localStorage.getItem(resumeKeyOf(file)); } catch { return null; }
+}
+
+function saveResumeId(file: File, uploadId: string | null): void {
+  try {
+    if (uploadId) localStorage.setItem(resumeKeyOf(file), uploadId);
+    else localStorage.removeItem(resumeKeyOf(file));
+  } catch { /* 保存できなくても再開できないだけ */ }
+}
+
+async function postJson<T>(url: string, body: unknown): Promise<{ status: number; data: T }> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({})) as T;
+  return { status: res.status, data };
+}
+
+/** 1チャンクを XHR で PUT する（進捗取得のため fetch ではなく XHR） */
+function putChunk(url: string, blob: Blob, onLoaded: (loaded: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${baseUrl}/api/videos`);
+    xhr.open('PUT', url);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     const auth = authHeaders();
     if (auth.Authorization) xhr.setRequestHeader('Authorization', auth.Authorization);
-
-    const startTime = Date.now();
-
-    xhr.upload.addEventListener('progress', (e) => {
-      if (!e.lengthComputable) return;
-      const elapsedSec = (Date.now() - startTime) / 1000;
-      const speedBps   = elapsedSec > 0 ? e.loaded / elapsedSec : 0;
-      const remaining  = e.total - e.loaded;
-      const etaSec     = speedBps > 0 ? remaining / speedBps : 0;
-      onProgress?.({
-        percent:  Math.round((e.loaded / e.total) * 100),
-        loaded:   e.loaded,
-        total:    e.total,
-        speedBps,
-        etaSec,
-      });
-    });
-
+    xhr.upload.addEventListener('progress', e => onLoaded(e.loaded));
     xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress?.({ percent: 100, loaded: file.size, total: file.size, speedBps: 0, etaSec: 0 });
-        try {
-          const result = JSON.parse(xhr.responseText) as { id?: string };
-          if (!result.id) throw new Error('no id in response');
-          resolve(result.id);
-        } catch {
-          reject(new HomeServerApiError('サーバーからの応答を解釈できませんでした'));
-        }
-      } else {
-        reject(new HomeServerApiError(`アップロード失敗: HTTP ${xhr.status}`));
-      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new HomeServerApiError(`アップロード失敗: HTTP ${xhr.status}`));
     });
-
     xhr.addEventListener('error', () =>
       reject(new HomeServerApiError('アップロード中にネットワークエラーが発生しました')),
     );
     xhr.addEventListener('abort', () =>
       reject(new HomeServerApiError('アップロードがキャンセルされました')),
     );
-
-    xhr.send(form);
+    xhr.send(blob);
   });
+}
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * 動画ファイルを ThinkCentre サーバーへ分割アップロードする。
+ * relay（Cloudflare Pages）の 100MB/リクエスト上限を避けるため、サーバー指定のサイズ（50MB）に分けて送る。
+ * チャンク単位で再試行し、失敗しても同じファイルを選び直せば受信済みの分を飛ばして再開する。
+ * @returns アップロードされた動画の id
+ */
+export async function uploadVideoToHomeServer(
+  baseUrl: string,
+  file: File,
+  onProgress?: (stats: HomeUploadStats) => void,
+): Promise<string> {
+  // 1. 前回の続きがあれば再開、無ければ新規開始
+  let uploadId = loadResumeId(file);
+  let chunkSize = 0;
+  let totalChunks = 0;
+  let received = new Set<number>();
+  if (uploadId) {
+    const res = await fetch(`${baseUrl}/api/uploads/${uploadId}`).catch(() => null);
+    if (res?.ok) {
+      const data = await res.json() as { chunkSize: number; totalChunks: number; receivedChunks: number[] };
+      ({ chunkSize, totalChunks } = data);
+      received = new Set(data.receivedChunks);
+    } else {
+      uploadId = null;
+    }
+  }
+  if (!uploadId) {
+    const { status, data } = await postJson<{ uploadId?: string; chunkSize?: number; totalChunks?: number; message?: string; error?: string }>(
+      `${baseUrl}/api/uploads`,
+      { filename: file.name, title: file.name, size: file.size },
+    );
+    if (status < 200 || status >= 300 || !data.uploadId || !data.chunkSize || !data.totalChunks) {
+      throw new HomeServerApiError(data.message ?? `アップロード開始に失敗しました: HTTP ${status}`);
+    }
+    uploadId = data.uploadId;
+    chunkSize = data.chunkSize;
+    totalChunks = data.totalChunks;
+    saveResumeId(file, uploadId);
+  }
+
+  // 2. 未受信のチャンクを順に送る
+  const startTime = Date.now();
+  const alreadyLoaded = [...received].reduce(
+    (sum, i) => sum + Math.min(chunkSize, file.size - i * chunkSize), 0,
+  );
+  let doneBytes = alreadyLoaded;
+  const report = (inFlight: number) => {
+    const loaded = doneBytes + inFlight;
+    const elapsedSec = (Date.now() - startTime) / 1000;
+    const speedBps = elapsedSec > 0 ? (loaded - alreadyLoaded) / elapsedSec : 0;
+    onProgress?.({
+      percent: Math.min(99, Math.round((loaded / file.size) * 100)), // 100% は結合完了後
+      loaded,
+      total: file.size,
+      speedBps,
+      etaSec: speedBps > 0 ? (file.size - loaded) / speedBps : 0,
+    });
+  };
+  report(0);
+
+  for (let i = 0; i < totalChunks; i++) {
+    if (received.has(i)) continue;
+    const blob = file.slice(i * chunkSize, Math.min(file.size, (i + 1) * chunkSize));
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await putChunk(`${baseUrl}/api/uploads/${uploadId}/chunks/${i}`, blob, report);
+        break;
+      } catch (e) {
+        if (attempt >= CHUNK_MAX_ATTEMPTS) throw e;
+        report(0);
+        await sleep(1000 * 2 ** (attempt - 1));
+      }
+    }
+    doneBytes += blob.size;
+    report(0);
+  }
+
+  // 3. サーバー側で結合して登録
+  const { status, data } = await postJson<{ id?: string; error?: string }>(
+    `${baseUrl}/api/uploads/${uploadId}/complete`, {},
+  );
+  if (status < 200 || status >= 300 || !data.id) {
+    throw new HomeServerApiError(`保存の仕上げに失敗しました: ${data.error ?? `HTTP ${status}`}`);
+  }
+  saveResumeId(file, null);
+  onProgress?.({ percent: 100, loaded: file.size, total: file.size, speedBps: 0, etaSec: 0 });
+  return data.id;
 }
 
 export async function listHomeServerVideos(baseUrl: string): Promise<HomeServerVideo[]> {

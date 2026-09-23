@@ -4,6 +4,7 @@ import cors from 'cors';
 import express from 'express';
 import { HLS_DIR, ORIGINALS_DIR, THUMBNAILS_DIR, videosRouter } from './routes/videos.js';
 import { foldersRouter } from './routes/folders.js';
+import { uploadsRouter } from './routes/uploads.js';
 import { jobsRouter } from './routes/jobs.js';
 import { motionRouter } from './routes/motion.js';
 import { JOBS_DIR, startJobWorker } from './jobWorker.js';
@@ -37,6 +38,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.use('/api/videos', videosRouter);
+app.use('/api/uploads', uploadsRouter);
 app.use('/api/folders', foldersRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/motion', motionRouter);

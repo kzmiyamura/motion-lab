@@ -50,7 +50,7 @@ function toPublicVideo(row: VideoRow) {
 }
 
 /** 解析ジョブ実行中はアップロード（ffmpeg変換で重い）を受け付けない */
-function blockIfAnalyzing(_req: Request, res: Response, next: NextFunction) {
+export function blockIfAnalyzing(_req: Request, res: Response, next: NextFunction) {
   if (isAnalysisRunning() || isJobWorkerBusy()) {
     return res.status(409).json({
       error: 'analysis_in_progress',
@@ -96,13 +96,23 @@ videosRouter.post('/', requireWriteToken, blockIfAnalyzing, upload.single('file'
 
   const title = (req.body?.title as string | undefined)?.trim() || file.originalname;
   const folderId = (req.body?.folderId as string | undefined)?.trim() || null;
-  insertVideo({ id, title, original_filename: file.originalname, folder_id: folderId });
+  registerUploadedVideo(id, file.path, file.originalname, title, folderId);
 
   // 変換完了は待たずに即レスポンス（保存自体はここで確実に完了している）
   res.status(202).json({ id, status: 'processing' });
+});
+
+/**
+ * originals に置かれた動画を DB に登録し、HLS 変換をバックグラウンドで開始する。
+ * 一括アップロード（POST /api/videos）と分割アップロード（/api/uploads）の共通処理。
+ */
+export function registerUploadedVideo(
+  id: string, filePath: string, originalName: string, title: string, folderId: string | null,
+): void {
+  insertVideo({ id, title, original_filename: originalName, folder_id: folderId });
 
   const hlsOutDir = path.join(HLS_DIR, id);
-  convertVideo(file.path, hlsOutDir, THUMBNAILS_DIR, id)
+  convertVideo(filePath, hlsOutDir, THUMBNAILS_DIR, id)
     .then(result => {
       markVideoReady(id, result.durationSec, `/thumbnails/${id}.jpg`, `/hls/${id}/playlist.m3u8`);
       maybeEnqueue(id); // フォルダに指示書があれば解析ジョブを積む
@@ -110,7 +120,7 @@ videosRouter.post('/', requireWriteToken, blockIfAnalyzing, upload.single('file'
     .catch(err => {
       markVideoError(id, err instanceof Error ? err.message : String(err));
     });
-});
+}
 
 videosRouter.patch('/:id', requireWriteToken, (req, res) => {
   const row = getVideo(req.params.id);

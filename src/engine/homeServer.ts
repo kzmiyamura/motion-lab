@@ -70,6 +70,9 @@ async function postJson<T>(url: string, body: unknown): Promise<{ status: number
   return { status: res.status, data };
 }
 
+/** 送信が進まないまま この時間が過ぎたら、そのチャンクを打ち切って送り直す */
+const CHUNK_STALL_MS = 60_000;
+
 /** 1チャンクを XHR で PUT する（進捗取得のため fetch ではなく XHR） */
 function putChunk(url: string, blob: Blob, onLoaded: (loaded: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -78,17 +81,34 @@ function putChunk(url: string, blob: Blob, onLoaded: (loaded: number) => void): 
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     const auth = authHeaders();
     if (auth.Authorization) xhr.setRequestHeader('Authorization', auth.Authorization);
-    xhr.upload.addEventListener('progress', e => onLoaded(e.loaded));
-    xhr.addEventListener('load', () => {
+
+    // 回線が詰まって進捗が止まったまま待ち続けないよう、無進捗を監視する
+    let lastProgressAt = Date.now();
+    let stalled = false;
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastProgressAt > CHUNK_STALL_MS) {
+        stalled = true;
+        xhr.abort();
+      }
+    }, 5000);
+    const finish = (fn: () => void) => { clearInterval(watchdog); fn(); };
+
+    xhr.upload.addEventListener('progress', e => {
+      lastProgressAt = Date.now();
+      onLoaded(e.loaded);
+    });
+    xhr.addEventListener('load', () => finish(() => {
       if (xhr.status >= 200 && xhr.status < 300) resolve();
       else reject(new HomeServerApiError(`アップロード失敗: HTTP ${xhr.status}`));
-    });
-    xhr.addEventListener('error', () =>
+    }));
+    xhr.addEventListener('error', () => finish(() =>
       reject(new HomeServerApiError('アップロード中にネットワークエラーが発生しました')),
-    );
-    xhr.addEventListener('abort', () =>
-      reject(new HomeServerApiError('アップロードがキャンセルされました')),
-    );
+    ));
+    xhr.addEventListener('abort', () => finish(() =>
+      reject(new HomeServerApiError(stalled
+        ? '送信が1分以上進まなかったため中断しました'
+        : 'アップロードがキャンセルされました')),
+    ));
     xhr.send(blob);
   });
 }

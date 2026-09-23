@@ -82,11 +82,14 @@ function putChunk(url: string, blob: Blob, onLoaded: (loaded: number) => void): 
     const auth = authHeaders();
     if (auth.Authorization) xhr.setRequestHeader('Authorization', auth.Authorization);
 
-    // 回線が詰まって進捗が止まったまま待ち続けないよう、無進捗を監視する
+    // 回線が詰まって進捗が止まったまま待ち続けないよう、無進捗を監視する。
+    // ただし iOS Safari は送信バッファに積んだ時点で loaded=全量を報告し、その後は実送信が終わるまで
+    // progress が来ない。全量報告後も監視すると正常な送信を打ち切ってしまうので、全量報告後は監視しない
     let lastProgressAt = Date.now();
+    let fullyReported = false;
     let stalled = false;
     const watchdog = setInterval(() => {
-      if (Date.now() - lastProgressAt > CHUNK_STALL_MS) {
+      if (!fullyReported && Date.now() - lastProgressAt > CHUNK_STALL_MS) {
         stalled = true;
         xhr.abort();
       }
@@ -95,6 +98,7 @@ function putChunk(url: string, blob: Blob, onLoaded: (loaded: number) => void): 
 
     xhr.upload.addEventListener('progress', e => {
       lastProgressAt = Date.now();
+      if (e.loaded >= blob.size) fullyReported = true;
       onLoaded(e.loaded);
     });
     xhr.addEventListener('load', () => finish(() => {

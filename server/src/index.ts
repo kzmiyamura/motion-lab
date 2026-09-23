@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { spawn } from 'node:child_process';
 import cors from 'cors';
 import express from 'express';
-import { HLS_DIR, ORIGINALS_DIR, THUMBNAILS_DIR, videosRouter } from './routes/videos.js';
+import { HLS_DIR, ORIGINALS_DIR, THUMBNAILS_DIR, resumePendingConversions, videosRouter } from './routes/videos.js';
 import { foldersRouter } from './routes/folders.js';
 import { uploadsRouter } from './routes/uploads.js';
 import { jobsRouter } from './routes/jobs.js';
@@ -53,5 +53,6 @@ app.listen(PORT, () => {
   console.log(`  hls:       ${HLS_DIR}`);
   console.log(`  thumbnails:${THUMBNAILS_DIR}`);
   checkClaudeAvailability();
+  resumePendingConversions();
   startJobWorker();
 });

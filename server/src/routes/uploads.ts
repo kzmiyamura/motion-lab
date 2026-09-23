@@ -18,7 +18,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Router } from 'express';
 import { requireWriteToken } from '../auth.js';
-import { blockIfAnalyzing, ORIGINALS_DIR, registerUploadedVideo, STORAGE_DIR } from './videos.js';
+import { ORIGINALS_DIR, registerUploadedVideo, STORAGE_DIR } from './videos.js';
 
 export const UPLOADS_TMP_DIR = path.join(STORAGE_DIR, 'uploads-tmp');
 
@@ -73,7 +73,7 @@ async function sweepStale(): Promise<void> {
 
 export const uploadsRouter = Router();
 
-uploadsRouter.post('/', requireWriteToken, blockIfAnalyzing, async (req, res) => {
+uploadsRouter.post('/', requireWriteToken, async (req, res) => {
   const body = (req.body ?? {}) as { filename?: string; title?: string; size?: number; folderId?: string | null };
   const filename = body.filename?.trim();
   const size = Number(body.size);

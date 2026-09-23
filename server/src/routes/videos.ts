@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { Router, type NextFunction, type Request, type Response } from 'express';
+import { Router } from 'express';
 import multer from 'multer';
 import { convertVideo } from '../converter.js';
 import {
@@ -49,15 +50,48 @@ function toPublicVideo(row: VideoRow) {
   };
 }
 
-/** 解析ジョブ実行中はアップロード（ffmpeg変換で重い）を受け付けない */
-export function blockIfAnalyzing(_req: Request, res: Response, next: NextFunction) {
-  if (isAnalysisRunning() || isJobWorkerBusy()) {
-    return res.status(409).json({
-      error: 'analysis_in_progress',
-      message: '解析中のためアップロードできません。しばらくしてから再試行してください。',
-    });
+/** 回転解析・フォルダ解析ジョブのどちらかが走っているか */
+function isAnalysisBusy(): boolean {
+  return isAnalysisRunning() || isJobWorkerBusy();
+}
+
+const CONVERT_WAIT_POLL_MS = 10_000;
+/** HLS 変換を1本ずつ直列に流すためのチェーン */
+let conversionChain: Promise<void> = Promise.resolve();
+
+/**
+ * HLS 変換を順番待ちに積む。
+ * 解析中でもアップロード（受信・保存）は受け付け、CPU を食う変換だけ解析が終わるまで待たせる。
+ */
+function enqueueConversion(id: string, filePath: string): void {
+  conversionChain = conversionChain.then(async () => {
+    if (isAnalysisBusy()) console.log(`[convert] ${id}: 解析中のため変換を待機`);
+    while (isAnalysisBusy()) await new Promise(r => setTimeout(r, CONVERT_WAIT_POLL_MS));
+    if (!getVideo(id)) return; // 待っている間に削除された
+
+    try {
+      const result = await convertVideo(filePath, path.join(HLS_DIR, id), THUMBNAILS_DIR, id);
+      markVideoReady(id, result.durationSec, `/thumbnails/${id}.jpg`, `/hls/${id}/playlist.m3u8`);
+      maybeEnqueue(id); // フォルダに指示書があれば解析ジョブを積む
+    } catch (err) {
+      markVideoError(id, err instanceof Error ? err.message : String(err));
+    }
+  });
+}
+
+/** 起動時: 変換待ち・変換中のままサーバーが止まった動画の変換をやり直す */
+export function resumePendingConversions(): void {
+  for (const row of listVideos()) {
+    if (row.status !== 'processing') continue;
+    const ext = path.extname(row.original_filename) || '.mp4';
+    const filePath = path.join(ORIGINALS_DIR, `${row.id}${ext}`);
+    if (!existsSync(filePath)) {
+      markVideoError(row.id, '元動画ファイルが見つかりません');
+      continue;
+    }
+    console.log(`[convert] ${row.id}: 起動時に変換を再開`);
+    enqueueConversion(row.id, filePath);
   }
-  next();
 }
 
 /**
@@ -89,7 +123,7 @@ videosRouter.get('/:id', (req, res) => {
   res.json(toPublicVideo(row));
 });
 
-videosRouter.post('/', requireWriteToken, blockIfAnalyzing, upload.single('file'), (req, res) => {
+videosRouter.post('/', requireWriteToken, upload.single('file'), (req, res) => {
   const file = req.file;
   const id = (req as { videoId?: string }).videoId;
   if (!file || !id) return res.status(400).json({ error: 'file is required' });
@@ -103,23 +137,14 @@ videosRouter.post('/', requireWriteToken, blockIfAnalyzing, upload.single('file'
 });
 
 /**
- * originals に置かれた動画を DB に登録し、HLS 変換をバックグラウンドで開始する。
+ * originals に置かれた動画を DB に登録し、HLS 変換を順番待ちに積む。
  * 一括アップロード（POST /api/videos）と分割アップロード（/api/uploads）の共通処理。
  */
 export function registerUploadedVideo(
   id: string, filePath: string, originalName: string, title: string, folderId: string | null,
 ): void {
   insertVideo({ id, title, original_filename: originalName, folder_id: folderId });
-
-  const hlsOutDir = path.join(HLS_DIR, id);
-  convertVideo(filePath, hlsOutDir, THUMBNAILS_DIR, id)
-    .then(result => {
-      markVideoReady(id, result.durationSec, `/thumbnails/${id}.jpg`, `/hls/${id}/playlist.m3u8`);
-      maybeEnqueue(id); // フォルダに指示書があれば解析ジョブを積む
-    })
-    .catch(err => {
-      markVideoError(id, err instanceof Error ? err.message : String(err));
-    });
+  enqueueConversion(id, filePath);
 }
 
 videosRouter.patch('/:id', requireWriteToken, (req, res) => {

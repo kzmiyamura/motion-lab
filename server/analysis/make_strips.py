@@ -8,9 +8,11 @@
 
 OpenCV のみ（extract_keyframes.py と同じ環境で動く）。
 
-Usage: python make_strips.py <video_path> <out_dir> <t>:<label> [<t>:<label> ...]
+Usage: python make_strips.py <video_path> <out_dir> <t>:<label>[:<from>:<to>] [...]
   各イベント時刻 t について [t-PRE_SEC, t+POST_SEC] を STEP_SEC 刻みで切り出す。
+  from/to を指定すると、その範囲も含むように広げる（連続ターンが長いとき。最大 MAX_SPAN_SEC）。
 出力ファイル名: <秒を0埋め6桁+小数1桁>_<label>_strip.jpg（例: 000038.6_turn_strip.jpg）
+  21コマを超える区間は _strip_2.jpg, _strip_3.jpg … に続きを書く
 """
 import math
 import os
@@ -22,6 +24,8 @@ import numpy as np
 PRE_SEC = 0.4
 POST_SEC = 1.6
 STEP_SEC = 0.1
+MAX_SPAN_SEC = 5.0
+SHEET_MAX_TILES = 21
 SHEET_MAX_W = 1800
 LABEL_H = 34
 
@@ -74,8 +78,13 @@ def main():
     video_path, out_dir = sys.argv[1], sys.argv[2]
     specs = []
     for arg in sys.argv[3:]:
-        t_str, label = arg.split(":", 1)
-        specs.append((float(t_str), label))
+        parts = arg.split(":")
+        t = float(parts[0])
+        t_from, t_to = max(0.0, t - PRE_SEC), t + POST_SEC
+        if len(parts) >= 4:
+            t_from = max(0.0, min(t_from, float(parts[2])))
+            t_to = min(max(t_to, float(parts[3])), t_from + MAX_SPAN_SEC)
+        specs.append((t, parts[1], t_from, t_to))
     os.makedirs(out_dir, exist_ok=True)
 
     cap = cv2.VideoCapture(video_path)
@@ -85,13 +94,17 @@ def main():
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     written = 0
-    for t, label in sorted(specs):
-        frames, times = read_window(cap, fps, max(0.0, t - PRE_SEC), t + POST_SEC)
+    for t, label, t_from, t_to in sorted(specs):
+        frames, times = read_window(cap, fps, t_from, t_to)
         if not frames:
             print(f"warn: no frames around t={t}", file=sys.stderr)
             continue
-        name = f"{t:08.1f}_{label}_strip.jpg".replace(" ", "0")
-        cv2.imwrite(os.path.join(out_dir, name), build_sheet(frames, times), [cv2.IMWRITE_JPEG_QUALITY, 82])
+        # 長い区間は1枚に詰めるとコマが小さくて読めないので、SHEET_MAX_TILES コマずつ別の画像に分ける
+        for part, i in enumerate(range(0, len(frames), SHEET_MAX_TILES), start=1):
+            suffix = "" if part == 1 else f"_{part}"
+            name = f"{t:08.1f}_{label}_strip{suffix}.jpg".replace(" ", "0")
+            sheet = build_sheet(frames[i:i + SHEET_MAX_TILES], times[i:i + SHEET_MAX_TILES])
+            cv2.imwrite(os.path.join(out_dir, name), sheet, [cv2.IMWRITE_JPEG_QUALITY, 82])
         written += 1
 
     cap.release()

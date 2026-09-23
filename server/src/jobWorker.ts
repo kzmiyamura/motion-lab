@@ -205,7 +205,13 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     }
     if (capped.length > 0) {
       const stripScript = path.resolve(__dirname, '../analysis/make_strips.py');
-      const specs = capped.map(e => `${e.t.toFixed(2)}:${e.type.toLowerCase()}`);
+      // 全フレーム再計測で回転の区間（spin.from〜to）が分かっていれば、その前後まで広げて切り出す
+      const specs = capped.map(e => {
+        const base = `${e.t.toFixed(2)}:${e.type.toLowerCase()}`;
+        return e.spin?.from != null && e.spin?.to != null
+          ? `${base}:${(e.spin.from - 0.3).toFixed(2)}:${(e.spin.to + 0.4).toFixed(2)}`
+          : base;
+      });
       await runPython([stripScript, ctx.videoPath, keyframesDir, ...specs], signal);
     }
     // ROIデバッグ動画・骨格人形動画（mp4v）をブラウザ再生可能な H.264 へ変換
@@ -311,7 +317,10 @@ function sampleEvenly<T>(items: T[], max: number): T[] {
 
 interface ContestedSeg { from: number; to: number; reason: string }
 
-interface TechniqueEvent { t: number; type: string; by: string; rotations?: number; hold?: string | null }
+interface TechniqueEvent {
+  t: number; type: string; by: string; rotations?: number; hold?: string | null;
+  spin?: { from?: number; to?: number } | null;
+}
 
 interface MeasurementsSummary {
   slot0?: { shrMean: number | null; shrStd: number | null; samples: number; samplesAll?: number };

@@ -482,6 +482,158 @@ def spin_hint(draw_frames, pid, t_center):
     return {"seq": seq, "netDeg": net} if seq else None
 
 
+DENSE_PRE_SEC = 0.5        # 全フレーム再計測: イベント時刻のこの秒数前から見る
+DENSE_MIN_POST_SEC = 1.0   # 少なくともイベント時刻のこの秒数後までは見る
+DENSE_MAX_POST_SEC = 4.0   # 連続ターンでもイベント時刻のこの秒数後で打ち切る
+DENSE_QUIET_SEC = 0.6      # 最後の反転からこの秒数反転が無ければ回転が終わったとみなす（回転中の反転は0.15〜0.45秒おき。0.8だとCBLの半回転まで飲み込んだ）
+DENSE_JITTER_SEC = 0.12    # これより短い向きの区間は真横付近の揺れとして前後に吸収する
+DENSE_MATCH_DIST = 0.2     # 追跡中の人物とみなす bbox 中心の最大ずれ（正規化）
+
+
+def _bbox_center(b):
+    return ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+
+
+def _spin_runs(seq):
+    """反転列 "LLLRRRRRRR" を向きの連続（run）にまとめる。1回だけの逆向き（L/R の取り違えノイズ）は前後に吸収する"""
+    runs = []
+    for ch in seq:
+        if ch == "?":
+            continue
+        if runs and runs[-1][0] == ch:
+            runs[-1][1] += 1
+        else:
+            runs.append([ch, 1])
+    changed = True
+    while changed and len(runs) > 1:
+        changed = False
+        for i, (ch, n) in enumerate(runs):
+            if n != 1:
+                continue
+            neighbors = [runs[j][1] for j in (i - 1, i + 1) if 0 <= j < len(runs)]
+            if max(neighbors) >= 2:  # 長い run の隣の単発はノイズとして消す
+                del runs[i]
+                merged = []
+                for r in runs:
+                    if merged and merged[-1][0] == r[0]:
+                        merged[-1][1] += r[1]
+                    else:
+                        merged.append(list(r))
+                runs = merged
+                changed = True
+                break
+    return [{"dir": "right" if ch == "R" else "left", "turns": n / 2} for ch, n in runs]
+
+
+def refine_turns_dense(video_path, model, draw_frames, events, leader_pid):
+    """ターン候補の区間だけ全フレームで YOLO をかけ直し、spin（回る向きと回転数）を置き換える。
+
+    10fps 間引きでは速いターンの真横を取りこぼし、向きが消えたり回転数が半分になったりする
+    （9/23 の人手校正で実測。0:16 の「左1→右3」が差し引き0になっていた）。全フレームなら
+    正解の分かっている5区間すべてで向きが合い、回転数も ±半回転に収まった。
+    回転が続く限り区間を延ばし（最大 DENSE_MAX_POST_SEC）、同じ人の区間内に入った後続の
+    ターン候補は同じ回転の一部として吸収する（absorbed に時刻を残す）。
+    """
+    if leader_pid is None:
+        return events
+    tracks = {0: [], 1: []}
+    for df in draw_frames:
+        for p in df["kept"]:
+            if p.get("pid") in tracks:
+                tracks[p["pid"]].append((df["t"], p["bbox"]))
+
+    def tracked_center(pid, t):
+        best = None
+        for tt, b in tracks[pid]:
+            if abs(tt - t) <= 0.15 and (best is None or abs(tt - t) < best[0]):
+                best = (abs(tt - t), b)
+        return _bbox_center(best[1]) if best else None
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return events
+    covered = {0: [], 1: []}  # pid → [(from, to, event)]
+    out = []
+    for e in events:
+        if e["type"] != "Turn" or e["by"] not in ("leader", "follower"):
+            out.append(e)
+            continue
+        pid = leader_pid if e["by"] == "leader" else 1 - leader_pid
+        host = next((c for c in covered[pid] if c[0] <= e["t"] <= c[1]), None)
+        if host is not None:
+            host[2].setdefault("absorbed", []).append(e["t"])
+            continue
+
+        t = e["t"]
+        cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t - DENSE_PRE_SEC) * 1000)
+        series, prev_c, last_flip_t, t_cur = [], None, None, t
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            t_cur = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+            if t_cur > t + DENSE_MAX_POST_SEC:
+                break
+            if t_cur > t + DENSE_MIN_POST_SEC and (last_flip_t is None or t_cur - last_flip_t > DENSE_QUIET_SEC):
+                break
+            persons = detect_persons(model, frame)
+            ref = tracked_center(pid, t_cur)
+            target = prev_c or ref
+            if ref and prev_c and math.dist(prev_c, ref) > 0.15:
+                target = ref  # 直前の選択が計測トラックから大きく外れたらトラックに戻す
+            if not persons or target is None:
+                continue
+            pick = min(persons, key=lambda p: math.dist(_bbox_center(p["bbox"]), target))
+            if math.dist(_bbox_center(pick["bbox"]), target) > DENSE_MATCH_DIST:
+                continue
+            prev_c = _bbox_center(pick["bbox"])
+            if abs(pick["shDx"]) < TURN_FLIP_MARGIN:
+                continue
+            if series and (series[-1][1] > 0) != (pick["shDx"] > 0):
+                last_flip_t = t_cur
+            series.append((t_cur, pick["shDx"], pick))
+
+        # 同じ向き（正面/背中）が続く区間にまとめ、真横付近の揺れでできた短い区間は前後に吸収する
+        segs = []  # [sign, [samples]]
+        for s in series:
+            sign = s[1] > 0
+            if segs and segs[-1][0] == sign:
+                segs[-1][1].append(s)
+            else:
+                segs.append([sign, [s]])
+        i = 1
+        while i < len(segs) - 1:
+            dur = segs[i][1][-1][0] - segs[i][1][0][0]
+            if dur < DENSE_JITTER_SEC and segs[i - 1][0] == segs[i + 1][0]:
+                segs[i - 1][1].extend(segs[i][1] + segs[i + 1][1])
+                del segs[i:i + 2]
+            else:
+                i += 1
+
+        seq, net, flip_times = "", 0, []
+        for a, b in zip(segs, segs[1:]):
+            t0, d0, p0 = a[1][-1]
+            t1, d1, p1 = b[1][0]
+            near, far = (p0, p1) if abs(d0) <= abs(d1) else (p1, p0)
+            side = face_side(near) or face_side(far)
+            flip_times.append(t1)
+            if side == 0:
+                seq += "?"
+                continue
+            right = (side < 0) if d0 > 0 else (side > 0)
+            seq += "R" if right else "L"
+            net += 180 if right else -180
+        if seq:
+            e["spin"] = {
+                "seq": seq, "netDeg": net, "runs": _spin_runs(seq),
+                "from": round(flip_times[0], 2), "to": round(flip_times[-1], 2), "source": "fullFrames",
+            }
+            covered[pid].append((flip_times[0], flip_times[-1], e))
+        out.append(e)
+    cap.release()
+    return out
+
+
 HOLD_DIST = 0.07       # 手首間の正規化距離がこれ未満なら「つないでいる」
 HOLD_WINDOW_SEC = 0.35  # イベント時刻の前後この範囲でホールドを判定
 HOLD_SEG_MIN_SEC = 0.5  # ホールドタイムラインに載せる区間の最小長
@@ -982,6 +1134,8 @@ def main():
             print(f"leader hint ignored: {e}", file=sys.stderr)
 
     events = detect_events(draw_frames, leader_pid) if draw_frames else []
+    if events:
+        events = refine_turns_dense(video_path, model, draw_frames, events, leader_pid)
     hold_timeline = build_hold_timeline(draw_frames, leader_pid) if draw_frames else []
 
     # デバッグ動画（2パス目）: 全編の計測を踏まえたロールで色を塗り、イベントラベルを焼き込む

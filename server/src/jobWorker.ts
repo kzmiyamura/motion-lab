@@ -301,7 +301,7 @@ function debugVideoSection(jobId: string): string {
   return ['', '', '## 動画', '', ...lines].join('\n');
 }
 
-const MAX_EVENT_KEYFRAMES = 8; // キーフレームを書き出す技イベント数の上限（各3枚 = 最大24枚）
+const MAX_EVENT_KEYFRAMES = 24; // キーフレームを書き出す技イベント数の上限（各3枚 = 最大72枚。1分程度の動画なら全候補を覆う）
 
 /** 配列を先頭・末尾を含む均等間隔で最大 max 件に間引く */
 function sampleEvenly<T>(items: T[], max: number): T[] {

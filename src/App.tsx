@@ -13,6 +13,7 @@ import { YouTubeControl } from './components/YouTubeControl';
 import { FilePlayer } from './components/FilePlayer';
 import { StudioPlayer } from './components/StudioPlayer';
 import { HomeServerLibrary } from './components/HomeServerLibrary';
+import { CaptureTab } from './components/CaptureTab';
 import styles from './App.module.css';
 
 // three/R3F は重いので遅延ロード（メインバンドルに含めない）
@@ -44,7 +45,7 @@ function App() {
   } = useAudioEngine();
 
   const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
-  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio' | 'homeserver' | '3d'>('youtube');
+  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio' | 'homeserver' | '3d' | 'capture'>('youtube');
   const [homeVideoToPlay, setHomeVideoToPlay] = useState<{ id: string; name: string; url: string } | null>(null);
   const [ytViewMode, setYtViewMode] = useState<'audio' | 'video'>('video');
 
@@ -97,6 +98,12 @@ function App() {
             onClick={() => setMainTab('3d')}
           >
             🕺 3D
+          </button>
+          <button
+            className={`${styles.mainTabBtn} ${mainTab === 'capture' ? styles.mainTabBtnActive : ''}`}
+            onClick={() => setMainTab('capture')}
+          >
+            📥 取込
           </button>
         </div>
       </header>
@@ -323,6 +330,16 @@ function App() {
           )}
         </section>
       </div>
+
+      {/* ── 取込タブ（URL の動画を ThinkCentre で録画して保存）。開いている間だけマウントし、
+             タブを押すたびにパスワードを聞く（離れると入力したパスワードは破棄される） ── */}
+      {mainTab === 'capture' && (
+        <div className={styles.tabPanel}>
+          <section className={styles.section}>
+            <CaptureTab />
+          </section>
+        </div>
+      )}
 
       {/* ── Footer with Version ── */}
       <footer className={styles.footer}>

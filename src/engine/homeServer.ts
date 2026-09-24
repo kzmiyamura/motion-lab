@@ -370,3 +370,47 @@ export async function getJobDetail(baseUrl: string, jobId: string): Promise<Anal
   if (!res.ok) throw new HomeServerApiError(`ジョブの取得に失敗しました: HTTP ${res.status}`);
   return res.json();
 }
+
+// --- URL からの動画取り込み（取込タブ）。パスワードはサーバーが持ち、ここでは毎回ヘッダで送るだけ ---
+
+export interface CaptureItem {
+  id: string;
+  url: string;
+  folderId: string | null;
+  status: 'queued' | 'running' | 'done' | 'error';
+  videoId: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+async function captureError(res: Response, fallback: string): Promise<HomeServerApiError> {
+  const body = await res.json().catch(() => ({})) as { error?: string };
+  return new HomeServerApiError(body.error ?? `${fallback}: HTTP ${res.status}`);
+}
+
+/** パスワードが正しいか確かめる（正しくなければ理由付きで throw） */
+export async function loginCapture(baseUrl: string, password: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/captures/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) throw await captureError(res, '確認に失敗しました');
+}
+
+export async function listCaptures(baseUrl: string, password: string): Promise<CaptureItem[]> {
+  const res = await fetch(`${baseUrl}/api/captures`, { headers: { 'X-Capture-Password': password } });
+  if (!res.ok) throw await captureError(res, '取り込み一覧の取得に失敗しました');
+  const data = await res.json() as { captures: CaptureItem[] };
+  return data.captures ?? [];
+}
+
+export async function requestCapture(baseUrl: string, password: string, url: string, folderId: string | null): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/captures`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Capture-Password': password, ...authHeaders() },
+    body: JSON.stringify({ url, folderId }),
+  });
+  if (!res.ok) throw await captureError(res, '取り込みの登録に失敗しました');
+}

@@ -289,3 +289,65 @@ export function recoverStaleRunningJobs(): number {
   ).run();
   return Number(result.changes);
 }
+
+// --- URL からの動画取り込み（画面録画の自動化） ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS captures (
+    id            TEXT PRIMARY KEY,
+    url           TEXT NOT NULL,
+    folder_id     TEXT,
+    status        TEXT NOT NULL CHECK (status IN ('queued', 'running', 'done', 'error')),
+    video_id      TEXT,
+    error_message TEXT,
+    created_at    TEXT NOT NULL,
+    finished_at   TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_captures_status ON captures (status, created_at);
+`);
+
+export interface CaptureRow {
+  id: string;
+  url: string;
+  folder_id: string | null;
+  status: 'queued' | 'running' | 'done' | 'error';
+  video_id: string | null;
+  error_message: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export function insertCapture(id: string, url: string, folderId: string | null): void {
+  db.prepare(
+    `INSERT INTO captures (id, url, folder_id, status, created_at) VALUES (?, ?, ?, 'queued', ?)`,
+  ).run(id, url, folderId, new Date().toISOString());
+}
+
+export function listCaptures(limit = 50): CaptureRow[] {
+  return db.prepare('SELECT * FROM captures ORDER BY created_at DESC LIMIT ?').all(limit) as unknown as CaptureRow[];
+}
+
+/** 最も古い queued を running にして返す */
+export function claimNextCapture(): CaptureRow | undefined {
+  const row = db.prepare(
+    `SELECT * FROM captures WHERE status = 'queued' ORDER BY created_at LIMIT 1`,
+  ).get() as unknown as CaptureRow | undefined;
+  if (!row) return undefined;
+  db.prepare(`UPDATE captures SET status = 'running' WHERE id = ?`).run(row.id);
+  return { ...row, status: 'running' };
+}
+
+export function markCaptureDone(id: string, videoId: string): void {
+  db.prepare(`UPDATE captures SET status = 'done', video_id = ?, error_message = NULL, finished_at = ? WHERE id = ?`)
+    .run(videoId, new Date().toISOString(), id);
+}
+
+export function markCaptureError(id: string, message: string): void {
+  db.prepare(`UPDATE captures SET status = 'error', error_message = ?, finished_at = ? WHERE id = ?`)
+    .run(message, new Date().toISOString(), id);
+}
+
+/** サーバー起動時リカバリ: 録画中のまま止まったものを queued に戻す */
+export function recoverStaleCaptures(): number {
+  return Number(db.prepare(`UPDATE captures SET status = 'queued' WHERE status = 'running'`).run().changes);
+}

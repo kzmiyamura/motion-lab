@@ -5,6 +5,7 @@ import express from 'express';
 import { HLS_DIR, ORIGINALS_DIR, THUMBNAILS_DIR, resumePendingConversions, videosRouter } from './routes/videos.js';
 import { foldersRouter } from './routes/folders.js';
 import { uploadsRouter } from './routes/uploads.js';
+import { capturesRouter, startCaptureWorker } from './routes/captures.js';
 import { jobsRouter } from './routes/jobs.js';
 import { motionRouter } from './routes/motion.js';
 import { JOBS_DIR, startJobWorker } from './jobWorker.js';
@@ -39,6 +40,8 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/videos', videosRouter);
 app.use('/api/uploads', uploadsRouter);
+// URL からの動画取り込み。ログイン済み Facebook でブラウザを動かすため、全エンドポイントを CAPTURE_PASSWORD で守る
+app.use('/api/captures', capturesRouter);
 app.use('/api/folders', foldersRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/motion', motionRouter);
@@ -55,4 +58,5 @@ app.listen(PORT, () => {
   checkClaudeAvailability();
   resumePendingConversions();
   startJobWorker();
+  startCaptureWorker();
 });

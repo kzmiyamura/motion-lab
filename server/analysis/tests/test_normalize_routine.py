@@ -7,14 +7,17 @@ normalize_routine.py（振付シート用の routine の後処理）の単体テ
 実行: python -m unittest discover -s server/analysis/tests
 """
 import os
+import random
 import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from normalize_routine import (  # noqa: E402
-    NAME_MAX, clean_turn, fit_grid, normalize, short_name, template_steps,
+    NAME_MAX, clean_turn, fit_grid, fit_grid_to_swaps, grid_cycles, normalize, short_name, swap_heads,
+    template_steps,
 )
+from eval_routine_grid import evaluate as evaluate_rows  # noqa: E402
 
 
 def mv(start, move="basic", counts=8, **kw):
@@ -81,6 +84,145 @@ class GridTest(unittest.TestCase):
         first = [dict(m) for m in res["routine"]["moves"]]
         normalize(res, {}, duration=8.0)
         self.assertEqual(res["routine"]["moves"], first)
+
+
+def swaps_on_grid(period, head, n, beat_pos=7.0, jitter=(0.0,), skip=(), drift=0.0, span=None):
+    """8 カウントの頭 head + k×period（drift ありなら grid_cycles に沿って）の beat_pos 拍目に入れ替わりを置く"""
+    out = []
+    span = span or period * n
+    for k in range(n):
+        if k in skip:
+            continue
+        # grid_cycles(t) = k + beat_pos/8 + head/period を解く（drift=0 なら直接）
+        target = k + beat_pos / 8 + head / period
+        lo, hi = 0.0, span * 2
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            if grid_cycles(mid, period, drift, span) < target:
+                lo = mid
+            else:
+                hi = mid
+        out.append(round(lo + jitter[k % len(jitter)], 3))
+    return out
+
+
+def cbl_events(times):
+    return [{"t": t, "type": "CBL", "by": "pair"} for t in times]
+
+
+class SwapGridTest(unittest.TestCase):
+    JIT = (0.0, 0.25, -0.2, 0.1, -0.3, 0.15, 0.3, -0.1)
+
+    def test_fits_period_and_phase_from_swaps(self):
+        # 本当は 1×8 = 2.6 秒・頭 0.5 秒。Claude の routine の目安は 2.4 秒（ずれている）。
+        # 入れ替わりは 7 拍目付近（±0.3 秒）で、ところどころ抜けている
+        sw = swaps_on_grid(2.6, 0.5, 50, jitter=self.JIT, skip={3, 9, 10, 22, 31, 40})
+        fit = fit_grid_to_swaps(sw, 2.4, 130.0)
+        self.assertIsNotNone(fit)
+        self.assertAlmostEqual(fit["period"], 2.6, delta=0.01)
+        heads = swap_heads(fit, 130.0)
+        # 頭の時刻が本当の頭（0.5 + k×2.6）から 1 拍未満
+        for h in heads:
+            if 0 <= h <= 125:
+                d = (h - 0.5) / 2.6
+                self.assertLess(abs(d - round(d)) * 8, 1.0, h)
+
+    def test_too_few_or_scattered_swaps_give_none(self):
+        self.assertIsNone(fit_grid_to_swaps([1.0, 3.6, 6.2], 2.4, 10.0))
+        # でたらめな時刻の（周期の無い）入れ替わり
+        rng = random.Random(7)
+        scattered = sorted(round(rng.uniform(0, 150), 2) for _ in range(40))
+        self.assertIsNone(fit_grid_to_swaps(scattered, 2.4, 150.0))
+
+    def test_slow_tempo_drift(self):
+        # 終わりまでに等速の格子から 1½ 個ぶん先へ進む（テンポがゆっくり上がる）
+        sw = swaps_on_grid(2.6, 0.5, 60, drift=1.5, span=156.0, jitter=(0.0, 0.05, -0.05))
+        fit = fit_grid_to_swaps(sw, 2.6, 156.0)
+        self.assertIsNotNone(fit)
+        self.assertAlmostEqual(fit["drift"], 1.5, delta=0.3)
+        # 終わりの方でも入れ替わりが 7 拍目付近に来る
+        heads = swap_heads(fit, 156.0)
+        for s in sw[-10:]:
+            h = max(x for x in heads if x <= s - 2 * 2.6 / 8)
+            beat = (s - h) / (2.6 / 8)
+            self.assertAlmostEqual(beat, 7.0, delta=1.0)
+
+    def test_no_drift_when_not_needed(self):
+        sw = swaps_on_grid(2.6, 0.5, 50, jitter=self.JIT)
+        self.assertEqual(fit_grid_to_swaps(sw, 2.4, 130.0)["drift"], 0.0)
+
+    def test_silent_video_uses_swaps_for_tempo(self):
+        # 本当の 1×8 = 2.6 秒。Claude は 2.4 秒おきに行を書いた（前回の正規化で bpm 200 と決めてある）
+        n = 30
+        sw = swaps_on_grid(2.6, 0.3, n, jitter=self.JIT)
+        moves = [mv(round(k * 2.4, 2), "cbl") for k in range(n)]
+        res = {"routine": {"bpm": 200, "bpmSource": "routine", "moves": moves}}
+        normalize(res, {"beatGrid": None, "events": cbl_events(sw)}, duration=n * 2.6)
+        g = res["routine"]["grid"]
+        self.assertEqual(g["source"], "swaps")
+        self.assertAlmostEqual(g["unitSec"], 2.6, delta=0.02)
+        self.assertEqual(res["routine"]["bpm"], round(60 / g["beatSec"]))   # 古い bpm 200 を決め直す
+        self.assertEqual(res["routine"]["bpmSource"], "swaps")
+        starts = [m["start"] for m in res["routine"]["moves"]]
+        for a, b in zip(starts[1:], starts[2:]):   # 先頭は 0 秒に切り詰められることがあるので 2 行目から
+            n8 = round((b - a) / 2.6)
+            self.assertGreaterEqual(n8, 1)
+            self.assertAlmostEqual(b - a, n8 * 2.6, delta=0.05)
+        # 入れ替わりは各 8 カウントの 7 拍目付近 = 頭は入れ替わりの 7 拍前
+        self.assertAlmostEqual((starts[5] - 0.3) / 2.6 % 1 * 8 % 8, 0.0, delta=0.8)
+
+    def test_off_by_one_cbl_rows_are_shifted_onto_swaps(self):
+        # 入れ替わりは 2・5・8・… 番目の 8 カウント。Claude の CBL の行はその 1 つ前（1・4・7・…）に書かれている
+        n = 30
+        cbl_cells = set(range(2, n, 3))
+        sw = swaps_on_grid(2.6, 0.0, n, skip=set(range(n)) - cbl_cells, jitter=self.JIT)
+        moves = [mv(round(k * 2.6 + 0.1, 2), "cbl" if (k + 1) in cbl_cells else "basic") for k in range(n)]
+        res = {"routine": {"moves": moves}}
+        normalize(res, {"events": cbl_events(sw)}, duration=n * 2.6)
+        self.assertEqual(res["routine"]["grid"]["source"], "swaps")
+        out = res["routine"]["moves"]
+        cbl_starts = [m["start"] for m in out if m["move"] == "cbl"]
+        # CBL の行の時間内に入れ替わりがある
+        ends = {m["start"]: m["start"] + m["counts"] * res["routine"]["grid"]["beatSec"] for m in out}
+        hit = sum(1 for s in cbl_starts if any(s <= t < ends[s] for t in sw))
+        self.assertGreaterEqual(hit, len(cbl_starts) - 1)
+
+    def test_audio_grid_ignores_swaps(self):
+        # 音声の格子があれば入れ替わりは使わない（従来どおり）
+        sw = swaps_on_grid(2.6, 0.5, 20, jitter=self.JIT)
+        res = {"routine": {"moves": [mv(0.6), mv(4.3, "cbl"), mv(8.9)]}}
+        normalize(res, {"beatGrid": {"bpm": 120, "beatIntervalSec": 0.5, "firstBeatSec": 0.5},
+                        "events": cbl_events(sw)}, duration=12.6)
+        self.assertEqual(res["routine"]["grid"]["source"], "audio")
+        self.assertEqual([m["start"] for m in res["routine"]["moves"]], [0.5, 4.5, 8.5])
+
+    def test_idempotent_with_swaps(self):
+        sw = swaps_on_grid(2.6, 0.5, 30, jitter=self.JIT)
+        res = {"routine": {"moves": [mv(round(k * 2.4, 2), "cbl" if k % 3 else "basic") for k in range(30)]}}
+        summary = {"events": cbl_events(sw)}
+        normalize(res, summary, duration=80.0)
+        first = [dict(m) for m in res["routine"]["moves"]]
+        normalize(res, summary, duration=80.0)
+        self.assertEqual(res["routine"]["moves"], first)
+
+
+class EvalRoutineGridTest(unittest.TestCase):
+    def test_counts_cbl_rows_and_swap_phase(self):
+        gt = {"evalRange": [0, 20], "cbl": [
+            {"t": 1.8, "kind": "cbl"},              # 行 0（0〜2.4）は CBL → 当たり。5.5 拍目くらい（≒ 6 カウント目）
+            {"t": 4.2, "kind": "cbl"},              # 行 1（2.4〜4.8）は basic → 外れ
+            {"t": 6.0, "kind": "swap", "optional": True},
+        ], "turns": [{"t": 5.0, "by": "follower"}]}
+        moves = [mv(0.0, "cbl"), mv(2.4, "basic"), mv(4.8, "right_turn", turn={"by": "follower", "rotations": 1})]
+        r = evaluate_rows(moves, gt, 0.3, cv_swaps=[1.9, 4.3])
+        self.assertEqual((r["cbl"]["hit"], r["cbl"]["n"]), (1, 2))
+        self.assertEqual((r["swapAll"]["hit"], r["swapAll"]["n"]), (1, 3))
+        self.assertEqual((r["cblRows"]["hit"], r["cblRows"]["n"]), (1, 1))
+        self.assertEqual((r["turn"]["hit"], r["turn"]["n"]), (1, 1))
+        self.assertEqual(r["phase"]["hist"][6], 2)    # 1.8 秒・4.2 秒 = 行の頭から 6 拍 → カウント 7
+        self.assertEqual(r["phase"]["hist"][4], 1)    # 6.0 秒 = 行 2 の頭から 4 拍 → カウント 5
+        self.assertAlmostEqual(r["phase"]["in57"], 1.0)
+        self.assertEqual(r["cvPhase"]["inCblRow"], 1)
 
 
 class TurnTest(unittest.TestCase):

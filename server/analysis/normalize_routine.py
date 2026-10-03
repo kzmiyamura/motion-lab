@@ -10,8 +10,12 @@ Claude の routine は技イベントの時刻（CBL・ターンの瞬間）か�
 ことがある。ここでそれを機械的に直す:
 
 1. 8カウント（1×8）の長さを決める: 音声のビート格子があれば 8 拍。無ければ（画面収録など無音）
-   Claude の routine の「1×8 あたりの秒数」の中央値から推定し、技の頭の時刻に最もよく合う周期に微調整する
-2. 位相（8カウントの頭がどこか）を、技の頭の時刻が最もよく乗る値に決め、各技の start を最寄りの 8 カウントの頭へ寄せる
+   CV の左右入れ替わり（summary.events の CBL）が 8 カウントの同じ位置（On1 の CBL なら 5-7）に
+   最もよく揃う周期・位相（・ゆっくりしたテンポの変化）を、Claude の routine の間隔を目安に探す。
+   入れ替わりが少ない・揃わないときは、routine の間隔の中央値から推定し技の頭の時刻に合わせる（従来）
+2. 位相（8カウントの頭がどこか）: 音声なら技の頭の時刻が最もよく乗る拍。入れ替わりで当てたならそれで決まる。
+   各技の start を最寄りの 8 カウントの頭へ寄せる。入れ替わりで当てたときは、Claude の行の順番を保ったまま
+   CBL 系の行が入れ替わりのある 8 カウントに来るよう前後にずらす（Claude の行の時刻が 1 行ずれることがある）
 3. 同じ頭に寄った技は 1 行にまとめる（ターン・パスがある方を主にする）。counts は次の技の頭までの 8 の倍数
 4. 回転数は ½ 刻みに丸め、2 回転を上限にする（画像で見えていて自信 0.7 以上なら 3 回転まで）。
    削ったら自信を下げて「?」が付くようにする
@@ -24,6 +28,7 @@ Claude の routine は技イベントの時刻（CBL・ターンの瞬間）か�
 Usage: python normalize_routine.py <result.json> <measurements.json>
   result.json をその場で書き換える。routine.moves が無ければ何もしない
 """
+import bisect
 import json
 import math
 import os
@@ -39,6 +44,26 @@ MAX_ROT_STRONG = 3.0
 STRONG_CONF = 0.7
 LOW_CONF = 0.35
 
+# 無音の動画で、CV の左右入れ替わり（summary.events の CBL）から格子を当てるときの設定
+SWAP_MIN = 8               # 入れ替わりがこれ未満なら使わない（routine の間隔から推定する従来の方法へ）
+SWAP_MIN_R = 0.2           # 当てた周期での入れ替わりの位相の揃い方（Rayleigh R）がこれ未満なら使わない
+SWAP_MIN_Z = 7.5           # 入れ替わり＋ターンの Rayleigh z = n·R² がこれ未満なら使わない。でたらめな時刻でも
+                           # 周期を ±25% 振れば z の最大は中央値 4.6・95% 点 7.4 くらいになる（50 個・156 秒で試算）
+SWAP_PERIOD_RANGE = 0.25   # 周期を routine の目安の ±25% で探す
+SWAP_PERIOD_STEP = 0.002   # 秒。156 秒で 60 個の 8 カウントなら、0.002 秒の差が終わりで 0.12 拍になる
+SWAP_PRIOR = 0.1           # 目安から離れた周期への小さな罰（同じくらい揃うなら目安に近い方）
+SWAP_DRIFT_MAX = 2.0       # テンポの変化: 終わりまでに等速の格子から最大 2 個分の 8 カウントずれてよい
+                           # （周期の当てはめで吸収しきれずに残るずれは drift の ⅛ 程度。¾ 以下なら等速で足りる）
+DRIFT_MIN_GAIN = 0.05      # drift を入れるのは R がこれ以上良くなるときだけ（ノイズへの当てはめすぎを防ぐ）
+SWAP_BEAT = 7.0            # CV の入れ替わり時刻が来る、8 カウントの頭からの拍数（下の説明）
+# SWAP_BEAT: On1 の CBL で女性が男性の前を通る（腰の左右が入れ替わる）のは 5-7 の中ほど（頭から 5.5 拍）。
+# CV の入れ替わり時刻（detect_cbl）は「入れ替わった後に 2 人とも見えた最初のコマ」なので本当の入れ替わりより
+# 遅れる（1230b3d5 の正解と対応させて中央値 +0.35〜0.4 秒 ≈ 1.2 拍）。5.5 + 1.2 ≈ 7。
+# 正解表での確かめ（eval_routine_grid.py）: 6.5〜7.5 でほぼ同じ。6 以下だと正解の入れ替わりが 3-4 拍目に来る
+SWAP_ALIGN_WEIGHT = 1.0    # 行を入れ替わりに合わせ直すとき、CBL 系の行と入れ替わりの有無が食い違う罰
+SWAP_SHIFT_WEIGHT = 0.5    # 同じく、行を元の時刻から 1 行ぶん動かす罰（1 行ずらして食い違いが 1 つ減るなら動かす）
+SWAP_MERGE_WEIGHT = 1.0    # 同じく、2 行を同じ 8 カウントにまとめる罰（Claude の行が 1 つ消える）
+
 DEFAULT_NAME = {
     "basic": "ベーシック", "cbl": "CBL", "cbl_inside_turn": "CBL＋インサイド",
     "cbl_outside_turn": "CBL＋アウトサイド", "reverse_cbl": "逆CBL", "right_turn": "右ターン",
@@ -48,6 +73,7 @@ DEFAULT_NAME = {
     "other": "その他",
 }
 LIGHT_MOVES = {"basic", "shine", "other", "hand_change"}
+CBL_MOVES = {"cbl", "cbl_inside_turn", "cbl_outside_turn", "reverse_cbl"}   # 男女の左右が入れ替わる技
 
 
 # ---------------------------------------------------------------- 周期と位相
@@ -119,6 +145,180 @@ def fit_grid(starts, unit_guess):
     if best is None:
         return unit_guess, 0.0
     return best[1], best[2]
+
+
+# ---------------------------------------------------------------- CV の入れ替わりから格子を当てる（無音のとき）
+
+def swap_times(summary):
+    """measurements.json の summary.events から CV の左右入れ替わり（CBL）の時刻"""
+    ev = (summary or {}).get("events") or []
+    return sorted(e["t"] for e in ev if isinstance(e, dict) and e.get("type") == "CBL" and _num(e.get("t")))
+
+
+def turn_times(summary):
+    """同じく女性のターンの時刻（周期の手がかりを増やすのに使う）"""
+    ev = (summary or {}).get("events") or []
+    return sorted(e["t"] for e in ev if isinstance(e, dict) and e.get("type") == "Turn"
+                  and e.get("by") == "follower" and _num(e.get("t")))
+
+
+def grid_cycles(t, period, drift, span):
+    """時刻 t までに進んだ 8 カウントの数（格子の位相）。drift はテンポのゆっくりした変化で、
+    動画の終わりまでに位相が等速の格子から何 8 カウントずれるか"""
+    return t / period + drift * (t / span) ** 2
+
+
+def swap_concentration(swaps, period, drift=0.0, span=1.0):
+    """入れ替わりが 8 カウントの同じ位置に集まっている度合い（Rayleigh の R、0〜1）と、その平均位置（周期の割合）"""
+    if not swaps:
+        return 0.0, 0.0
+    c = s = 0.0
+    for t in swaps:
+        a = 2 * math.pi * grid_cycles(t, period, drift, span)
+        c += math.cos(a)
+        s += math.sin(a)
+    c, s = c / len(swaps), s / len(swaps)
+    return math.hypot(c, s), (math.atan2(s, c) / (2 * math.pi)) % 1
+
+
+def fit_grid_to_swaps(swaps, unit_guess, duration, turns=()):
+    """CV の入れ替わり時刻に 8 カウントの格子を当てる。On1 の CBL なら入れ替わりは毎回 8 カウントの同じ所
+    （5-7）に来るので、周期を目安の ±SWAP_PERIOD_RANGE で振って位相が最も揃う周期を取る。
+    周期（と揃っているかの判定）には女性のターン（turns）も足す。ターンも 8 カウントの決まった所で回るので
+    手がかりが増える（1230b3d5: 入れ替わりだけだと z=5.2 で偶然と見分けられないが、ターンを足すと 8.8）。
+    8 カウントの頭（位相）は入れ替わりだけで決める（ターンは 1-3 で回る技もあり位置が決まらない）。
+    テンポがゆっくり変わる（drift）ことも許すが、揃い方が DRIFT_MIN_GAIN 以上良くなるときだけ。
+    戻り値 {period, drift, span, head0, R, z} か、入れ替わりが少ない・揃わないとき None"""
+    if len(swaps) < SWAP_MIN or not unit_guess:
+        return None
+    events = sorted(list(swaps) + list(turns or ()))
+    span = max(duration or 0, events[-1], 1.0)
+
+    def score(p, q):
+        r, _ = swap_concentration(events, p, q, span)
+        return r - SWAP_PRIOR * abs(math.log(p / unit_guess)), r
+
+    lo = max(MIN_UNIT8, unit_guess * (1 - SWAP_PERIOD_RANGE))
+    hi = min(MAX_UNIT8, unit_guess * (1 + SWAP_PERIOD_RANGE))
+    cands = []
+    p = lo
+    while p <= hi + 1e-9:
+        cands.append(p)
+        p += SWAP_PERIOD_STEP
+    best = max(((score(p, 0.0), p) for p in cands), key=lambda x: x[0][0])
+    (_, r0), period = best
+    drift = 0.0
+    r_best = r0
+    if SWAP_DRIFT_MAX > 0:
+        # drift q は真ん中あたりの周期も q/span ほど変えるので、周期も ±4% 振り直す
+        p0 = period
+        for i in range(-40, 41):
+            p = p0 * (1 + i * 0.001)
+            for j in range(-round(SWAP_DRIFT_MAX / 0.1), round(SWAP_DRIFT_MAX / 0.1) + 1):
+                q = j * 0.1
+                r, _ = swap_concentration(events, p, q, span)
+                if r > r_best + 1e-9 and (q == 0 or r >= r0 + DRIFT_MIN_GAIN):
+                    r_best, period, drift = r, p, q
+    z = len(events) * r_best ** 2
+    if z < SWAP_MIN_Z:
+        return None
+    r_swap, mean = swap_concentration(swaps, period, drift, span)
+    if r_swap < SWAP_MIN_R:
+        return None
+    # 入れ替わりの平均位置が 8 カウントの SWAP_BEAT 拍目に来るように頭を決める
+    head0 = (mean - SWAP_BEAT / 8) % 1
+    return {"period": period, "drift": drift, "span": span, "head0": head0, "R": r_swap, "z": z}
+
+
+def swap_heads(fit, duration):
+    """当てた格子の 8 カウントの頭の時刻（0 秒の手前 1 つから duration の後ろ 1 つまで）"""
+    period, drift, span, head0 = fit["period"], fit["drift"], fit["span"], fit["head0"]
+    end = max(duration or 0, span) + period
+
+    def solve(k):
+        # grid_cycles(t) = k + head0 を二分法で解く（単調増加の範囲で）
+        a, b = -2 * period, end + 2 * period
+        for _ in range(60):
+            m = (a + b) / 2
+            if grid_cycles(m, period, drift, span) < k + head0:
+                a = m
+            else:
+                b = m
+        return (a + b) / 2
+
+    heads = []
+    k = math.floor(grid_cycles(0, period, drift, span) - head0)
+    while True:
+        t = solve(k)
+        if t > end:
+            break
+        if t > -period:
+            heads.append(t)
+        k += 1
+    return heads
+
+
+def nearest_head(heads, t):
+    """t に最も近い 8 カウントの頭の番号"""
+    i = bisect.bisect_left(heads, t)
+    if i <= 0:
+        return 0
+    if i >= len(heads):
+        return len(heads) - 1
+    return i if heads[i] - t < t - heads[i - 1] else i - 1
+
+
+def swap_cells(heads, swaps):
+    """各 8 カウントに CV の入れ替わりがあるか。入れ替わりは頭から SWAP_BEAT 拍目に来る想定なので、
+    そこから前後半周期（±4 拍）の入れ替わりをその 8 カウントのものとする"""
+    has = [False] * len(heads)
+    for s in swaps:
+        for j in range(len(heads) - 1):
+            b = (heads[j + 1] - heads[j]) / 8
+            c = heads[j] + SWAP_BEAT * b
+            if c - 4 * b <= s < c + 4 * b:
+                has[j] = True
+                break
+    return has
+
+
+def align_to_swaps(moves, heads, swaps):
+    """Claude の行（時刻順）を 8 カウントへ順番を保って割り当てる。各行はまず元の時刻の最寄りの頭が候補で、
+    CBL 系の行が入れ替わりのある 8 カウントに、そうでない行が入れ替わりの無い 8 カウントに来るよう
+    前後にずらしてよい（Claude の行の時刻が 1 行ぶんずれていることがあるため）。
+    罰: ずらした分 × SWAP_SHIFT_WEIGHT、食い違い × SWAP_ALIGN_WEIGHT。同じ 8 カウントに 2 行 → まとめる"""
+    n = len(heads)
+    has = swap_cells(heads, swaps)
+    inf = float("inf")
+    pref = [nearest_head(heads, m["start"]) for m in moves]
+    span = [((heads[j + 1] - heads[j]) if j + 1 < n else (heads[j] - heads[j - 1])) for j in range(n)]
+
+    def cost(i, j):
+        shift = abs(heads[j] - moves[i]["start"]) / span[j] - abs(heads[pref[i]] - moves[i]["start"]) / span[pref[i]]
+        miss = (moves[i].get("move") in CBL_MOVES) != has[j]
+        return SWAP_SHIFT_WEIGHT * max(0.0, shift) + SWAP_ALIGN_WEIGHT * miss
+
+    dp = [[inf] * n for _ in moves]
+    back = [[-1] * n for _ in moves]
+    for j in range(n):
+        dp[0][j] = cost(0, j)
+    for i in range(1, len(moves)):
+        best, arg = inf, -1   # 前の行が j より前の頭のときの最小
+        for j in range(n):
+            # 前の行が同じ頭 j → 2 行をまとめる（Claude の行が 1 つ消えるので罰）
+            same = dp[i - 1][j] + SWAP_MERGE_WEIGHT
+            if best <= same and best < inf:
+                dp[i][j], back[i][j] = best + cost(i, j), arg
+            elif same < inf:
+                dp[i][j], back[i][j] = same + cost(i, j), j
+            if dp[i - 1][j] < best:
+                best, arg = dp[i - 1][j], j
+    j = min(range(n), key=lambda x: dp[-1][x])
+    cells = [0] * len(moves)
+    for i in range(len(moves) - 1, -1, -1):
+        cells[i] = j
+        j = back[i][j]
+    return cells
 
 
 # ---------------------------------------------------------------- 技名
@@ -318,31 +518,57 @@ def normalize(result, summary, duration=None):
 
     beats = grid_from_beats(summary)
     starts = [m["start"] for m in moves]
+    if duration is None or not _num(duration):
+        duration = None
+    swap_fit = None
     if beats:
         period, beat, first = beats
         phase = best_phase(starts, period, [first + beat * k for k in range(8)])
         tempo_src = "audio"
     else:
-        period, phase = fit_grid(starts, unit8_from_routine(moves) or DEFAULT_UNIT8)
+        guess = unit8_from_routine(moves) or DEFAULT_UNIT8
+        swaps = swap_times(summary)
+        swap_fit = fit_grid_to_swaps(swaps, guess, duration or (max(starts) + guess), turn_times(summary))
+        if swap_fit:
+            period = swap_fit["period"]
+            phase = (swap_fit["head0"] * period) % period
+            tempo_src = "swaps"
+        else:
+            period, phase = fit_grid(starts, guess)
+            tempo_src = "routine"
         beat = period / 8
-        tempo_src = "routine"
+    if duration is None:
+        duration = moves[-1]["start"] + period
 
-    # 各技を最寄りの 8 カウントの頭へ。同じ頭（または前の行より前）に寄ったら前の行にまとめる
+    # 8 カウントの頭の時刻の並び（等速なら phase + k×period。drift があれば少しずつ伸び縮みする）
+    if swap_fit:
+        heads = swap_heads(swap_fit, max(duration, starts[-1]))
+    else:
+        k0 = math.floor((0 - phase) / period) - 1
+        k1 = math.ceil((max(duration, starts[-1]) - phase) / period) + 1
+        heads = [phase + k * period for k in range(k0, k1 + 1)]
+
+    if swap_fit:
+        cells = align_to_swaps(moves, heads, swaps)
+    else:
+        cells = [nearest_head(heads, m["start"]) for m in moves]
+
+    # 各技を割り当てた 8 カウントの頭へ。同じ頭（または前の行より前）に寄ったら前の行にまとめる
     groups = []
-    for m in moves:
-        g = round((m["start"] - phase) / period)
+    for m, g in zip(moves, cells):
         if groups and g <= groups[-1][0]:
             groups[-1][1].append(m)
         else:
             groups.append((g, [m]))
 
-    if duration is None or not _num(duration):
-        duration = moves[-1]["start"] + period
     out = []
     for k, (g, grp) in enumerate(groups):
         mv = merge_group(grp)
-        t0 = max(0.0, phase + g * period)
-        n8 = (groups[k + 1][0] - g) if k + 1 < len(groups) else max(1, round((duration - t0) / period))
+        t0 = max(0.0, heads[g])
+        if k + 1 < len(groups):
+            n8 = groups[k + 1][0] - g
+        else:
+            n8 = max(1, round((duration - t0) / period))
         mv["start"] = round(t0, 2)
         mv["counts"] = 8 * max(1, n8)
         turn, capped = clean_turn(mv.get("turn"), mv)
@@ -362,7 +588,14 @@ def normalize(result, summary, duration=None):
         "unitSec": round(period, 3), "beatSec": round(beat, 4), "phaseSec": round(phase % period, 3),
         "source": tempo_src,
     }
-    if not _num(routine.get("bpm")) or routine.get("bpm") <= 0:
+    if swap_fit:
+        routine["grid"]["swapR"] = round(swap_fit["R"], 3)
+        routine["grid"]["swaps"] = len(swaps)
+        routine["grid"]["z"] = round(swap_fit["z"], 2)
+        if swap_fit["drift"]:
+            routine["grid"]["driftCycles"] = round(swap_fit["drift"], 3)
+    # Claude が書いた bpm は残す。ここで決めた bpm（bpmSource あり）は毎回決め直す（周期が変わったら追従する）
+    if not _num(routine.get("bpm")) or routine.get("bpm") <= 0 or routine.get("bpmSource"):
         routine["bpm"] = round(60 / beat)
         routine["bpmSource"] = tempo_src
     return result

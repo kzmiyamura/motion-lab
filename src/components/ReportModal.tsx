@@ -3,7 +3,8 @@ import { getJobDetail, resolveHomeServerUrl, type AnalysisJobDetail } from '../e
 import { routineFromResult } from '../engine/routineClip';
 import { sendRoutineTo3D } from '../engine/routineBus';
 import {
-  moveFramesPending, parseChoreoSheet, parseMoveFrames, reportSummary, type SheetRow,
+  mapFrameUrls, moveFramesPending, parseChoreoSheet, parseMoveFrames, reportSummary,
+  type MoveFrameSet, type SheetRow,
 } from '../engine/choreoSheet';
 import { ChoreoSheet } from './ChoreoSheet';
 import { MoveClipPlayer } from './MoveClipPlayer';
@@ -147,7 +148,7 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
   const [error, setError] = useState('');
   const [copyMsg, setCopyMsg] = useState('');
   const [showDetail, setShowDetail] = useState(false);
-  const [moveFrames, setMoveFrames] = useState<Map<number, string>>(() => new Map());
+  const [moveFrames, setMoveFrames] = useState<Map<number, MoveFrameSet>>(() => new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -180,8 +181,9 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
           if (cancelled) return;
           if (json) {
             const raw = parseMoveFrames(json, sheet.rows);
-            const resolved = new Map<number, string>();
-            raw.forEach((p, i) => resolved.set(i, p.startsWith('/') ? resolveHomeServerUrl(baseUrl, p) ?? p : p));
+            const resolved = new Map<number, MoveFrameSet>();
+            const abs = (p: string) => (p.startsWith('/') ? resolveHomeServerUrl(baseUrl, p) ?? p : p);
+            raw.forEach((set, i) => resolved.set(i, mapFrameUrls(set, abs)));
             setMoveFrames(resolved);
           }
           if ((!json || moveFramesPending(json)) && tries < FRAME_POLL_MAX) timer = setTimeout(load, FRAME_POLL_MS);

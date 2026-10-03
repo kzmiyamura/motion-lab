@@ -122,7 +122,21 @@ describe('choreoSheet（純関数）', () => {
         { index: 9, start: 0, url: '/a/10.jpg' },
       ],
     }, s.rows);
-    expect([...m.entries()]).toEqual([[0, '/a/01.jpg']]);
+    expect([...m.entries()]).toEqual([[0, { strip: '/a/01.jpg', frames: [] }]]);
+  });
+
+  it('v2 の index.json は1コマずつの写真を読む（帯も残す）', () => {
+    const s = parseChoreoSheet(JSON.stringify(RESULT))!;
+    const m = parseMoveFrames({
+      version: 2,
+      moves: [
+        { index: 1, start: 5, url: '/a/02.jpg', frames: [{ t: 5, url: '/a/02_0.jpg' }, { url: '/a/02_1.jpg' }, { t: 6 }] },
+        { index: 2, start: 14.2, frames: [] },
+      ],
+    }, s.rows);
+    expect([...m.entries()]).toEqual([
+      [1, { strip: '/a/02.jpg', frames: [{ t: 5, url: '/a/02_0.jpg' }, { t: null, url: '/a/02_1.jpg' }] }],
+    ]);
   });
 
   it('作成途中の index.json を見分ける（古い形式は完成扱い）', () => {
@@ -139,12 +153,24 @@ describe('choreoSheet（純関数）', () => {
     expect(countAt(14.0, 10, 0.5)).toBe(1);
   });
 
-  it('新形式レポートの冒頭サマリだけを取る', () => {
-    expect(reportSummary(REPORT_MD)).toEqual([
-      '右の男性（黒シャツ）がリーダー。On1・BPM 96。',
-      'ベーシックから CBL 系を中心に回す流れ。',
-    ]);
+  it('新形式レポートの冒頭サマリは、最初の段落の頭から文単位で短い1行だけ', () => {
+    expect(reportSummary(REPORT_MD)).toEqual(['右の男性（黒シャツ）がリーダー。On1・BPM 96。']);
     expect(reportSummary('# 旧\n\n長い結論\n## 1. 結論')).toEqual([]);
+    // 実際のレポート（2f4b6919）: 長い段落は文の途中で切らず、収まる文までで止める
+    const real = [
+      '# Fadi Fusion & Linda Aramendiz ソーシャル（Stardance）',
+      '',
+      'リーダーは開始時点で画面右にいる帽子・白黒柄シャツの男性。スタイルの On1/On2 は不明。音声なし（画面収録）なので、テンポは 1×8 ≈ 2.4秒と推定した。',
+      '即興の多いソーシャルで、技は CBL とインサイドターンが中心。そこに男性の自分ターンとクローズドの密着ベーシックが混ざる。カメラが2人の周りを回り込む撮影。',
+      '',
+      '## 振付シート',
+      '## 詳細（根拠）',
+    ].join('\n');
+    expect(reportSummary(real)).toEqual(['リーダーは開始時点で画面右にいる帽子・白黒柄シャツの男性。スタイルの On1/On2 は不明。']);
+    // 最初の文だけで長すぎるなら出さない
+    expect(reportSummary(`# t\n\n${'あ'.repeat(80)}。\n## 詳細`)).toEqual([]);
+    // 技名の「?」では切らない
+    expect(reportSummary('# t\n\n技は CBL＋アウトサイド? が中心。\n## 詳細')).toEqual(['技は CBL＋アウトサイド? が中心。']);
   });
 });
 
@@ -198,6 +224,24 @@ describe('ReportModal の振付シート表示', () => {
     expect(screen.queryByText('詳しい根拠の文章')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /詳細を表示/ }));
     expect(screen.getByText('詳しい根拠の文章')).toBeInTheDocument();
+  });
+
+  it('v2 の写真は1コマずつ横スクロールの列で出す', async () => {
+    const frames = [0, 1, 2, 3, 4].map(k => ({ t: 14.2 + k, url: `/analysis-output/${JOB_ID}/out/move_frames/03_014.2_${k}.jpg` }));
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ version: 2, complete: true, moves: [{ index: 2, start: 14.2, end: 19.4, url: `/analysis-output/${JOB_ID}/out/move_frames/03_014.2.jpg`, frames }] }),
+    })));
+    render(<ReportModal jobId={JOB_ID} videoTitle="テスト" baseUrl={BASE} onClose={() => {}} />);
+    const rows = await screen.findAllByTestId('choreo-row');
+    const third = within(rows[2]);
+    await waitFor(() => expect(third.getAllByRole('img')).toHaveLength(5));
+    const imgs = third.getAllByRole('img');
+    expect(imgs[0]).toHaveAttribute('src', `${BASE}/analysis-output/${JOB_ID}/out/move_frames/03_014.2_0.jpg`);
+    expect(imgs[4]).toHaveAttribute('alt', '#3 CBL＋インサイドターン 5/5コマ目');
+    expect(third.getByTestId('choreo-shots')).toBeInTheDocument();
+    // 元動画が無い（カードが押せない）ときは、コマを押すと原寸を開く
+    expect(imgs[1].closest('a')).toHaveAttribute('href', `${BASE}/analysis-output/${JOB_ID}/out/move_frames/03_014.2_1.jpg`);
   });
 
   it('写真がまだ無い・作成途中なら、揃うまで読み直す', async () => {

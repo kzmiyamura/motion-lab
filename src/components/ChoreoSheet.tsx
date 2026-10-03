@@ -1,15 +1,46 @@
-import type { ChoreoSheetData, SheetRow } from '../engine/choreoSheet';
+import type { ReactNode } from 'react';
+import type { ChoreoSheetData, MoveFrameSet, SheetRow } from '../engine/choreoSheet';
 import styles from './ChoreoSheet.module.css';
 
 type Props = {
   sheet: ChoreoSheetData;
-  /** 行 index → 連続コマ画像の URL（解決済み） */
-  frames: Map<number, string>;
+  /** 行 index → 連続コマ写真（URL は解決済み） */
+  frames: Map<number, MoveFrameSet>;
   /** 元動画が見られるとき: カードを押すとその技の区間をスローで流す */
   onPlay?: (row: SheetRow) => void;
   /** 再生中の行 index */
   playingIndex?: number | null;
 };
+
+/**
+ * 技の連続コマ。v2（1コマずつ）はカード幅の半分強で横スクロール（スナップ）、
+ * v1（古いジョブの帯）は高さを決めて横スクロール。
+ * カードが押せない（元動画が無い）ときは、コマを押すと原寸の画像を開く
+ */
+function MovePhotos({ set, row, linkOut }: { set: MoveFrameSet; row: SheetRow; linkOut: boolean }) {
+  const wrap = (url: string, cls: string, img: ReactNode, extra?: ReactNode) => (linkOut
+    ? <a key={url} href={url} target="_blank" rel="noreferrer" className={cls}>{img}{extra}</a>
+    : <span key={url} className={cls}>{img}{extra}</span>);
+  if (set.frames.length > 0) {
+    const n = set.frames.length;
+    return (
+      <div className={styles.shots} data-testid="choreo-shots">
+        {set.frames.map((f, i) => wrap(
+          f.url,
+          styles.shot,
+          <img src={f.url} alt={`#${row.no} ${row.name} ${i + 1}/${n}コマ目`} width={480} height={720} loading="lazy" />,
+          <span className={styles.shotNo} aria-hidden="true">{i + 1}/{n}</span>,
+        ))}
+      </div>
+    );
+  }
+  if (!set.strip) return null;
+  return (
+    <div className={styles.stripScroll}>
+      {wrap(set.strip, '', <img src={set.strip} alt={`#${row.no} ${row.name} の連続コマ`} loading="lazy" />)}
+    </div>
+  );
+}
 
 /**
  * 振付シート: 1行 = 1技。上から順に読むだけでルーティンを頭から踊れるよう、
@@ -25,7 +56,7 @@ export function ChoreoSheet({ sheet, frames, onPlay, playingIndex }: Props) {
       {onPlay && <p className={styles.tip}>カードを押すと、その技を 0.5 倍で繰り返し再生</p>}
       <ol className={styles.rows}>
         {sheet.rows.map(row => {
-          const img = frames.get(row.index);
+          const photos = frames.get(row.index);
           const playable = !!onPlay && row.start !== null;
           const playing = playingIndex === row.index;
           return (
@@ -67,15 +98,7 @@ export function ChoreoSheet({ sheet, frames, onPlay, playingIndex }: Props) {
                   {[row.hold, row.turn, row.pass].filter(Boolean).join(' ／ ')}
                 </p>
               )}
-              {img && (
-                playable
-                  ? <span className={styles.strip}><img src={img} alt={`#${row.no} ${row.name} の連続コマ`} loading="lazy" /></span>
-                  : (
-                    <a href={img} target="_blank" rel="noreferrer" className={styles.strip}>
-                      <img src={img} alt={`#${row.no} ${row.name} の連続コマ`} loading="lazy" />
-                    </a>
-                  )
-              )}
+              {photos && <MovePhotos set={photos} row={row} linkOut={!playable} />}
             </li>
           );
         })}

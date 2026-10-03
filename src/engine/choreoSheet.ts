@@ -178,23 +178,41 @@ export function parseChoreoSheet(resultJson: string | null): ChoreoSheetData | n
   return rows.length ? { header, rows, beatSec } : null;
 }
 
+/** 技1つ分の写真。v2 は1コマずつ（frames）、v1（古いジョブ）は横に並べた帯（strip）だけ */
+export type MoveShot = { t: number | null; url: string };
+export type MoveFrameSet = { strip: string | null; frames: MoveShot[] };
+
 /**
- * サーバーの out/move_frames/index.json → 行 index ごとの画像パス。
+ * サーバーの out/move_frames/index.json → 行 index ごとの写真。
+ * v2: moves[].frames = [{t, url}]（主ペアを切り取った1コマずつ）＋ url（帯）。v1: url（帯）だけ。
  * routine が書き直されて画像が古くなっている行（開始時刻が合わない）は使わない
  */
-export function parseMoveFrames(json: unknown, rows: SheetRow[]): Map<number, string> {
-  const out = new Map<number, string>();
+export function parseMoveFrames(json: unknown, rows: SheetRow[]): Map<number, MoveFrameSet> {
+  const out = new Map<number, MoveFrameSet>();
   const list = (json as { moves?: unknown })?.moves;
   if (!Array.isArray(list)) return out;
   const byIndex = new Map(rows.map(r => [r.index, r]));
-  for (const e of list as { index?: unknown; start?: unknown; url?: unknown }[]) {
-    if (typeof e?.index !== 'number' || typeof e.url !== 'string') continue;
+  for (const e of list as { index?: unknown; start?: unknown; url?: unknown; frames?: unknown }[]) {
+    if (typeof e?.index !== 'number') continue;
     const row = byIndex.get(e.index);
     if (!row) continue;
     if (typeof e.start === 'number' && row.start !== null && Math.abs(e.start - row.start) > 0.05) continue;
-    out.set(e.index, e.url);
+    const frames: MoveShot[] = [];
+    if (Array.isArray(e.frames)) {
+      for (const f of e.frames as { t?: unknown; url?: unknown }[]) {
+        if (typeof f?.url === 'string') frames.push({ t: typeof f.t === 'number' ? f.t : null, url: f.url });
+      }
+    }
+    const strip = typeof e.url === 'string' ? e.url : null;
+    if (!strip && frames.length === 0) continue;
+    out.set(e.index, { strip, frames });
   }
   return out;
+}
+
+/** 写真の URL を差し替える（サーバー相対パス → 絶対 URL） */
+export function mapFrameUrls(set: MoveFrameSet, fn: (url: string) => string): MoveFrameSet {
+  return { strip: set.strip ? fn(set.strip) : null, frames: set.frames.map(f => ({ ...f, url: fn(f.url) })) };
 }
 
 /** index.json がまだ作成途中か（サーバーは1枚できるごとに complete:false で書き直す。古い形式は完成扱い） */
@@ -208,19 +226,33 @@ export function countAt(t: number, start: number, beatSec: number): number {
   return ((k % 8) + 8) % 8 + 1;
 }
 
+/** 見出しの下に出すサマリの最大文字数（スマホで 2 行程度） */
+export const SUMMARY_MAX_CHARS = 60;
+
 /**
- * 新形式の report.md（「## 詳細（根拠）」を持つもの）の冒頭サマリ（題の下・最初の ## の前、3行まで）。
+ * 新形式の report.md（「## 詳細（根拠）」を持つもの）の冒頭サマリを、短い1行にする。
+ * 題の下・最初の ## の前の最初の段落から、文（。！？ で終わる。半角の ? は技名の「推定」印なので区切りにしない）を頭から SUMMARY_MAX_CHARS 字まで取る。
+ * 文の途中では切らない。最初の文だけで長すぎるときは出さない（空配列）。
+ * 以前は3行まで丸ごと出していて、長い段落が折り返して文の切れ端のように見えていた。
  * 旧形式のレポートは冒頭が長いので出さない
  */
 export function reportSummary(md: string | null): string[] {
   if (!md || !/^##\s+詳細/m.test(md)) return [];
-  const out: string[] = [];
+  let first = '';
   for (const line of md.split('\n')) {
     const t = line.trim();
     if (/^##\s/.test(t)) break;
     if (!t || /^#\s/.test(t)) continue;
-    out.push(t.replace(/^>\s*/, ''));
-    if (out.length >= 3) break;
+    first = t.replace(/^>\s*/, '');
+    break;
   }
-  return out;
+  if (!first) return [];
+  const sentences = first.match(/[^。！？]+[。！？]+|[^。！？]+$/g) ?? [];
+  let out = '';
+  for (const s of sentences) {
+    const next = out + s.trim();
+    if (next.length > SUMMARY_MAX_CHARS) break;
+    out = next;
+  }
+  return out ? [out] : [];
 }

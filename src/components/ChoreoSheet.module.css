@@ -151,14 +151,64 @@
   color: var(--color-fg-dim);
 }
 
-.strip {
-  display: block;
+/*
+ * 連続コマ: スマホでも踊り手が見えるよう、1コマをカード幅の半分強で出して横スクロール（スナップ）。
+ * 次のコマが少し覗くので横に送れると分かる。広い画面では 1 コマ 240px で頭打ち
+ */
+.shots {
+  display: flex;
+  gap: 6px;
   margin-top: 0.1rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
 }
 
-.strip img {
+.shot {
+  position: relative;
+  flex: 0 0 56%;
+  max-width: 240px;
+  scroll-snap-align: start;
+}
+
+.shot img {
   display: block;
   width: 100%;
   height: auto;
   border-radius: 6px;
+  background: #000;
 }
+
+.shotNo {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* 古いジョブ（v1）の横に並べた帯: 高さを決めて横スクロール（幅に縮めると小さすぎて見えない） */
+.stripScroll {
+  display: block;
+  margin-top: 0.1rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.stripScroll img {
+  display: block;
+  height: 220px;
+  width: auto;
+  max-width: none;
+  border-radius: 6px;
+}
+

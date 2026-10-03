@@ -335,7 +335,9 @@ TURN_FLIP_MARGIN = 0.015   # 左右肩のX分離がこれ未満（真横向き�
 TURN_SWEEP_MIN = 0.04      # 反転の前後で要求する肩分離の振り幅（しっかり正面/背面まで回ったこと）
 TURN_PRE_SEC = 1.0         # 1回目の反転前にこの秒数以内で旧向きの振り幅があること
 TURN_CHAIN_GAP_SEC = 0.6   # 連続回転（ダブルターン）とみなす反転ペア間の最大間隔
-TURN_MAX_ROTATIONS = 3     # 連続回転の上限（それ以上はジッタの可能性が高い）
+TURN_MAX_ROTATIONS = 3     # 連続回転として連結する反転ペアの上限（それ以上はジッタの可能性が高い）
+# 回転数の数え方の上限。連結（上の上限）とは別に、反転の総数から数える（count_rotations）
+TURN_COUNT_MAX = 4
 CBL_MIN_SEP = 0.08         # 交差前後で必要な左右分離（正規化X。ジッタの往復を弾く）
 CBL_WINDOW_SEC = 2.0       # 交差の前後この秒数内に十分な分離があること
 CBL_PIVOT_SUPPRESS_SEC = 1.2  # CBLの±この秒数内のリーダーのターンはCBLのピボット動作として棄却
@@ -352,6 +354,23 @@ CBL_COOLDOWN_SEC = 0.6
 SPIN_PRE_SEC = 0.4
 SPIN_POST_SEC = 1.6
 SPIN_KP_MIN = 0.3
+
+
+def count_rotations(flips, i_start):
+    """ターンの回転数 = 最初の反転から TURN_CHAIN_GAP_SEC 以内の間隔で続く反転の数 / 2（切り捨て）。
+
+    10fps の骨格では速い連続回転は1周3〜4コマしかなく、反転ペアの連結（振り幅条件つき）では
+    途中のペアが条件を外して回転数を少なく数える（正解表で4回転→3、3回転→2）。
+    連結はターンの区切り（検出時刻）にだけ使い、回転数は反転の総数から数える
+    （正解表2本の回転数 MAE 0.43 → 0.31。eval_ground_truth.py）
+    """
+    n, last = 0, None
+    for t, _ in flips[i_start:]:
+        if last is not None and t - last > TURN_CHAIN_GAP_SEC:
+            break
+        n += 1
+        last = t
+    return max(1, min(TURN_COUNT_MAX, n // 2))
 
 
 def detect_turns(draw_frames, pid):
@@ -393,6 +412,7 @@ def detect_turns(draw_frames, pid):
             # 連続回転（ダブルターン等）: 「直後（0.6秒以内）に始まり、振り幅条件も満たす」
             # 反転ペアのみ連結する。緩い連結は後続の別ターンやジッタを際限なく飲み込む（実測: rotations=10）
             rotations = 1
+            i_start = i
             i += 2
             while (
                 rotations < TURN_MAX_ROTATIONS
@@ -404,7 +424,7 @@ def detect_turns(draw_frames, pid):
                 rotations += 1
                 t2 = flips[i + 1][0]
                 i += 2
-            events.append((round(t1, 2), rotations))
+            events.append((round(t1, 2), count_rotations(flips, i_start)))
             last_event = t1
         else:
             i += 1

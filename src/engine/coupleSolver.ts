@@ -7,7 +7,7 @@ import {
 } from './rigDims';
 import {
   type Guide, type PairGuide, type Hold, buildGuide, buildPair, buildHolds, sampleAt, at, segAt,
-  damp, clamp, PAIR_MIN, PAIR_MAX, ARM_REACH, HOLD_LAG,
+  damp, clamp, wrapPi, PAIR_MIN, PAIR_MAX, ARM_REACH, HOLD_LAG,
 } from './coupleGuide';
 import { type Capsule, bodyCapsules, segSegDist, CLOSED_BACK_ALLOW } from './rigMetrics';
 import { measureArms, dumpArms } from './rigDebug';
@@ -545,7 +545,10 @@ export class CoupleSolver {
       const hipY = at(s, g.hipY);
       rig.root.position.x = follow(rig.root.position.x, tx[d], 0.35, dt);
       rig.root.position.z = follow(rig.root.position.z, tz[d], 0.35, dt);
-      rig.root.rotation.y = follow(rig.root.rotation.y, at(s, g.yaw), 0.4, dt);
+      // 向きは最短の回り方で追う。ガイドのヨーは連続ターンで一周が消えないよう unwrap して
+      // あるので、CBL を2回すると末尾が先頭より +360° になる。素直に追うとループの
+      // 継ぎ目で2人が一回転して戻っていた（2026-10-03 発見）
+      rig.root.rotation.y += wrapPi(at(s, g.yaw) - rig.root.rotation.y) * ease(0.4, dt);
       // 腰の高さも実データ。沈み込み（膝の使い方）が動画そのままに出る
       rig.hips.position.y = follow(rig.hips.position.y, hipY, 0.3, dt);
 

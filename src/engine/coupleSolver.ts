@@ -32,6 +32,39 @@ import { measureArms, dumpArms } from './rigDebug';
  *   5 首        耳から取る相対ヨー = スポッティング      ← 実データ（ほぼ100%）
  */
 
+/**
+ * 追従の鈍らせ。以前は `damp(cur, target, k)` = 1フレームで k だけ寄る形で、
+ * **フレームレートで速さが変わっていた**（120Hz の画面では2倍速く追う）。
+ * k は「60fps の1フレームで寄る割合」のまま書き、時定数 τ = −1/(60·ln(1−k)) の
+ * 1 − exp(−dt/τ) に直して使う。60fps では旧 damp と同じ値になる
+ */
+const ease = (k60: number, dt: number) =>
+  1 - Math.exp(Math.max(0, dt) * 60 * Math.log(1 - k60));
+const follow = (cur: number, target: number, k60: number, dt: number) =>
+  cur + (target - cur) * ease(k60, dt);
+
+/**
+ * 手の的と肘の向き（ポール）のばね（臨界減衰）。ランプ入力に対する遅れが ARM_LAG になる。
+ *
+ * 以前は IK の解（肩の四元数と肘角）を別々に slerp/damp していたので、中間フレームは
+ * **どの的に対する IK の解でもなく**、局面の切り替わりで肩が的を素通りして捻れていた。
+ * いまは鈍らせるのを的と肘の向きの側だけにして、IK は毎フレーム厳密に解く。
+ * 遅れは旧 slerp（フリーの腕 0.25/フレーム ≒ 58ms）に合わせた
+ */
+const ARM_LAG = 0.06;
+const ARM_OMEGA = 2 / ARM_LAG;
+type Spring = { layer: string; p: THREE.Vector3; v: THREE.Vector3; n: THREE.Vector3; nv: THREE.Vector3 };
+/** 臨界減衰ばねを dt だけ進める（的 g が dt の間一定とした厳密解）。x, v を書き換える */
+function springStep(x: THREE.Vector3, v: THREE.Vector3, g: THREE.Vector3, dt: number) {
+  const w = ARM_OMEGA, e = Math.exp(-w * Math.max(0, dt));
+  for (const a of ['x', 'y', 'z'] as const) {
+    const y0 = x[a] - g[a], v0 = v[a];
+    const c = v0 + w * y0;
+    x[a] = g[a] + (y0 + c * dt) * e;
+    v[a] = (v0 - w * c * dt) * e;
+  }
+}
+
 // IK の作業用（毎フレーム確保しない）
 const tmp = {
   dir: new THREE.Vector3(), pole: new THREE.Vector3(), axis: new THREE.Vector3(),
@@ -227,7 +260,8 @@ const UP = new THREE.Vector3(0, 1, 0);
  * dir と pole が平行になった瞬間に外積が潰れ、曲がる面が飛んで肘が裏返る
  * （「腕がありえない方向へ曲がる」の正体はこれ）。
  *
- * `sm` は追従率（1 = 即時）。腕は目標が2体の位置に依存して細かく動くので鈍らせる。
+ * `sm` は追従率（1 = 即時）。キーポーズ方式では常に 1（鈍らせるのは的とポールの側）。
+ * 1 未満は観測追従（keyPose=0）の「手続きの構えと IK の解を信頼度で混ぜる」用途だけに残す。
  */
 function solve2Bone(
   j1: THREE.Object3D, j2: THREE.Object3D, l1: number, l2: number,
@@ -390,6 +424,12 @@ export class CoupleSolver {
     this.dumpWindow = opts.dumpWindow ?? null;
   }
 
+  /** 腕ごとの的と肘の向きのばね（[人][左右]） */
+  readonly springs: Spring[][] = [0, 1].map(() => [0, 1].map(() => ({
+    layer: '', p: new THREE.Vector3(), v: new THREE.Vector3(),
+    n: new THREE.Vector3(), nv: new THREE.Vector3(),
+  })));
+
   /** クリップを差し替えたとき、前のソルバーの鈍り状態を引き継ぐ（手が飛ばないように） */
   inherit(prev: CoupleSolver) {
     this.armCur.current = prev.armCur.current;
@@ -397,6 +437,48 @@ export class CoupleSolver {
     this.pairCur.current = prev.pairCur.current;
     this.holdPos.current.copy(prev.holdPos.current);
     this.holdSame.current = prev.holdSame.current;
+    for (let d = 0; d < 2; d++) {
+      for (let k = 0; k < 2; k++) {
+        const a = this.springs[d][k], b = prev.springs[d][k];
+        a.layer = b.layer; a.p.copy(b.p); a.v.copy(b.v); a.n.copy(b.n); a.nv.copy(b.nv);
+      }
+    }
+  }
+
+  /**
+   * 手の的（胸郭ローカル）をばねで鈍らせる。腕の持ち主（layer）が替わった瞬間は、
+   * いまの手首の位置・速度 0 から始める（替わり目で手が飛ばないように）。
+   * 的 target を鈍らせた値で書き換える
+   */
+  private smoothTarget(rig: Rig, d: number, k: number, layer: string, target: THREE.Vector3, dt: number) {
+    const s = this.springs[d][k];
+    if (s.layer !== layer) {
+      s.layer = layer;
+      rig.shldr[k].updateMatrixWorld(true);   // 肩を動かした直後でも、胸郭から下を確定させて測る
+      s.p.set(0, -L_FOREARM, 0);
+      rig.elbow[k].localToWorld(s.p);
+      rig.spine.worldToLocal(s.p);
+      s.v.set(0, 0, 0);
+      // 肘の向きも今の姿勢から（肩の骨ローカル +Z = solve2Bone のポール側）
+      s.n.set(0, 0, 1).applyQuaternion(rig.shldr[k].quaternion);
+      s.nv.set(0, 0, 0);
+    }
+    springStep(s.p, s.v, target, dt);
+    target.copy(s.p);
+  }
+
+  /** 肘の向き（ポール、胸郭ローカル）をばねで鈍らせる。smoothTarget と同じ腕・同じ layer で呼ぶ */
+  private smoothPole(rig: Rig, d: number, k: number, layer: string, pole: THREE.Vector3, dt: number) {
+    const s = this.springs[d][k];
+    if (s.layer !== layer) {
+      // つないだ手は的を鈍らせない（共有点の側で鈍らせる）ので、ここで切り替わりを拾う
+      s.layer = layer;
+      s.n.set(0, 0, 1).applyQuaternion(rig.shldr[k].quaternion);
+      s.nv.set(0, 0, 0);
+    }
+    if (pole.lengthSq() > 1e-12) pole.normalize();
+    springStep(s.n, s.nv, pole, dt);
+    pole.copy(s.n);
   }
 
   step(rigs: [Rig, Rig], t: number, dt: number) {
@@ -461,11 +543,11 @@ export class CoupleSolver {
       if (!s.inRange) continue;
 
       const hipY = at(s, g.hipY);
-      rig.root.position.x = damp(rig.root.position.x, tx[d], 0.35);
-      rig.root.position.z = damp(rig.root.position.z, tz[d], 0.35);
-      rig.root.rotation.y = damp(rig.root.rotation.y, at(s, g.yaw), 0.4);
+      rig.root.position.x = follow(rig.root.position.x, tx[d], 0.35, dt);
+      rig.root.position.z = follow(rig.root.position.z, tz[d], 0.35, dt);
+      rig.root.rotation.y = follow(rig.root.rotation.y, at(s, g.yaw), 0.4, dt);
       // 腰の高さも実データ。沈み込み（膝の使い方）が動画そのままに出る
-      rig.hips.position.y = damp(rig.hips.position.y, hipY, 0.3);
+      rig.hips.position.y = follow(rig.hips.position.y, hipY, 0.3, dt);
 
       // ── 上体のねじれ: 肩ラインと腰ラインの差（実観測）。サルサの見た目の芯なので、
       // 観測が無いフレームだけ 0（＝腰と同じ向き）へ戻す
@@ -475,7 +557,7 @@ export class CoupleSolver {
       // 合格済みの足運びはそのまま。顔（head は spine の子）も一緒に振れるので、
       // 「顔が正対したまま近い」不快さが消える
       const closedYaw = d === 0 ? CLOSED_YAW * closedAmt : 0;
-      rig.spine.rotation.y = damp(rig.spine.rotation.y, twist + closedYaw, 0.3);
+      rig.spine.rotation.y = follow(rig.spine.rotation.y, twist + closedYaw, 0.3, dt);
 
       // ── 支持脚の判定 → キューバンモーション。
       // 低いほうの足首が体重を受けている。観測が無ければ拍のステップ位相で代用する
@@ -485,9 +567,9 @@ export class CoupleSolver {
         ? clamp((at(s, g.ank[1].y) - at(s, g.ank[0].y)) / 0.06, -1, 1)  // +1 = 左足に乗る
         : stepPhase * mirror;
       // 体重を受けた側の腰が上がり、胸郭はその逆へ振れる（骨盤を回すと脚IKが崩れるので上体で表す）
-      rig.spine.position.y = damp(rig.spine.position.y, -dip * 0.02, 0.3);
-      rig.spine.position.x = damp(rig.spine.position.x, -support * 0.022, 0.25);
-      rig.spine.rotation.z = damp(rig.spine.rotation.z, -support * 0.055, 0.25);
+      rig.spine.position.y = follow(rig.spine.position.y, -dip * 0.02, 0.3, dt);
+      rig.spine.position.x = follow(rig.spine.position.x, -support * 0.022, 0.25, dt);
+      rig.spine.rotation.z = follow(rig.spine.rotation.z, -support * 0.055, 0.25, dt);
       // 前傾（rotation.x）は入れない。顔が正対したまま女へ近づくので、
       // ユーザーに「気持ち悪い」と却下された（2026-08-17）。斜めは**上から見た向き**
 
@@ -517,14 +599,14 @@ export class CoupleSolver {
         tmp.q.setFromAxisAngle(UP, fy);
         tmp.q2.copy(rig.thigh[k].quaternion).multiply(rig.knee[k].quaternion)
           .invert().multiply(tmp.q);
-        rig.foot[k].quaternion.slerp(tmp.q2, 0.3);
+        rig.foot[k].quaternion.slerp(tmp.q2, ease(0.3, dt));
       }
 
       // 首: 耳から取れる相対ヨー = スポッティング（ターンで顔だけ残る動き）。
       // 頭は胸郭の子なので、ねじれぶんを引いてから入れる
       const hw = clamp(at(s, g.headYaw.w), 0, 1);
-      rig.head.rotation.y = damp(
-        rig.head.rotation.y, clamp(at(s, g.headYaw.v) * hw - twist, -1.35, 1.35), 0.35);
+      rig.head.rotation.y = follow(
+        rig.head.rotation.y, clamp(at(s, g.headYaw.v) * hw - twist, -1.35, 1.35), 0.35, dt);
     }
 
     // 胸郭を動かしたので、ここから先はワールド行列を実測してから使う
@@ -584,7 +666,7 @@ export class CoupleSolver {
       }
     }
     // フェーズ境界で lift が段差にならないよう、ここでまとめて鈍らせる
-    lift = liftCur.current = damp(liftCur.current, lift, 0.2);
+    lift = liftCur.current = follow(liftCur.current, lift, 0.2, dt);
 
     if (linked[0] !== null && linked[1] !== null &&
         smp[0].inRange && smp[1].inRange) {
@@ -619,7 +701,7 @@ export class CoupleSolver {
 
       // 手の揺れは**共有点の側**で吸収する。腕ごとに鈍らせると、2人が別々に
       // 遅れて別々の場所を掴むことになり、速いターンで手が離れる（実測 30〜40cm）
-      if (holdSame.current === holdKey) tmp.hold.lerp(holdPos.current, HOLD_LAG);
+      if (holdSame.current === holdKey) tmp.hold.lerp(holdPos.current, 1 - ease(1 - HOLD_LAG, dt));
       else holdSame.current = holdKey;              // つなぐ手が替わった瞬間は追わない
 
       // 肩甲上腕リズム: 手が肩より上がるぶんだけ肩自体も上がる（1/3 ほど）。
@@ -676,6 +758,10 @@ export class CoupleSolver {
         rig.spine.worldToLocal(tmp.v2);
         tmp.v2.y = 0;
         if (tmp.v2.lengthSq() > 1e-6) tmp.pl.addScaledVector(tmp.v2.normalize(), -0.7);
+        // 肘の向きは鈍らせない。共有点（tmp.hold）がすでに鈍っているうえに、ここで遅らせると
+        // 体が速く回る場面で肘が付いていけず、相手の胴を抉る
+        // （実測: 前腕→相手の胴 最大 7.8 → 12.0cm に悪化した）。切り替わりの記録だけ取る
+        this.springs[d][k].layer = 'hold';
         solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
           tmp.v.x - rig.shldr[k].position.x, ty, tmp.v.z,
           tmp.pl.x, tmp.pl.y, tmp.pl.z);
@@ -697,13 +783,17 @@ export class CoupleSolver {
         yLo + SHO_DY * 0.6,
         fRoot.z - Math.cos(fy) * BACK_SUPPORT_R,
       );
+      rig.spine.worldToLocal(tmp.v);
+      this.smoothTarget(rig, 0, k, 'back', tmp.v, dt);
+      rig.spine.localToWorld(tmp.v);
       clampToArm(rig.spine, rig.shldr[k].position, tmp.v);
       rig.spine.worldToLocal(tmp.v);
       const ty = tmp.v.y - rig.shldr[k].position.y;
       armPole(sign, ty, tmp.pl);
+      this.smoothPole(rig, 0, k, 'back', tmp.pl, dt);
       solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
         tmp.v.x - rig.shldr[k].position.x, ty, tmp.v.z,
-        tmp.pl.x, tmp.pl.y, tmp.pl.z, 0.35);
+        tmp.pl.x, tmp.pl.y, tmp.pl.z);
     }
 
     // ── レイヤー3.6: クローズドポジション。
@@ -716,8 +806,13 @@ export class CoupleSolver {
         const rig = rigs[d], sign = SIDE_SIGN[k];
         // 肩を前へ出す（肩甲骨の外転）。組みに入る瞬間に飛ばないよう鈍らせる
         rig.shldr[k].position.set(
-          sign * SHO_DX, SHO_DY, damp(rig.shldr[k].position.z, fwd, 0.25),
+          sign * SHO_DX, SHO_DY, follow(rig.shldr[k].position.z, fwd, 0.25, dt),
         );
+        // 的を鈍らせる（胸郭ローカル）。IK は鈍らせずに解く
+        const layer = avoid ? 'closedF' : 'closedL';
+        rig.spine.worldToLocal(target);
+        this.smoothTarget(rig, d, k, layer, target, dt);
+        rig.spine.localToWorld(target);
         // 相手の体を避ける。クローズドは腰の間隔が 0.45m しかないので、
         // 体の前 0.30m に置くニュートラルの手は**そのままだと相手の胸にめり込む**。
         // リーダーの背中へ回す手は「相手の体を回り込む」のが目的なので回り込ませないが、
@@ -739,10 +834,11 @@ export class CoupleSolver {
         rig.spine.worldToLocal(target);
         const ty = Math.min(target.y - rig.shldr[k].position.y, 0);   // 肩より上へは上げない
         armPole(sign, ty, tmp.pl);
+        this.smoothPole(rig, d, k, layer, tmp.pl, dt);
         // 肩の z も引く。引かないと肩を前へ出したぶんだけ手が奥へ行き過ぎる
         solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
           target.x - rig.shldr[k].position.x, ty, target.z - rig.shldr[k].position.z,
-          tmp.pl.x, tmp.pl.y, tmp.pl.z, 0.35);
+          tmp.pl.x, tmp.pl.y, tmp.pl.z);
       };
       if (closedL >= 0) {
         // フォロワーの背中側（前方の逆）、肩甲骨の高さ。左肩甲骨なので体の左へ寄せる
@@ -788,17 +884,17 @@ export class CoupleSolver {
         const sign = SIDE_SIGN[k];
         const sh = rig.shldr[k];
         sh.position.set(sign * SHO_DX, SHO_DY, 0);   // 上げた肩を戻す
-        // キーポーズ方式では構えへ毎フレーム戻さない — 戻すと solve2Bone の slerp が
-        // 毎回リセットから始まり、目標へ 25% しか進まない姿勢で固まる
+        // 観測追従（keyPose=0）だけ、手続きの構えへ毎フレーム戻してから IK の解と混ぜる。
+        // キーポーズ方式は的のばねで鈍らせ、IK を厳密に解くので戻さない
         if (!keyPose) {
           sh.rotation.set(-0.30 + dip * 0.10, 0, sign * (0.42 + dip * 0.06));
-          rig.elbow[k].rotation.set(damp(rig.elbow[k].rotation.x, -0.85, 0.2), 0, 0);
+          rig.elbow[k].rotation.set(follow(rig.elbow[k].rotation.x, -0.85, 0.2, dt), 0, 0);
         }
 
         let w: number;
         if (keyPose) {
           // ── キーポーズ: フリーの腕は手書きの決めポーズ（胸郭ローカル）を拍で切り替える。
-          // 観測は一切見ない。目標が滑らかに動くので solve2Bone の鈍り（w）で中割りになる
+          // 観測は一切見ない。構えの切り替わりは的のばね（smoothTarget）で中割りになる
           if (!s.inRange) continue;
           const mirror = d === 1 ? -1 : 1;
           if (turner === d && lift > 0.25) {
@@ -820,8 +916,10 @@ export class CoupleSolver {
             // 片手ホールド中の空き手: 軽く前で構える（社交ダンスの基本の構え）
             tmp.v.set(sign * 0.30, 0.18 + dip * 0.03, 0.24);
           }
+          // 構えの切り替わりは的のばねで中割りする（IK の解は鈍らせない）
+          this.smoothTarget(rig, d, k, 'free', tmp.v, dt);
           rig.spine.localToWorld(tmp.v);
-          w = 0.25;
+          w = 1;
         } else {
           // 実観測（+ 速度ベクトルで伸ばした続き）の手首へ、信頼度ぶん寄せる。
           // 上で手続きの構えを入れてあるので、w が落ちれば自然にそちらへ戻る
@@ -854,6 +952,8 @@ export class CoupleSolver {
         rig.spine.worldToLocal(tmp.v);
         const ty = tmp.v.y - sh.position.y;
         armPole(sign, ty, tmp.pl);
+        if (keyPose) this.smoothPole(rig, d, k, 'free', tmp.pl, dt);
+        // 観測追従（keyPose=0）だけは旧来どおり、信頼度 w で手続きの構えと IK の解を混ぜる
         solve2Bone(sh, rig.elbow[k], L_UPARM, L_FOREARM,
           tmp.v.x - sh.position.x, ty, tmp.v.z,
           tmp.pl.x, tmp.pl.y, tmp.pl.z, w);

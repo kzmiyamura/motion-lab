@@ -10,7 +10,7 @@ Claude の routine は技イベントの時刻（CBL・ターンの瞬間）か�
 ことがある。ここでそれを機械的に直す:
 
 1. 8カウント（1×8）の長さを決める: 音声のビート格子があれば 8 拍。無ければ（画面収録など無音）
-   CV の左右入れ替わり（summary.events の CBL）が 8 カウントの同じ位置（On1 の CBL なら 5-7）に
+   CV の左右入れ替わり（summary.events の CBL）が 8 カウントの同じ位置（On2 の CBL なら女が 5 で通る）に
    最もよく揃う周期・位相（・ゆっくりしたテンポの変化）を、Claude の routine の間隔を目安に探す。
    入れ替わりが少ない・揃わないときは、routine の間隔の中央値から推定し技の頭の時刻に合わせる（従来）
 2. 位相（8カウントの頭がどこか）: 音声なら技の頭の時刻が最もよく乗る拍。入れ替わりで当てたならそれで決まる。
@@ -21,11 +21,14 @@ Claude の routine は技イベントの時刻（CBL・ターンの瞬間）か�
    削ったら自信を下げて「?」が付くようにする
 5. 技名は全角 14 文字以内に縮める（括弧書きを落とし「クロスボディリード」→「CBL」等）
 6. 各技に、カウントごとに男女が何をするかの短い行（steps）を付ける。Claude が書いていればそれを使い、
-   無ければ技の種類・回転・通る側から決まった言い回しで埋める
+   無ければ技の種類・回転・通る側から決まった言い回しで埋める。
+   On1/On2 は Claude が on1/on2 と書いていればそれ、無い・unclear なら On2（ユーザーの動画は基本 On2）。
+   On2 のベーシックは Claude の行でも On2 の決まった言い回しに置き換える（動画ごとの情報が無く、
+   On1 の数え方「1-2-3 男:前へ」で書かれていることがあるため）
 
 元の行は routine.rawMoves に残す（何度実行しても rawMoves から作り直すので結果は同じ）。
 
-Usage: python normalize_routine.py <result.json> <measurements.json>
+Usage: python normalize_routine.py <result.json> <measurements.json> [--default-onbeat=on2]
   result.json をその場で書き換える。routine.moves が無ければ何もしない
 """
 import bisect
@@ -56,10 +59,12 @@ SWAP_DRIFT_MAX = 2.0       # テンポの変化: 終わりまでに等速の格�
                            # （周期の当てはめで吸収しきれずに残るずれは drift の ⅛ 程度。¾ 以下なら等速で足りる）
 DRIFT_MIN_GAIN = 0.05      # drift を入れるのは R がこれ以上良くなるときだけ（ノイズへの当てはめすぎを防ぐ）
 SWAP_BEAT = 7.0            # CV の入れ替わり時刻が来る、8 カウントの頭からの拍数（下の説明）
-# SWAP_BEAT: On1 の CBL で女性が男性の前を通る（腰の左右が入れ替わる）のは 5-7 の中ほど（頭から 5.5 拍）。
-# CV の入れ替わり時刻（detect_cbl）は「入れ替わった後に 2 人とも見えた最初のコマ」なので本当の入れ替わりより
-# 遅れる（1230b3d5 の正解と対応させて中央値 +0.35〜0.4 秒 ≈ 1.2 拍）。5.5 + 1.2 ≈ 7。
-# 正解表での確かめ（eval_routine_grid.py）: 6.5〜7.5 でほぼ同じ。6 以下だと正解の入れ替わりが 3-4 拍目に来る
+# SWAP_BEAT: On2 の CBL では男が 2 で下がって 3 で開き、女は 2 で前へ出てそのまま 5 で男の前を通る
+# （腰の左右が入れ替わる）。CV の入れ替わり時刻（detect_cbl）は「入れ替わった後に 2 人とも見えた最初のコマ」
+# なので本当の入れ替わりより遅れる。値は正解表で決めた（1230b3d5 は On2。eval_routine_grid.py、ジョブ
+# 2f4b6919 / 581ef6a2）: 7.0 で正解の入れ替わりの平均がカウント 4.96（= 5 で通る）。6.5 → 4.4、7.5 → 5.5。
+# 行の一致・CBL の再現率は 6.0〜7.0 でほぼ同じ（差は 1〜2 行）なので、On2 の「5 で通る」に合う 7.0 のまま
+DEFAULT_TIMING = "on2"     # Claude が on1/on2 を書かなかった（unclear）ときの数え方。ユーザーの動画は基本 On2
 SWAP_ALIGN_WEIGHT = 1.0    # 行を入れ替わりに合わせ直すとき、CBL 系の行と入れ替わりの有無が食い違う罰
 SWAP_SHIFT_WEIGHT = 0.5    # 同じく、行を元の時刻から 1 行ぶん動かす罰（1 行ずらして食い違いが 1 つ減るなら動かす）
 SWAP_MERGE_WEIGHT = 1.0    # 同じく、2 行を同じ 8 カウントにまとめる罰（Claude の行が 1 つ消える）
@@ -182,8 +187,8 @@ def swap_concentration(swaps, period, drift=0.0, span=1.0):
 
 
 def fit_grid_to_swaps(swaps, unit_guess, duration, turns=()):
-    """CV の入れ替わり時刻に 8 カウントの格子を当てる。On1 の CBL なら入れ替わりは毎回 8 カウントの同じ所
-    （5-7）に来るので、周期を目安の ±SWAP_PERIOD_RANGE で振って位相が最も揃う周期を取る。
+    """CV の入れ替わり時刻に 8 カウントの格子を当てる。CBL なら入れ替わりは毎回 8 カウントの同じ所
+    （On2 は 5）に来るので、周期を目安の ±SWAP_PERIOD_RANGE で振って位相が最も揃う周期を取る。
     周期（と揃っているかの判定）には女性のターン（turns）も足す。ターンも 8 カウントの決まった所で回るので
     手がかりが増える（1230b3d5: 入れ替わりだけだと z=5.2 で偶然と見分けられないが、ターンを足すと 8.8）。
     8 カウントの頭（位相）は入れ替わりだけで決める（ターンは 1-3 で回る技もあり位置が決まらない）。
@@ -438,7 +443,9 @@ def turn_text(turn, default_dir=None):
 
 
 def template_steps(mv, timing):
-    """技の種類から決まる、男女のカウントごとの動き（On1 の言い方。On2 は女性の動きを 1-2-3 に）"""
+    """技の種類から決まる、男女のカウントごとの動き。On1 以外（on2・unclear・無し）は On2 の言い方"""
+    if timing != "on1":
+        return template_steps_on2(mv)
     move = mv.get("move")
     turn = mv.get("turn") if isinstance(mv.get("turn"), dict) else None
     who = (turn or {}).get("by")
@@ -479,9 +486,71 @@ def template_steps(mv, timing):
         if not ftxt and not (turn and who == "leader"):
             return []
         rows = [(b, "手でリード" if ftxt else f"自分で{turn_text(turn)}", ftxt or "その場")]
-    if timing == "on2" and len(rows) == 2:
-        rows = [(rows[0][0], rows[1][1], rows[1][2]), (rows[1][0], rows[0][1], rows[0][2])]
     return [{"count": c, "leader": l, "follower": f} for c, l, f in rows]
+
+
+def template_steps_on2(mv):
+    """On2 の言い方。ブレークは 2 と 6（男は 2 で後ろ・6 で前、女はその逆）。
+    CBL は男が 2 で下がった直後の 3 で開き、女は 2 で前へ出てそのまま 5 で男の前を通る。
+    ターンは 1-2-3 で準備し 5-6-7 でリード、女は 5-6 で回って 7 で止まる"""
+    move = mv.get("move")
+    turn = mv.get("turn") if isinstance(mv.get("turn"), dict) else None
+    who = (turn or {}).get("by")
+    ftxt = turn_text(turn) if who in ("follower", "both") else ""
+    pass_side = mv.get("passSide")
+    a, b = "1-2-3", "5-6-7"
+    prep_l, prep_f = "2で下がり3で開く", "2で前へ出て前進"
+    passing = "5で右を通過" if pass_side == "right" else "5で前を通過"
+    if move == "basic":
+        rows = [(a, "2で後ろへ", "2で前へ"), (b, "6で前へ", "6で後ろへ")]
+    elif move == "cbl":
+        rows = [(a, prep_l, prep_f), (b, "左へ送り向きを戻す", f"{passing}・向き直る")]
+    elif move in ("cbl_inside_turn", "inside_turn"):
+        rows = [(a, "2で下がり手を上げる" if move == "inside_turn" else prep_l, prep_f),
+                (b, "頭上で回す", f"5-6で{turn_text(turn, 'left') or '左回り'}")]
+    elif move in ("cbl_outside_turn", "outside_turn"):
+        rows = [(a, "2で下がり手を上げる" if move == "outside_turn" else prep_l, prep_f),
+                (b, "手を外へ回す", f"5-6で{turn_text(turn, 'right') or '右回り'}")]
+    elif move == "reverse_cbl":
+        rows = [(a, "2で下がり3で右へ開く", prep_f), (b, "右へ送り向きを戻す", f"5で右を通過{('・' + ftxt) if ftxt else '・向き直る'}")]
+    elif move in ("right_turn", "left_turn"):
+        d = "right" if move == "right_turn" else "left"
+        rows = [(a, "2で下がり手を上げる", "2で前へ"),
+                (b, "頭上で回す", f"5-6で{turn_text(turn, d) or ('右回り' if d == 'right' else '左回り')}")]
+    elif move == "leader_turn":
+        rows = [(a, f"自分で{turn_text(turn) or '回る'}", "その場"), (b, "6で前へ", "6で後ろへ")]
+    elif move == "copa":
+        rows = [(a, prep_l, "2で前へ出る"), (b, "引き戻す", "5で半回転して戻る")]
+    elif move == "hand_change":
+        rows = [(a, "手を持ち替える", "ベーシック"), (b, "ベーシック", "ベーシック")]
+    elif move == "shine":
+        rows = [("1-8", "手を離して各自", "手を離して各自")]
+    elif move == "wrap":
+        rows = [(a, "2で下がり手を上げる", "2で前へ"), (b, "腕で包む", "5-6で巻かれて並ぶ")]
+    elif move == "hammerlock":
+        rows = [(a, "2で下がり手を上げる", "2で前へ"), (b, "背中で手を止める", "5-6で回り手が背中に")]
+    elif move == "shadow":
+        rows = [(a, "女の後ろへ", "2で前へ"), (b, "同じ向きで踊る", "同じ向き")]
+    elif move == "dip":
+        rows = [(a, "支える", "後ろへ倒れる"), (b, "起こす", "戻る")]
+    else:
+        if not ftxt and not (turn and who == "leader"):
+            return []
+        rows = [(b, "手でリード" if ftxt else f"自分で{turn_text(turn)}", f"5-6で{ftxt}" if ftxt else "その場")]
+    return [{"count": c, "leader": l, "follower": f} for c, l, f in rows]
+
+
+def resolve_timing(routine, result, default=None):
+    """On1/On2。Claude が on1/on2 と書いていればそれ、無い・unclear なら default（既定 DEFAULT_TIMING = On2）。
+    前回ここで既定を入れた routine.timing（timingSource=default）は Claude の判断として扱わない。
+    戻り値 (timing, source)"""
+    cands = [(result.get("style") or {}).get("onBeat")]
+    if routine.get("timingSource") != "default":
+        cands.insert(0, routine.get("timing"))
+    for v in cands:
+        if v in ("on1", "on2"):
+            return v, "claude"
+    return (default if default in ("on1", "on2") else DEFAULT_TIMING), "default"
 
 
 def clean_steps(steps):
@@ -502,8 +571,9 @@ def clean_steps(steps):
 
 # ---------------------------------------------------------------- 本体
 
-def normalize(result, summary, duration=None):
-    """result（dict）の routine を整えて返す（result をその場で書き換える）"""
+def normalize(result, summary, duration=None, default_timing=None):
+    """result（dict）の routine を整えて返す（result をその場で書き換える）。
+    default_timing: Claude が on1/on2 を決めなかったときの数え方（None なら DEFAULT_TIMING）"""
     routine = result.get("routine")
     if not isinstance(routine, dict):
         return result
@@ -514,7 +584,7 @@ def normalize(result, summary, duration=None):
     moves.sort(key=lambda m: m["start"])
     if not moves:
         return result
-    timing = routine.get("timing") or (result.get("style") or {}).get("onBeat")
+    timing, timing_src = resolve_timing(routine, result, default_timing)
 
     beats = grid_from_beats(summary)
     starts = [m["start"] for m in moves]
@@ -578,12 +648,16 @@ def normalize(result, summary, duration=None):
             mv["confidence"] = min(c, LOW_CONF) if _num(c) else LOW_CONF
         mv["name"] = short_name(mv.get("name"), mv.get("move"))
         steps = clean_steps(mv.get("steps"))
+        if timing == "on2" and mv.get("move") == "basic":
+            steps = None   # ベーシックは決まった On2 の言い回しで（Claude が On1 の数え方で書くことがある）
         mv["steps"] = steps or template_steps(mv, timing)
         mv["stepsSource"] = "claude" if steps else "template"
         out.append(mv)
 
     routine["rawMoves"] = raw
     routine["moves"] = out
+    routine["timing"] = timing
+    routine["timingSource"] = timing_src
     routine["grid"] = {
         "unitSec": round(period, 3), "beatSec": round(beat, 4), "phaseSec": round(phase % period, 3),
         "source": tempo_src,
@@ -602,10 +676,13 @@ def normalize(result, summary, duration=None):
 
 
 def main():
-    if len(sys.argv) < 3:
+    pos = [a for a in sys.argv[1:] if not a.startswith("--")]
+    opts = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
+    if len(pos) < 2:
         print(__doc__, file=sys.stderr)
         sys.exit(1)
-    result_path, meas_path = sys.argv[1:3]
+    result_path, meas_path = pos[:2]
+    default_timing = opts.get("default-onbeat")
     with open(result_path, encoding="utf-8") as f:
         result = json.load(f)
     summary, duration = {}, None
@@ -617,7 +694,7 @@ def main():
         if _num(fps) and fps > 0 and _num(n) and n > 0:
             duration = n / fps
     before = len(((result.get("routine") or {}).get("rawMoves") or (result.get("routine") or {}).get("moves") or []))
-    normalize(result, summary, duration)
+    normalize(result, summary, duration, default_timing)
     after = len(((result.get("routine") or {}).get("moves") or []))
     tmp = result_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

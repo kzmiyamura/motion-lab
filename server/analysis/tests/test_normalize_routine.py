@@ -294,16 +294,53 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(len(m["steps"][1]["leader"]), 12)
 
     def test_template_filled_when_missing(self):
-        res = {"routine": {"moves": [mv(0.0, "basic")]}}
+        res = {"routine": {"timing": "on1", "moves": [mv(0.0, "basic")]}}
         normalize(res, {"beatGrid": {"beatIntervalSec": 0.5, "firstBeatSec": 0.0}}, duration=4.0)
         m = res["routine"]["moves"][0]
         self.assertEqual(m["stepsSource"], "template")
         self.assertEqual(m["steps"][0], {"count": "1-2-3", "leader": "前へ", "follower": "後ろへ"})
 
-    def test_on2_puts_follower_move_on_1(self):
+    def test_on2_turn_is_led_on_5_6_7(self):
         s = template_steps({"move": "right_turn", "turn": {"by": "follower", "direction": "right", "rotations": 1}}, "on2")
-        self.assertEqual(s[0]["count"], "1-2-3")
-        self.assertIn("右回り", s[0]["follower"])
+        self.assertEqual([x["count"] for x in s], ["1-2-3", "5-6-7"])
+        self.assertIn("2で", s[0]["leader"])
+        self.assertIn("5-6で右回り", s[1]["follower"])
+
+    def test_on2_cbl_leader_opens_on_3_follower_passes_on_5(self):
+        s = template_steps({"move": "cbl", "passSide": "left"}, "on2")
+        self.assertIn("2で下がり3で開く", s[0]["leader"])
+        self.assertIn("2で前へ", s[0]["follower"])
+        self.assertIn("5で", s[1]["follower"])
+
+    def test_on2_basic_breaks_on_2_and_6(self):
+        s = template_steps({"move": "basic"}, "on2")
+        self.assertEqual(s[0], {"count": "1-2-3", "leader": "2で後ろへ", "follower": "2で前へ"})
+        self.assertEqual(s[1], {"count": "5-6-7", "leader": "6で前へ", "follower": "6で後ろへ"})
+
+    def test_default_timing_is_on2_when_unclear(self):
+        res = {"style": {"onBeat": "unclear"}, "routine": {"timing": "unclear", "moves": [
+            mv(0.0, "basic", steps=[{"count": "1-2-3", "leader": "前へ", "follower": "後ろへ"}]),
+            mv(4.0, "cbl", steps=[{"count": "1-2-3", "leader": "3で道を開ける", "follower": "前へ"}]),
+        ]}}
+        grid = {"beatGrid": {"beatIntervalSec": 0.5, "firstBeatSec": 0.0}}
+        normalize(res, grid, duration=8.0)
+        r = res["routine"]
+        self.assertEqual((r["timing"], r["timingSource"]), ("on2", "default"))
+        # ベーシックは On2 の決まった言い回しに置き換え、他の技の Claude の行はそのまま
+        self.assertEqual(r["moves"][0]["stepsSource"], "template")
+        self.assertEqual(r["moves"][0]["steps"][0]["leader"], "2で後ろへ")
+        self.assertEqual(r["moves"][1]["stepsSource"], "claude")
+        # もう一度かけても同じ（前回入れた既定を Claude の判断と取り違えない）。--default-onbeat で変えられる
+        normalize(res, grid, duration=8.0)
+        self.assertEqual(res["routine"]["timingSource"], "default")
+        normalize(res, grid, duration=8.0, default_timing="on1")
+        self.assertEqual(res["routine"]["timing"], "on1")
+
+    def test_claude_on1_is_kept(self):
+        res = {"style": {"onBeat": "on1"}, "routine": {"moves": [mv(0.0, "basic")]}}
+        normalize(res, {"beatGrid": {"beatIntervalSec": 0.5, "firstBeatSec": 0.0}}, duration=4.0)
+        self.assertEqual((res["routine"]["timing"], res["routine"]["timingSource"]), ("on1", "claude"))
+        self.assertEqual(res["routine"]["moves"][0]["steps"][0]["leader"], "前へ")
 
 
 if __name__ == "__main__":

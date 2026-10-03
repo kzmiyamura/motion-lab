@@ -103,8 +103,17 @@ describe('choreoSheet（純関数）', () => {
     const s = parseChoreoSheet(JSON.stringify({
       routine: { timing: 'unclear', bpm: 195, bpmSource: 'routine', grid: { beatSec: 0.3076 }, moves: [{ start: 0, move: 'basic' }] },
     }))!;
-    expect(s.header).toEqual(['テンポ≈195（推定）']);
+    // On1/On2 が決まっていない（unclear）ときは既定の On2
+    expect(s.header).toEqual(['On2', 'テンポ≈195（推定）']);
     expect(s.beatSec).toBe(0.3076);
+  });
+
+  it('On2 の見出しは「On2 · BPM · 男＝右スタート」', () => {
+    const s = parseChoreoSheet(JSON.stringify({
+      leader: { side: 'right' }, style: { onBeat: 'unclear' },
+      routine: { timing: 'on2', bpm: 186, bpmSource: 'swaps', moves: [{ start: 0, move: 'basic' }] },
+    }))!;
+    expect(s.header.join(' · ')).toBe('On2 · BPM 186 · 男＝右スタート');
   });
 
   it('routine が無ければ null', () => {

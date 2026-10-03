@@ -135,8 +135,8 @@ export function parseChoreoSheet(resultJson: string | null): ChoreoSheetData | n
 
   const header: string[] = [];
   const timing = d.routine?.timing ?? d.style?.onBeat;
-  if (timing === 'on1') header.push('On1');
-  else if (timing === 'on2') header.push('On2');
+  // ユーザーの動画は基本 On2。On1 と決まったときだけ On1、無い・unclear は On2（サーバーの normalize と同じ既定）
+  header.push(timing === 'on1' ? 'On1' : 'On2');
   const bpm = d.routine?.bpm ?? d.beatGrid?.bpm;
   const hasBpm = typeof bpm === 'number' && bpm > 0;
   if (hasBpm) header.push(d.routine?.bpmSource === 'routine' ? `テンポ≈${Math.round(bpm)}（推定）` : `BPM ${Math.round(bpm)}`);

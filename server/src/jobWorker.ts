@@ -229,7 +229,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
       const r = await runClaude(jobDir, job.spec_snapshot, signal);
       let normalized: string | null = null;
       if (r.resultJson) {
-        normalized = await normalizeRoutine(job.id, ctx, signal);
+        normalized = await normalizeRoutine(job.id, ctx, signal, preset.defaultOnBeat);
         await makeMoveFrames(job.id, ctx, signal);
       }
       const reportMd = (await withSceneFrames(job.id, ctx, r.reportMd, signal)) + debugVideoSection(job.id);
@@ -316,13 +316,16 @@ async function withSceneFrames(jobId: string, ctx: JobContext, reportMd: string,
  * 技の頭を 8 カウントの頭へ寄せて counts を時間と合わせ、細切れ・重複の行をまとめ、回転数の上限・技名の長さを抑え、
  * カウントごとの男女の動き（steps）を付ける。整えた result.json の中身を返す。失敗したら null（元のまま使う）
  */
-async function normalizeRoutine(jobId: string, ctx: JobContext, signal: AbortSignal): Promise<string | null> {
+async function normalizeRoutine(
+  jobId: string, ctx: JobContext, signal: AbortSignal, defaultOnBeat?: 'on1' | 'on2',
+): Promise<string | null> {
   const resultPath = path.join(jobDirOf(jobId), 'out', 'result.json');
   try {
     await runPython([
       path.resolve(__dirname, '../analysis/normalize_routine.py'),
       resultPath,
       ctx.measurementsPath,
+      ...(defaultOnBeat ? [`--default-onbeat=${defaultOnBeat}`] : []),
     ], signal);
     return readFileSync(resultPath, 'utf-8');
   } catch (e) {

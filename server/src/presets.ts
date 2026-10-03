@@ -29,6 +29,8 @@ export interface PresetDef {
   }[];
   /** false の間は CV 結果だけで done にする（Claude はスキップ） */
   useClaude: boolean;
+  /** Claude が On1/On2 を決めなかったとき（unclear・無し）の数え方。normalize_routine.py に渡す */
+  defaultOnBeat?: 'on1' | 'on2';
 }
 
 export const PRESETS: Record<string, PresetDef> = {
@@ -41,5 +43,7 @@ export const PRESETS: Record<string, PresetDef> = {
       ] },
     ],
     useClaude: true, // P2: claude CLI 未導入の環境では [CLAUDE] エラーになる（server/CLAUDE.md その7参照）
+    // ユーザーが上げるサルサ動画は基本 On2（2026-10-03「on2動画しか上げない」）
+    defaultOnBeat: 'on2',
   },
 };

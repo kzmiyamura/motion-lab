@@ -239,6 +239,14 @@ COLOR_REJECTED = (0, 0, 255)     # 赤: 背景人物として除外
 
 TORSO_HIST_REGION = 0.55   # bbox 上部何割をヒストグラム対象にするか（胴体+腕。脚は両者とも黒で無情報）
 APPEARANCE_EMA = 0.1       # 外見リファレンスの更新率（小さいほどオクルージョン混入に頑健）
+# 錨リファレンス: 2人がそろってから最初の ANCHOR_SEC 秒の、重なっていない（IoU < ANCHOR_CLEAN_IOU）
+# コマの平均ヒストグラム。EMA だけだと密着交差で相手の色が混ざったリファレンスに引きずられて
+# ID が入れ替わり、以後戻らない（1230b3d5 で 13.5 秒の交差から最後まで逆転、同一性 15%）。
+# 割り当てコストに錨との距離を ANCHOR_WEIGHT だけ混ぜると戻ってこられる（同一性 5 本計 63%→96%）。
+# 重みを上げすぎる（0.7）と、背中を向いた女性が正面の錨と合わずターン中に ID が揺れる（screenrec）
+ANCHOR_SEC = 8.0
+ANCHOR_CLEAN_IOU = 0.05
+ANCHOR_WEIGHT = 0.3
 
 
 def torso_hist(frame, bbox):
@@ -266,29 +274,37 @@ def hist_dist(a, b):
     return float(np.abs(a - b).sum())
 
 
-def assign_appearance_ids(draw_frames):
-    """外見（色ヒストグラム）で全検出を2人分のクラスタに分け、Leader クラスタを決める。
+def bbox_iou(a, b):
+    x0, y0, x1, y1 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
 
-    - 各フレームの検出を、リファレンスヒストグラム（EMA更新）との距離で
-      人物ID 0/1 に割り当てる（2人同時のときはペア割り当てコストの小さい方）
-    - Leader は「クラスタ単位の SHR 平均」が高い方（フレーム単位の勝負ではないので
-      横向きの一瞬に色が乗っ取られない）
-    - 各 kept エントリに "pid" を書き込み、Leader の pid を返す（判定不能なら None）
-    """
-    refs = [None, None]
+
+def track_appearance(draw_frames, anchor=None, anchor_weight=0.0):
+    """各フレームの検出を、リファレンスヒストグラム（EMA更新）との距離で人物ID 0/1 に割り当てる
+    （2人同時のときはペア割り当てコストの小さい方）。anchor があれば、その距離を anchor_weight だけ混ぜる"""
+    refs = [None, None] if anchor is None else [anchor[0].copy(), anchor[1].copy()]
+
+    def cost(h, k):
+        d = hist_dist(h, refs[k])
+        return d if anchor is None else (1.0 - anchor_weight) * d + anchor_weight * hist_dist(h, anchor[k])
+
     for df in draw_frames:
         ks = [p for p in df["kept"] if p.get("hist") is not None]
+        for p in df["kept"]:
+            p.pop("pid", None)
         if refs[0] is None:
             if len(ks) == 2:
                 refs[0], refs[1] = ks[0]["hist"].copy(), ks[1]["hist"].copy()
                 ks[0]["pid"], ks[1]["pid"] = 0, 1
             continue
         if len(ks) == 2:
-            direct = hist_dist(ks[0]["hist"], refs[0]) + hist_dist(ks[1]["hist"], refs[1])
-            swapped = hist_dist(ks[0]["hist"], refs[1]) + hist_dist(ks[1]["hist"], refs[0])
+            direct = cost(ks[0]["hist"], 0) + cost(ks[1]["hist"], 1)
+            swapped = cost(ks[0]["hist"], 1) + cost(ks[1]["hist"], 0)
             pids = (0, 1) if direct <= swapped else (1, 0)
         elif len(ks) == 1:
-            pids = (0,) if hist_dist(ks[0]["hist"], refs[0]) <= hist_dist(ks[0]["hist"], refs[1]) else (1,)
+            pids = (0,) if cost(ks[0]["hist"], 0) <= cost(ks[0]["hist"], 1) else (1,)
         else:
             continue
         # 注意: ここに「外見が遠い人物にIDを与えないゲート」を入れてはならない。
@@ -298,6 +314,39 @@ def assign_appearance_ids(draw_frames):
         for p, pid in zip(ks, pids):
             p["pid"] = pid
             refs[pid] = (1.0 - APPEARANCE_EMA) * refs[pid] + APPEARANCE_EMA * p["hist"]
+
+
+def anchor_refs(draw_frames):
+    """1回目の追跡結果から、冒頭 ANCHOR_SEC 秒の重なっていないコマで pid 別の平均ヒストグラムを作る"""
+    acc, t0 = ([], []), None
+    for df in draw_frames:
+        ks = [p for p in df["kept"] if p.get("hist") is not None and p.get("pid") is not None]
+        if len(ks) != 2:
+            continue
+        t0 = df["t"] if t0 is None else t0
+        if df["t"] > t0 + ANCHOR_SEC:
+            break
+        if bbox_iou(ks[0]["bbox"], ks[1]["bbox"]) < ANCHOR_CLEAN_IOU:
+            for p in ks:
+                acc[p["pid"]].append(p["hist"])
+    if not acc[0] or not acc[1]:
+        return None
+    return [np.mean(a, axis=0) for a in acc]
+
+
+def assign_appearance_ids(draw_frames):
+    """外見（色ヒストグラム）で全検出を2人分のクラスタに分け、Leader クラスタを決める。
+
+    - 1回目: EMA リファレンスだけで追跡し、冒頭のきれいなコマから錨リファレンスを作る
+    - 2回目: 錨を混ぜたコストで追跡し直す（密着交差での取り違えから戻れるように）
+    - Leader は「クラスタ単位の SHR 平均」が高い方（フレーム単位の勝負ではないので
+      横向きの一瞬に色が乗っ取られない）
+    - 各 kept エントリに "pid" を書き込み、Leader の pid を返す（判定不能なら None）
+    """
+    track_appearance(draw_frames)
+    anchor = anchor_refs(draw_frames)
+    if anchor is not None:
+        track_appearance(draw_frames, anchor, ANCHOR_WEIGHT)
 
     # Leader クラスタの選択: フレーム毎のペア比較（pid0 - pid1）の中央値による多数決。
     # SHR差（重み2）+ 身長差 + 肩幅差。かつて「SHR平均が高い方」で選んでいたが、

@@ -227,6 +227,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
   if (preset.useClaude) {
     try {
       const r = await runClaude(jobDir, job.spec_snapshot, signal);
+      if (r.resultJson) await makeMoveFrames(job.id, ctx, signal);
       const reportMd = (await withSceneFrames(job.id, ctx, r.reportMd, signal)) + debugVideoSection(job.id);
       const resultJson = r.resultJson
         ?? JSON.stringify({ pipeline: 'p2-claude', preset: job.preset, note: 'result.json 未生成（report.md のみ）' });
@@ -303,6 +304,28 @@ async function withSceneFrames(jobId: string, ctx: JobContext, reportMd: string,
   } catch (e) {
     console.warn(`[jobWorker] scene frames skipped: ${e instanceof Error ? e.message : e}`);
     return reportMd;
+  }
+}
+
+/**
+ * 振付シート用に、result.json の routine.moves の技ごとに連続コマ画像を1枚ずつ作る
+ * （out/move_frames/<NN>_<start>.jpg と index.json。フロントの ReportModal が読む）。
+ * routine が無い・失敗してもジョブは止めない
+ */
+async function makeMoveFrames(jobId: string, ctx: JobContext, signal: AbortSignal): Promise<void> {
+  const outDir = path.join(jobDirOf(jobId), 'out');
+  try {
+    await runPython([
+      path.resolve(__dirname, '../analysis/make_move_frames.py'),
+      ctx.videoPath,
+      ctx.measurementsPath.replace(/\.json$/, '.tracks.json'),
+      path.join(outDir, 'result.json'),
+      ctx.measurementsPath,
+      path.join(outDir, 'move_frames'),
+      `/analysis-output/${jobId}/out/move_frames`,
+    ], signal);
+  } catch (e) {
+    console.warn(`[jobWorker] move frames skipped: ${e instanceof Error ? e.message : e}`);
   }
 }
 

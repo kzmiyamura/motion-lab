@@ -13,6 +13,8 @@
  *
  * Usage（server/ で）:
  *   node tools/backfill-report-frames.mjs [--dry-run] [<jobId> ...]
+ *   node tools/backfill-report-frames.mjs --move-frames [--dry-run] [<jobId> ...]
+ *     … レポートは触らず、振付シート用の技ごとの画像（out/move_frames/）だけを作る
  *   jobId 省略時は status=done の全ジョブ
  */
 import { spawnSync } from 'node:child_process';
@@ -34,6 +36,8 @@ const IMAGE_LINE_RE = /^!\[[^\]]*\]\([^)]*\/report_frames\/[^)]*\)\s*$/;
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
+const moveFrames = args.includes('--move-frames');
+const MOVE_SCRIPT = path.join(SERVER_DIR, 'analysis/make_move_frames.py');
 const onlyIds = args.filter(a => !a.startsWith('--'));
 
 const db = new DatabaseSync(path.join(SERVER_DIR, 'data/motionlab.db'));
@@ -72,6 +76,55 @@ function countWithFrames() {
 const jobs = db.prepare(
   "SELECT id, video_id, report_md FROM analysis_jobs WHERE status = 'done' ORDER BY created_at",
 ).all().filter(j => onlyIds.length === 0 || onlyIds.includes(j.id));
+
+if (moveFrames) {
+  backfillMoveFrames(jobs);
+  process.exit(0);
+}
+
+/**
+ * --move-frames: result.json に routine.moves がある完了ジョブに、振付シート用の技ごとの
+ * 連続コマ画像（out/move_frames/）を作る。DB もレポートも書き換えない
+ */
+function backfillMoveFrames(targets) {
+  const t = { made: 0, skipped: 0, failed: 0 };
+  for (const job of targets) {
+    const tag = `[backfill:move] ${job.id.slice(0, 8)}`;
+    const outDir = path.join(JOBS_DIR, job.id, 'out');
+    const resultPath = path.join(outDir, 'result.json');
+    let moves = 0;
+    try {
+      moves = JSON.parse(readFileSync(resultPath, 'utf-8'))?.routine?.moves?.length ?? 0;
+    } catch { /* result.json が無い・壊れている */ }
+    const videoPath = resolveVideoPath(job.video_id);
+    if (moves === 0 || !videoPath) {
+      console.log(`${tag} skip: ${moves === 0 ? 'routine.moves が無い' : '元動画が無い'}`);
+      t.skipped++;
+      continue;
+    }
+    if (dryRun) {
+      console.log(`${tag} would make ${moves} move frames`);
+      t.made++;
+      continue;
+    }
+    const r = spawnSync(PYTHON_BIN, [
+      MOVE_SCRIPT, videoPath,
+      path.join(outDir, 'measurements.tracks.json'), resultPath,
+      path.join(outDir, 'measurements.json'),
+      path.join(outDir, 'move_frames'),
+      `/analysis-output/${job.id}/out/move_frames`,
+    ], { encoding: 'utf-8' });
+    const note = (r.stderr || r.error?.message || '').trim().split('\n').pop();
+    if (r.status !== 0) {
+      console.log(`${tag} failed: ${(r.stderr || r.error?.message || '').trim().slice(-300)}`);
+      t.failed++;
+    } else {
+      console.log(`${tag} ${note}`);
+      t.made++;
+    }
+  }
+  console.log(`[backfill:move] ${dryRun ? '(dry-run) ' : ''}jobs=${targets.length} made=${t.made} skipped=${t.skipped} failed=${t.failed}`);
+}
 
 const before = countWithFrames();
 const tally = { updated: 0, unchanged: 0, skipped: 0, failed: 0 };

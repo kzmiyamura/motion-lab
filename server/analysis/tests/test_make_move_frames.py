@@ -14,8 +14,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import numpy as np  # noqa: E402
 
 from make_move_frames import (  # noqa: E402
-    CROP_ASPECT, DEFAULT_BEAT_SEC, MAX_SPAN_SEC, MIN_SPAN_SEC, TILE_H, TILE_W, beat_interval, crop_box,
-    expand_to_aspect, frame_times, move_windows, pair_bounds, pair_pids, render_tile, strip_of,
+    CROP_ASPECT, DEFAULT_BEAT_SEC, MAX_SPAN_SEC, MIN_SPAN_SEC, TILE_H, TILE_W, beat_interval, count_of, crop_box,
+    expand_to_aspect, frame_times, labeled_frames, move_windows, pair_bounds, pair_pids, pick_frames, render_tile,
+    strip_of,
 )
 
 
@@ -157,6 +158,64 @@ class FrameTimesTest(unittest.TestCase):
 
     def test_six_frames_for_longer_moves(self):
         self.assertEqual(len(frame_times(0.0, 6.0, 16)), 6)
+
+
+class KeyMomentTest(unittest.TestCase):
+    """等間隔ではなく、通過・回転の瞬間のコマを取り、拍と説明を付ける（0:01.76 の CBL＋ターンの行）"""
+    BEAT = 0.3221
+
+    def card(self):
+        mv = {"move": "cbl_inside_turn", "counts": 8,
+              "turn": {"by": "follower", "direction": "left", "rotations": 1.0},
+              "sides": {"followerStart": "right", "followerEnd": "left", "swapAt": [2.08]}}
+        series = [(1.78, "right"), (1.88, "right"), (2.28, "left"), (3.07, "left"), (3.17, "left"), (4.2, "left")]
+        crosses = [{"t": 2.08, "from": "right", "to": "left", "hiddenFrom": 1.88, "hiddenTo": 2.28}]
+        events = [{"t": 3.96, "type": "Turn", "by": "follower",
+                   "spin": {"from": 3.57, "to": 6.3, "runs": [{"dir": "left", "turns": 1.0}]}}]
+        return mv, series, crosses, events
+
+    def test_pass_and_turn_frames_are_picked_with_counts(self):
+        mv, series, crosses, events = self.card()
+        frames = labeled_frames(mv, 1.76, 4.34, self.BEAT, series, crosses, events)
+        self.assertEqual(len(frames), 5)
+        times = [round(f[0], 2) for f in frames]
+        labels = [f[2] for f in frames]
+        self.assertEqual(times[0], 1.76)
+        self.assertEqual(labels[0], "スタート（女は右）")
+        self.assertIn(2.08, times)                          # 通過の瞬間
+        self.assertEqual(labels[times.index(2.08)], "通過")
+        self.assertIn("女が左へ抜けた", labels)               # 抜けた後に2人とも写った最初のコマ（3.07）
+        self.assertIn(3.07, times)
+        self.assertIn("左回り中", labels)
+        self.assertEqual(labels[-1], "終わり（女は左）")
+        self.assertEqual([f[1] for f in frames][0], 1)
+        self.assertTrue(all(1 <= f[1] <= 8 for f in frames))
+
+    def test_unconfirmed_crossing_is_not_a_pass(self):
+        mv, series, crosses, events = self.card()
+        mv["sides"]["swapAt"] = []                          # CV の入れ替わりと重ならない（密着の重なり）
+        labels = [f[2] for f in labeled_frames(mv, 1.76, 4.34, self.BEAT, series, crosses, events)]
+        self.assertNotIn("通過", labels)
+
+    def test_fills_with_count_labels_when_nothing_happens(self):
+        frames = labeled_frames({"move": "cbl", "counts": 8}, 0.0, 2.6, self.BEAT, [], [], [])
+        self.assertEqual(len(frames), 5)
+        self.assertEqual(frames[0][2], "スタート")
+        self.assertEqual(frames[-1][2], "終わり")
+        times = [f[0] for f in frames]
+        self.assertEqual(times, sorted(times))
+
+    def test_count_of(self):
+        self.assertEqual(count_of(0.0, 0.0, 0.5, 8), 1)
+        self.assertEqual(count_of(2.0, 0.0, 0.5, 8), 5)
+        self.assertEqual(count_of(3.9, 0.0, 0.5, 8), 8)     # 最後の拍で止める（次の 1 にしない）
+        self.assertEqual(count_of(4.1, 0.0, 0.5, 16), 1)    # 2×8 の 2 つ目の 1
+        self.assertIsNone(count_of(1.0, 0.0, None, 8))
+
+    def test_pick_frames_respects_priority_and_gap(self):
+        cands = [(0.0, "a", 0), (0.1, "too close", 1), (1.0, "b", 1), (2.0, "c", 3)]
+        picks = pick_frames(cands, 0.0, 2.05, 3)
+        self.assertEqual([p[1] for p in picks], ["a", "b", "c"])
 
 
 if __name__ == "__main__":

@@ -33,12 +33,16 @@ export type SheetRow = {
   pass: string | null;
   /** 推定で埋めた・自信が低い行（「?」バッジを出す） */
   uncertain: boolean;
+  /** 上から見た図（2人の立ち位置・女性の通り道・回る向き）。何も起きない技は null */
+  diagram: MoveDiagramData | null;
 };
 
 export type ChoreoSheetData = {
   /** 見出し行の要素（On1 / BPM 96 / 男＝右スタート） */
   header: string[];
   rows: SheetRow[];
+  /** 見出しの下に1回だけ出す凡例（右回り/左回り・インサイド/アウトサイドの基準） */
+  legend: string;
   /** 1拍の秒数（動画をカウント付きで流すのに使う）。分からなければ null */
   beatSec: number | null;
 };
@@ -80,19 +84,107 @@ export function holdLabel(start?: RoutineHold | null, end?: RoutineHold | null):
   return one === HOLD_WORD.none ? one : `${one}でつなぐ`;
 }
 
-export function turnLabel(turn: RoutineMove['turn']): string | null {
-  if (!turn) return null;
-  const who = turn.by === 'leader' ? '男が' : turn.by === 'both' ? '2人とも' : '女が';
-  const n = typeof turn.rotations === 'number' && turn.rotations > 0 ? `${fmtRotations(turn.rotations)}回転` : '回る';
-  const dir = turn.direction === 'left' ? '左回り' : turn.direction === 'right' ? '右回り' : '';
-  return `${who}${dir}${n}`;
+/**
+ * 回る向きの決まり（見出しの凡例に出す。サーバーの normalize_routine.py・analyze_pair の spin と同じ）:
+ * 右回り = 回る人自身の右へ = 真上から見て時計回り。
+ * 女性のターンは、つないだ手に対してインサイド/アウトサイドで言う（相手との関係で決まるのでダンサーに通じる）
+ */
+export const TURN_LEGEND = '回る向きは回る人自身から見て（右回り＝上から見て時計回り）。インサイド/アウトサイドは女性がつないだ手に対して';
+
+type TurnLike = NonNullable<RoutineMove['turn']> & { kind?: 'inside' | 'outside' | null };
+export type TurnKind = 'inside' | 'outside';
+
+/** つないでいる女性の手（R/L）。両手・クローズド・離している・不明は null */
+function followerHand(h?: RoutineHold | null): 'R' | 'L' | null {
+  if (h === 'LR' || h === 'RR') return 'R';
+  if (h === 'RL' || h === 'LL') return 'L';
+  return null;
 }
 
-export function passLabel(p: RoutineMove['passSide']): string | null {
-  if (p === 'left') return '女が男の左側を通る';
-  if (p === 'right') return '女が男の右側を通る';
+/**
+ * 女性のターンのインサイド/アウトサイド。女性の右手でつないでいれば 左回り＝インサイド・右回り＝アウトサイド、
+ * 左手なら逆。サーバーが turn.kind を付けていればそれ、無ければ（古い結果）手と向きから決める。決まらなければ null
+ */
+export function turnKind(turn: TurnLike | null | undefined, holdStart?: RoutineHold | null, holdEnd?: RoutineHold | null): TurnKind | null {
+  if (!turn || (turn.by !== 'follower' && turn.by !== 'both')) return null;
+  if (turn.kind === 'inside' || turn.kind === 'outside') return turn.kind;
+  const hand = followerHand(holdStart) ?? followerHand(holdEnd);
+  if (!hand || (turn.direction !== 'left' && turn.direction !== 'right')) return null;
+  return (turn.direction === 'left') === (hand === 'R') ? 'inside' : 'outside';
+}
+
+const DIR_LONG = { right: '右回り（時計回り）', left: '左回り（反時計回り）' } as const;
+const DIR_EQ = { right: '右回り＝時計回り', left: '左回り＝反時計回り' } as const;
+const KIND_WORD: Record<TurnKind, string> = { inside: 'インサイドターン', outside: 'アウトサイドターン' };
+
+/**
+ * 回転を普通の言葉で。誰が回るかを必ず書き、女性はインサイド/アウトサイドを先に、回る向きを後ろに:
+ * 「女: インサイドターン（左回り＝反時計回り）1½回転」「女: 右回り（時計回り）2回転」「男: 右回り（時計回り）1回転」
+ */
+export function turnLabel(turn: TurnLike | null | undefined, holdStart?: RoutineHold | null, holdEnd?: RoutineHold | null): string | null {
+  if (!turn) return null;
+  const who = turn.by === 'leader' ? '男' : turn.by === 'both' ? '2人とも' : '女';
+  const n = typeof turn.rotations === 'number' && turn.rotations > 0 ? `${fmtRotations(turn.rotations)}回転` : '回る';
+  const d = turn.direction === 'left' || turn.direction === 'right' ? turn.direction : null;
+  const kind = turnKind(turn, holdStart, holdEnd);
+  if (kind) return `${who}: ${KIND_WORD[kind]}${d ? `（${DIR_EQ[d]}）` : ''}${n}`;
+  return `${who}: ${d ? DIR_LONG[d] : ''}${n}`;
+}
+
+const SIDE_WORD = { left: '左', right: '右' } as const;
+
+/** 通る側（男の体から見て）と、画面の上での動き（「画面右→左」） */
+export function passLabel(p: RoutineMove['passSide'], sides?: MoveSides | null): string | null {
+  const from = sides?.followerStart, to = sides?.followerEnd;
+  const screen = from && to && from !== to ? `（画面${SIDE_WORD[from]}→${SIDE_WORD[to]}）` : '';
+  if (p === 'left') return `女が男の左側を通る${screen}`;
+  if (p === 'right') return `女が男の右側を通る${screen}`;
   if (p === 'return') return '行って戻る';
+  if (screen) return `女が反対側へ${screen}`;
   return null;
+}
+
+/** サーバー（normalize_routine.py）が tracks.json から付けた立ち位置: 女性が画面の左右どちらで始まり・終わるか */
+export type MoveSides = { followerStart?: 'left' | 'right' | null; followerEnd?: 'left' | 'right' | null; swapAt?: number[] };
+
+/** 上から見た図の材料 */
+export type MoveDiagramData = {
+  /** 女性の画面上の位置（始まり・終わり）。分からなければ null（図は女＝右で描く） */
+  followerStart: 'left' | 'right' | null;
+  followerEnd: 'left' | 'right' | null;
+  pass: 'left' | 'right' | 'return' | null;
+  turn: { by: 'leader' | 'follower' | 'both'; direction: 'left' | 'right' | null; rotations: number | null; kind: TurnKind | null } | null;
+  /** つないでいる手（男の手が先: LR = 男左×女右）。片手のときだけ */
+  hold: 'LR' | 'RR' | 'RL' | 'LL' | null;
+  /** 図の下に出す説明（回転は turnLabel と同じ言い方） */
+  caption: string;
+};
+
+function sideOf(v: unknown): 'left' | 'right' | null {
+  return v === 'left' || v === 'right' ? v : null;
+}
+
+/** 行の図。パスも回転も立ち位置も無い技（ベーシック・シャイン等）は null */
+export function diagramFor(m: RoutineMove & { sides?: MoveSides | null }): MoveDiagramData | null {
+  const sides = m.sides ?? null;
+  const fs = sideOf(sides?.followerStart), fe = sideOf(sides?.followerEnd);
+  const t = m.turn as TurnLike | null | undefined;
+  const pass = m.passSide === 'left' || m.passSide === 'right' || m.passSide === 'return' ? m.passSide : null;
+  const swapped = !!fs && !!fe && fs !== fe;
+  if (!t && !pass && !swapped) return null;
+  const turn = t ? {
+    by: t.by,
+    direction: t.direction === 'left' || t.direction === 'right' ? t.direction : null,
+    rotations: typeof t.rotations === 'number' && t.rotations > 0 ? t.rotations : null,
+    kind: turnKind(t, m.holdStart, m.holdEnd),
+  } : null;
+  const oneHand = (h?: RoutineHold | null) => (h === 'LR' || h === 'RR' || h === 'RL' || h === 'LL' ? h : null);
+  const parts = [passLabel(pass, sides), turnLabel(t, m.holdStart, m.holdEnd)].filter(Boolean);
+  return {
+    followerStart: fs, followerEnd: fe, pass, turn,
+    hold: oneHand(m.holdStart) ?? oneHand(m.holdEnd),
+    caption: parts.join(' ／ '),
+  };
 }
 
 function isUncertain(m: RoutineMove, rawName: string): boolean {
@@ -149,7 +241,7 @@ export function parseChoreoSheet(resultJson: string | null): ChoreoSheetData | n
   const rows: SheetRow[] = [];
   moves.forEach((raw, index) => {
     if (!raw || typeof raw !== 'object') return;
-    const m = raw as RoutineMove & { steps?: unknown };
+    const m = raw as RoutineMove & { steps?: unknown; sides?: MoveSides | null };
     const rawName = (typeof m.name === 'string' && m.name.trim())
       || MOVE_LABEL[m.move as RoutineMoveId] || String(m.move ?? '技');
     const counts = typeof m.counts === 'number' && m.counts > 0 ? m.counts : 8;
@@ -170,21 +262,24 @@ export function parseChoreoSheet(resultJson: string | null): ChoreoSheetData | n
       name: rawName.replace(/\s*[?？]$/, ''),
       steps: parseSteps(m.steps),
       hold: holdLabel(m.holdStart, m.holdEnd),
-      turn: turnLabel(m.turn),
-      pass: passLabel(m.passSide),
+      turn: turnLabel(m.turn, m.holdStart, m.holdEnd),
+      pass: passLabel(m.passSide, m.sides),
       uncertain: isUncertain(m, rawName),
+      diagram: diagramFor(m),
     });
   });
-  return rows.length ? { header, rows, beatSec } : null;
+  return rows.length ? { header, rows, beatSec, legend: TURN_LEGEND } : null;
 }
 
 /** 技1つ分の写真。v2 は1コマずつ（frames）、v1（古いジョブ）は横に並べた帯（strip）だけ */
-export type MoveShot = { t: number | null; url: string };
+/** count = 技の頭から数えた拍（1〜8）、label = そのコマの説明（「通過」「右回り中」等）。古い index.json には無い */
+export type MoveShot = { t: number | null; url: string; count?: number; label?: string };
 export type MoveFrameSet = { strip: string | null; frames: MoveShot[] };
 
 /**
  * サーバーの out/move_frames/index.json → 行 index ごとの写真。
- * v2: moves[].frames = [{t, url}]（主ペアを切り取った1コマずつ）＋ url（帯）。v1: url（帯）だけ。
+ * v2: moves[].frames = [{t, url, count?, label?}]（主ペアを切り取った1コマずつ。見どころの瞬間とその拍・説明）＋ url（帯）。
+ * v1: url（帯）だけ。
  * routine が書き直されて画像が古くなっている行（開始時刻が合わない）は使わない
  */
 export function parseMoveFrames(json: unknown, rows: SheetRow[]): Map<number, MoveFrameSet> {
@@ -199,8 +294,12 @@ export function parseMoveFrames(json: unknown, rows: SheetRow[]): Map<number, Mo
     if (typeof e.start === 'number' && row.start !== null && Math.abs(e.start - row.start) > 0.05) continue;
     const frames: MoveShot[] = [];
     if (Array.isArray(e.frames)) {
-      for (const f of e.frames as { t?: unknown; url?: unknown }[]) {
-        if (typeof f?.url === 'string') frames.push({ t: typeof f.t === 'number' ? f.t : null, url: f.url });
+      for (const f of e.frames as { t?: unknown; url?: unknown; count?: unknown; label?: unknown }[]) {
+        if (typeof f?.url !== 'string') continue;
+        const shot: MoveShot = { t: typeof f.t === 'number' ? f.t : null, url: f.url };
+        if (typeof f.count === 'number' && f.count >= 1 && f.count <= 8) shot.count = f.count;
+        if (typeof f.label === 'string' && f.label.trim()) shot.label = f.label.trim();
+        frames.push(shot);
       }
     }
     const strip = typeof e.url === 'string' ? e.url : null;

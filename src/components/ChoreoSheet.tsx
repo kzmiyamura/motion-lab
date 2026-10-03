@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { ChoreoSheetData, MoveFrameSet, SheetRow } from '../engine/choreoSheet';
 import styles from './ChoreoSheet.module.css';
+import { MoveDiagram } from './MoveDiagram';
 
 type Props = {
   sheet: ChoreoSheetData;
@@ -28,8 +29,17 @@ function MovePhotos({ set, row, linkOut }: { set: MoveFrameSet; row: SheetRow; l
         {set.frames.map((f, i) => wrap(
           f.url,
           styles.shot,
-          <img src={f.url} alt={`#${row.no} ${row.name} ${i + 1}/${n}コマ目`} width={480} height={720} loading="lazy" />,
-          <span className={styles.shotNo} aria-hidden="true">{i + 1}/{n}</span>,
+          <img src={f.url} alt={`#${row.no} ${row.name} ${i + 1}/${n}コマ目${f.count ? ` ${f.count}拍目` : ''}${f.label ? ` ${f.label}` : ''}`}
+            width={480} height={720} loading="lazy" />,
+          <>
+            <span className={styles.shotNo} aria-hidden="true">{i + 1}/{n}</span>
+            {(f.count || f.label) && (
+              <span className={styles.shotCap} data-testid="shot-caption">
+                {f.count && <b>{f.count}</b>}
+                {f.label}
+              </span>
+            )}
+          </>,
         ))}
       </div>
     );
@@ -53,6 +63,7 @@ export function ChoreoSheet({ sheet, frames, onPlay, playingIndex }: Props) {
       {sheet.header.length > 0 && (
         <p className={styles.header}>{sheet.header.join(' · ')}</p>
       )}
+      {sheet.legend && <p className={styles.legend}>{sheet.legend}</p>}
       {onPlay && <p className={styles.tip}>カードを押すと、その技を 0.5 倍で繰り返し再生</p>}
       <ol className={styles.rows}>
         {sheet.rows.map(row => {
@@ -93,11 +104,13 @@ export function ChoreoSheet({ sheet, frames, onPlay, playingIndex }: Props) {
                   ))}
                 </ul>
               )}
-              {(row.hold || row.turn || row.pass) && (
+              {/* 回転・通る側は図の下の説明に出るので、図がある行は手だけ */}
+              {(row.diagram ? row.hold : (row.hold || row.turn || row.pass)) && (
                 <p className={styles.facts}>
-                  {[row.hold, row.turn, row.pass].filter(Boolean).join(' ／ ')}
+                  {(row.diagram ? [row.hold] : [row.hold, row.turn, row.pass]).filter(Boolean).join(' ／ ')}
                 </p>
               )}
+              {row.diagram && <MoveDiagram data={row.diagram} />}
               {photos && <MovePhotos set={photos} row={row} linkOut={!playable} />}
             </li>
           );

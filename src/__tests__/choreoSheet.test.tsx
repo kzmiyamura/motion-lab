@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import {
   countAt, fmtRotations, holdLabel, moveFramesPending, parseChoreoSheet, parseMoveFrames, passLabel,
-  reportSummary, turnLabel,
+  diagramFor, reportSummary, turnKind, turnLabel, TURN_LEGEND,
 } from '../engine/choreoSheet';
 
 vi.mock('../engine/homeServer', async (importOriginal) => {
@@ -71,11 +71,47 @@ describe('choreoSheet（純関数）', () => {
     expect(holdLabel('LR', 'none')).toBe('男の左手と女の右手 → 手を離す');
     expect(holdLabel('none', 'none')).toBe('手を離す');
     expect(holdLabel(null, null)).toBeNull();
-    expect(turnLabel({ by: 'follower', direction: 'left', rotations: 1.5 })).toBe('女が左回り1½回転');
-    expect(turnLabel({ by: 'leader', direction: 'right', rotations: 1 })).toBe('男が右回り1回転');
-    expect(turnLabel({ by: 'follower', direction: null, rotations: 2 })).toBe('女が2回転');
+    expect(turnLabel({ by: 'follower', direction: 'left', rotations: 1.5 })).toBe('女: 左回り（反時計回り）1½回転');
+    expect(turnLabel({ by: 'leader', direction: 'right', rotations: 1 })).toBe('男: 右回り（時計回り）1回転');
+    expect(turnLabel({ by: 'follower', direction: null, rotations: 2 })).toBe('女: 2回転');
     expect(turnLabel(null)).toBeNull();
     expect(passLabel('left')).toBe('女が男の左側を通る');
+  });
+
+  it('女性のターンはつないだ手に対してインサイド/アウトサイド、向きは回る人自身から見て', () => {
+    const left = { by: 'follower' as const, direction: 'left' as const, rotations: 1 };
+    const right = { by: 'follower' as const, direction: 'right' as const, rotations: 2 };
+    // 女性の右手（男左×女右・右手同士）: 左回り＝インサイド・右回り＝アウトサイド
+    expect(turnKind(left, 'LR')).toBe('inside');
+    expect(turnKind(right, 'RR')).toBe('outside');
+    // 女性の左手（男右×女左・左手同士）: 逆
+    expect(turnKind(right, 'RL')).toBe('inside');
+    expect(turnKind(left, 'LL')).toBe('outside');
+    // 手が分からない・両手・男性のターンは決めない。サーバーの kind があればそれ
+    expect(turnKind(left, 'double')).toBeNull();
+    expect(turnKind(left, null, null)).toBeNull();
+    expect(turnKind({ ...left, by: 'leader' }, 'LR')).toBeNull();
+    expect(turnKind({ ...left, kind: 'outside' }, 'LR')).toBe('outside');
+    expect(turnLabel(right, 'LR')).toBe('女: アウトサイドターン（右回り＝時計回り）2回転');
+    expect(turnLabel(right, null, 'RL')).toBe('女: インサイドターン（右回り＝時計回り）2回転');
+    expect(TURN_LEGEND).toContain('右回り＝上から見て時計回り');
+    expect(passLabel('left', { followerStart: 'right', followerEnd: 'left' })).toBe('女が男の左側を通る（画面右→左）');
+    expect(passLabel(null, { followerStart: 'right', followerEnd: 'left' })).toBe('女が反対側へ（画面右→左）');
+  });
+
+  it('上から見た図の材料（立ち位置・通り道・回る向き・手）', () => {
+    const d = diagramFor({
+      move: 'cbl_inside_turn', passSide: 'left', holdStart: 'LR', holdEnd: 'LR',
+      turn: { by: 'follower', direction: 'left', rotations: 1 },
+      sides: { followerStart: 'right', followerEnd: 'left', swapAt: [2.08] },
+    })!;
+    expect(d).toMatchObject({
+      followerStart: 'right', followerEnd: 'left', pass: 'left', hold: 'LR',
+      turn: { by: 'follower', direction: 'left', rotations: 1, kind: 'inside' },
+    });
+    expect(d.caption).toBe('女が男の左側を通る（画面右→左） ／ 女: インサイドターン（左回り＝反時計回り）1回転');
+    // 何も起きない技は図を出さない
+    expect(diagramFor({ move: 'basic', holdStart: 'LR' })).toBeNull();
   });
 
   it('result.json から行を作る', () => {
@@ -85,7 +121,7 @@ describe('choreoSheet（純関数）', () => {
     expect(s.rows).toHaveLength(4);
     expect(s.rows[2]).toMatchObject({
       no: 3, time: '0:14', counts: '1-8', name: 'CBL＋インサイドターン', start: 14.2, end: 19.4,
-      hold: '男の左手と女の右手 → 右手同士（握手）に持ち替え', turn: '女が左回り1½回転', pass: '女が男の左側を通る', uncertain: true,
+      hold: '男の左手と女の右手 → 右手同士（握手）に持ち替え', turn: '女: インサイドターン（左回り＝反時計回り）1½回転', pass: '女が男の左側を通る', uncertain: true,
     });
     // steps は最大2行
     expect(s.rows[2].steps).toEqual([
@@ -95,7 +131,7 @@ describe('choreoSheet（純関数）', () => {
     expect(s.rows[1].steps).toEqual([]);
     expect(s.rows[0].uncertain).toBe(false);
     // name 省略時は技の語彙から。confidence が低い行は「?」。最後の行の終わりは counts × 拍
-    expect(s.rows[3]).toMatchObject({ name: '右ターン', counts: '1-16', turn: '女が右回り1回転', uncertain: true, hold: null });
+    expect(s.rows[3]).toMatchObject({ name: '右ターン', counts: '1-16', turn: '女: 右回り（時計回り）1回転', uncertain: true, hold: null });
     expect(s.rows[3].end).toBeCloseTo(19.4 + 16 * 0.625);
   });
 
@@ -219,7 +255,9 @@ describe('ReportModal の振付シート表示', () => {
     expect(third.getByText('5-6-7')).toBeInTheDocument();
     expect(third.getByText('頭上で回す')).toBeInTheDocument();
     expect(third.getByText('左回り1½')).toBeInTheDocument();
-    expect(third.getByText('男の左手と女の右手 → 右手同士（握手）に持ち替え ／ 女が左回り1½回転 ／ 女が男の左側を通る')).toBeInTheDocument();
+    // 回転・通る側は図の下の説明に、手は図の上の行に
+    expect(third.getByText('男の左手と女の右手 → 右手同士（握手）に持ち替え')).toBeInTheDocument();
+    expect(third.getByText('女が男の左側を通る ／ 女: インサイドターン（左回り＝反時計回り）1½回転')).toBeInTheDocument();
     expect(third.queryByText('3行目は出さない')).toBeNull();
     await waitFor(() => {
       expect(third.getByRole('img')).toHaveAttribute('src', `${BASE}/analysis-output/${JOB_ID}/out/move_frames/03_014.2.jpg`);
@@ -237,6 +275,7 @@ describe('ReportModal の振付シート表示', () => {
 
   it('v2 の写真は1コマずつ横スクロールの列で出す', async () => {
     const frames = [0, 1, 2, 3, 4].map(k => ({ t: 14.2 + k, url: `/analysis-output/${JOB_ID}/out/move_frames/03_014.2_${k}.jpg` }));
+    Object.assign(frames[1], { count: 5, label: '通過' });
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
       json: async () => ({ version: 2, complete: true, moves: [{ index: 2, start: 14.2, end: 19.4, url: `/analysis-output/${JOB_ID}/out/move_frames/03_014.2.jpg`, frames }] }),
@@ -249,6 +288,12 @@ describe('ReportModal の振付シート表示', () => {
     expect(imgs[0]).toHaveAttribute('src', `${BASE}/analysis-output/${JOB_ID}/out/move_frames/03_014.2_0.jpg`);
     expect(imgs[4]).toHaveAttribute('alt', '#3 CBL＋インサイドターン 5/5コマ目');
     expect(third.getByTestId('choreo-shots')).toBeInTheDocument();
+    // 見どころのコマには拍と説明（画像に焼かず文字で）
+    expect(imgs[1]).toHaveAttribute('alt', '#3 CBL＋インサイドターン 2/5コマ目 5拍目 通過');
+    expect(third.getAllByTestId('shot-caption')).toHaveLength(1);
+    expect(third.getByTestId('shot-caption')).toHaveTextContent('5通過');
+    // 上から見た図（SVG は読み上げず、下の説明を読む）
+    expect(third.getByTestId('move-diagram')).toHaveTextContent('女: インサイドターン（左回り＝反時計回り）1½回転');
     // 元動画が無い（カードが押せない）ときは、コマを押すと原寸を開く
     expect(imgs[1].closest('a')).toHaveAttribute('href', `${BASE}/analysis-output/${JOB_ID}/out/move_frames/03_014.2_1.jpg`);
   });

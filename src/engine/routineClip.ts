@@ -17,8 +17,12 @@ import { buildScriptedBasic, buildScriptedCBL, type Timing } from './scriptedCli
 export type RoutineMoveId =
   | 'basic' | 'cbl'
   | 'right_turn' | 'left_turn' | 'inside_turn' | 'outside_turn'
-  | 'cbl_inside_turn' | 'cbl_outside_turn' | 'leader_turn'
-  | 'hammerlock' | 'shine' | 'other';
+  | 'cbl_inside_turn' | 'cbl_outside_turn' | 'reverse_cbl' | 'leader_turn'
+  | 'copa' | 'hand_change' | 'wrap' | 'hammerlock' | 'shadow' | 'dip'
+  | 'shine' | 'other';
+
+/** 手のつなぎ。男性の手が先（LR = 男性左手×女性右手） */
+export type RoutineHold = 'LR' | 'RR' | 'RL' | 'LL' | 'double' | 'cross' | 'closed' | 'none';
 
 export type RoutineMove = {
   move: RoutineMoveId;
@@ -28,9 +32,14 @@ export type RoutineMove = {
   start?: number;
   /** 拍数。8 の倍数（既定 8） */
   counts?: number;
-  turn?: { by: 'leader' | 'follower'; direction?: 'right' | 'left' | null; rotations?: number } | null;
-  passSide?: 'left' | 'right' | null;
-  confidence?: 'ok' | 'doubtful';
+  turn?: { by: 'leader' | 'follower' | 'both'; direction?: 'right' | 'left' | null; rotations?: number } | null;
+  /** 女性が男性の体から見てどちらを通ったか（return = コパのように行って戻る） */
+  passSide?: 'left' | 'right' | 'return' | null;
+  holdStart?: RoutineHold | null;
+  holdEnd?: RoutineHold | null;
+  /** seen = 画像で見えた / inferred = 隠れていて前後の状態から推定（docs/salsa-move-grammar.md 4章） */
+  evidence?: 'seen' | 'inferred';
+  confidence?: number | 'ok' | 'doubtful';
 };
 
 export type Routine = {
@@ -60,8 +69,14 @@ const MOVE_LABEL: Record<RoutineMoveId, string> = {
   outside_turn: 'アウトサイドターン',
   cbl_inside_turn: 'クロスボディ・インサイドターン',
   cbl_outside_turn: 'クロスボディ・アウトサイドターン',
+  reverse_cbl: 'リバース・クロスボディ',
   leader_turn: '男性のターン',
+  copa: 'コパ',
+  hand_change: '持ち替え',
+  wrap: 'ラップ',
   hammerlock: 'ハンマーロック',
+  shadow: 'シャドウ',
+  dip: 'ディップ',
   shine: 'シャイン',
   other: 'その他の技',
 };

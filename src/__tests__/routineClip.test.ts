@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { composeRoutine, routineFromResult } from '../engine/routineClip';
 import { buildScriptedBasic } from '../engine/scriptedClip';
 import type { MotionClip } from '../components/MocapFigure';
@@ -100,6 +102,16 @@ describe('routineFromResult', () => {
     expect(r?.timing).toBe('unclear');
     // 1小節 = 8拍 = 2.82秒（170BPM）。CBL(1秒)の小節が 3.82秒で終わり、9秒のターンまでに丸1小節空く
     expect(r?.moves.map((m) => m.move)).toEqual(['basic', 'cbl', 'basic', 'right_turn', 'basic']);
+  });
+
+  it('解析プロンプトの技の語彙はすべて 3D 側で知っている（other に落ちない）', () => {
+    const prompt = readFileSync(resolve(__dirname, '../../server/prompts/runner-prompt.md'), 'utf-8');
+    const line = prompt.split('\n').find((l) => l.includes('"move": "basic"'));
+    expect(line).toBeTruthy();
+    const ids = [...line!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).filter((s) => s !== 'move');
+    expect(ids.length).toBeGreaterThan(10);
+    const r = routineFromResult(JSON.stringify({ routine: { timing: 'on1', moves: ids.map((move) => ({ move })) } }));
+    expect(r?.moves.map((m) => m.move)).toEqual(ids);
   });
 
   it('壊れた JSON・技なしは null', () => {

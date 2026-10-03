@@ -3,13 +3,13 @@ import type { MotionClip, ArmSegment } from '../components/MocapFigure';
 import { NEUTRAL_HAND } from './armPose';
 import {
   L_THIGH, L_SHIN, L_UPARM, L_FOREARM, HIP_DX, SHO_DX, SHO_DY, LEG_MAX, SIDE_SIGN, HIPS_Y0, HEAD_Y,
-  TORSO_R, HAND_R,
+  TORSO_R, HAND_R, FOREARM_R, UPARM_R,
 } from './rigDims';
 import {
   type Guide, type PairGuide, type Hold, buildGuide, buildPair, buildHolds, sampleAt, at, segAt,
   damp, clamp, wrapPi, PAIR_MIN, PAIR_MAX, ARM_REACH, HOLD_LAG,
 } from './coupleGuide';
-import { type Capsule, bodyCapsules, segSegDist, CLOSED_BACK_ALLOW } from './rigMetrics';
+import { type Capsule, bodyCapsules, segSegDist, CLOSED_BACK_ALLOW, shoulderExcess } from './rigMetrics';
 import { measureArms, dumpArms } from './rigDebug';
 
 /**
@@ -53,7 +53,11 @@ const follow = (cur: number, target: number, k60: number, dt: number) =>
  */
 const ARM_LAG = 0.06;
 const ARM_OMEGA = 2 / ARM_LAG;
-type Spring = { layer: string; p: THREE.Vector3; v: THREE.Vector3; n: THREE.Vector3; nv: THREE.Vector3 };
+type Spring = {
+  layer: string; p: THREE.Vector3; v: THREE.Vector3; n: THREE.Vector3; nv: THREE.Vector3;
+  /** 肘の振り（対策2）の現在角[rad] */
+  swivel: number;
+};
 /** 臨界減衰ばねを dt だけ進める（的 g が dt の間一定とした厳密解）。x, v を書き換える */
 function springStep(x: THREE.Vector3, v: THREE.Vector3, g: THREE.Vector3, dt: number) {
   const w = ARM_OMEGA, e = Math.exp(-w * Math.max(0, dt));
@@ -167,6 +171,7 @@ const CLOSED_YAW = 40 * (Math.PI / 180);
 const cv = {
   p: new THREE.Vector3(), q: new THREE.Vector3(),
   po: new THREE.Vector3(), pa: new THREE.Vector3(), pm: new THREE.Vector3(), rc: new THREE.Vector3(),
+  pb: new THREE.Vector3(),
 };
 
 /** 線分 a-b 上で p に最も近い点 */
@@ -316,6 +321,70 @@ function armPole(sign: number, ty: number, out: THREE.Vector3) {
   );
 }
 
+/**
+ * IK を解いた**あとの腕そのもの**（上腕・前腕・手のカプセル）が体に入っていないかを測る。
+ * 手の的だけを体の外へ出しても、肘の通り道（上腕・前腕）は誰も見ていなかった。
+ *
+ * 食い込み[m]の合計を返し、手・前腕の一番深い接触の向き（体 → 腕、水平）を contact に書く。
+ * 自分の上腕は付け根の 35% を除く（肩関節は胴の中にあるのが正しい形）。
+ * backAllow: クローズドで女の背中に置く手（と前腕）は女の胴に 1cm まで触れてよい
+ */
+const SWIVEL_EPS = 0.005;   // これより浅い食い込みは無視する[m]
+const OWN_UPARM_SKIP = 0.35;
+const av = {
+  s: new THREE.Vector3(), e: new THREE.Vector3(), w: new THREE.Vector3(), s2: new THREE.Vector3(),
+  c1: new THREE.Vector3(), c2: new THREE.Vector3(),
+};
+type Contact = { depth: number; nx: number; nz: number };
+function armPenetration(
+  rig: Rig, d: number, k: number, bodies: Capsule[][], backAllow: boolean, contact?: Contact,
+) {
+  rig.shldr[k].updateMatrixWorld(true);
+  rig.shldr[k].getWorldPosition(av.s);
+  rig.elbow[k].getWorldPosition(av.e);
+  av.w.set(0, -L_FOREARM, 0);
+  rig.elbow[k].localToWorld(av.w);
+  av.s2.lerpVectors(av.s, av.e, OWN_UPARM_SKIP);
+  let sum = 0;
+  if (contact) contact.depth = 0;
+  for (let o = 0; o < 2; o++) {
+    const own = o === d;
+    for (const c of bodies[o]) {
+      const allow = backAllow && !own && c.part === 'torso' ? CLOSED_BACK_ALLOW : 0;
+      const du = UPARM_R + c.r - segSegDist(own ? av.s2 : av.s, av.e, c.a, c.b);
+      if (du > 0) sum += du;
+      for (let part = 0; part < 2; part++) {
+        // 0 = 前腕（肘→手首）, 1 = 手（手首の球）
+        const a = part === 0 ? av.e : av.w;
+        const dd = (part === 0 ? FOREARM_R : HAND_R) + c.r - allow -
+          segSegDist(a, av.w, c.a, c.b, av.c1, av.c2);
+        if (dd <= 0) continue;
+        sum += dd;
+        if (contact && dd > contact.depth) {
+          const nx = av.c1.x - av.c2.x, nz = av.c1.z - av.c2.z, h = Math.hypot(nx, nz);
+          contact.depth = dd;
+          contact.nx = h > 1e-6 ? nx / h : 0;
+          contact.nz = h > 1e-6 ? nz / h : 0;
+        }
+      }
+    }
+  }
+  return sum;
+}
+
+/**
+ * 肘の振り（スイベル）で腕を体の外へ逃がす（対策2）。手の位置は変えずに、肩→手の軸まわりに
+ * ポールを ±90° まで 15° 刻みで回し、「食い込み + 標準の肘の向きからのずれ + 前フレームからの
+ * ずれ」が最小の角を選ぶ。角の変化は毎秒 SWIVEL_RATE までに抑える（ぱたつき防止）。
+ */
+const SWIVEL_STEP = Math.PI / 12, SWIVEL_MAX = Math.PI / 2;
+// 90° 回すのは食い込みが 2cm 減るとき、と同じ重さ。前フレームからのずれはその半分
+const SWIVEL_W = 0.02 / (Math.PI / 2), SWIVEL_WT = 0.01 / (Math.PI / 2);
+const SWIVEL_RATE = 6;   // [rad/s]
+// 肩が可動域（向き・捻り）を超える振りは選ばない側へ寄せる（30° 超え = 食い込み 2cm と同じ重さ）
+const SWIVEL_WX = 0.02 / 30;   // [m/deg]
+const sv = { dir: new THREE.Vector3(), pole: new THREE.Vector3() };
+
 // フェーズごとの「手を頭上へ運ぶ量」の目標。damp で滑らかに繋ぐ
 const LIFT_BY_PHASE: Record<string, number> = {
   prep: 0.25, initiate: 0.8, rotate: 1, settle: 0.2,
@@ -424,10 +493,13 @@ export class CoupleSolver {
     this.dumpWindow = opts.dumpWindow ?? null;
   }
 
+  /** 腕の接触（solveArm の出力）の作業領域。[人] */
+  private readonly contacts: Contact[] = [{ depth: 0, nx: 0, nz: 0 }, { depth: 0, nx: 0, nz: 0 }];
+
   /** 腕ごとの的と肘の向きのばね（[人][左右]） */
   readonly springs: Spring[][] = [0, 1].map(() => [0, 1].map(() => ({
     layer: '', p: new THREE.Vector3(), v: new THREE.Vector3(),
-    n: new THREE.Vector3(), nv: new THREE.Vector3(),
+    n: new THREE.Vector3(), nv: new THREE.Vector3(), swivel: 0,
   })));
 
   /** クリップを差し替えたとき、前のソルバーの鈍り状態を引き継ぐ（手が飛ばないように） */
@@ -441,6 +513,7 @@ export class CoupleSolver {
       for (let k = 0; k < 2; k++) {
         const a = this.springs[d][k], b = prev.springs[d][k];
         a.layer = b.layer; a.p.copy(b.p); a.v.copy(b.v); a.n.copy(b.n); a.nv.copy(b.nv);
+        a.swivel = b.swivel;
       }
     }
   }
@@ -479,6 +552,93 @@ export class CoupleSolver {
     if (pole.lengthSq() > 1e-12) pole.normalize();
     springStep(s.n, s.nv, pole, dt);
     pole.copy(s.n);
+  }
+
+  /**
+   * 1本の腕（つないでいない手）を胸郭ローカルの的 local へ解く。肘の振りで逃がしても
+   * 前腕・手が体に入っていたら、的を接触の向き（水平）へ押して解き直す（2回まで。
+   * 腕が届く範囲でだけ）。local は書き換えない
+   */
+  private solveFreeArm(
+    rig: Rig, d: number, k: number, bodies: Capsule[][], local: THREE.Vector3,
+    pole: THREE.Vector3, dt: number, backAllow = false,
+  ) {
+    const sh = rig.shldr[k].position, c = this.contacts[d];
+    cv.pa.copy(local);
+    let exc = 0;
+    for (let it = 0; it < 3; it++) {
+      this.solveArm(rig, d, k, bodies, cv.pa.x - sh.x, cv.pa.y - sh.y, cv.pa.z - sh.z,
+        pole, it === 0 ? dt : 0, backAllow, c);
+      const e = shoulderExcess(rig, k);
+      if (it > 0 && e > exc + 1) {
+        // 押した的で肩が可動域を超えるなら、押す前の的に戻す
+        cv.pa.copy(cv.pb);
+        this.solveArm(rig, d, k, bodies, cv.pa.x - sh.x, cv.pa.y - sh.y, cv.pa.z - sh.z,
+          pole, 0, backAllow, c);
+        break;
+      }
+      exc = e;
+      if (c.depth <= SWIVEL_EPS || it === 2) break;
+      cv.pb.copy(cv.pa);
+      // 押す向きはワールドの水平。胸郭ローカルへ持ち込んでから足す
+      rig.spine.localToWorld(cv.pm.copy(cv.pa));
+      cv.pm.x += c.nx * c.depth;
+      cv.pm.z += c.nz * c.depth;
+      if (!reachable([{ spine: rig.spine, shoulder: sh }], cv.pm)) break;
+      rig.spine.worldToLocal(cv.pm);
+      cv.pa.copy(cv.pm);
+    }
+  }
+
+  /**
+   * 腕の2ボーンIK（肩ローカルの的 tx,ty,tz・ポール pole）を解き、解いた腕が体に入って
+   * いたら肘の振りで逃がす（armPenetration / SWIVEL_*）。残った食い込みを返し、
+   * 手・前腕の一番深い接触を contact に書く（呼び出し側が的を押すのに使う）
+   */
+  private solveArm(
+    rig: Rig, d: number, k: number, bodies: Capsule[][],
+    tx: number, ty: number, tz: number, pole: THREE.Vector3, dt: number,
+    backAllow = false, contact?: Contact,
+  ) {
+    const sh = rig.shldr[k], el = rig.elbow[k], s = this.springs[d][k];
+    const solveAt = (ang: number) => {
+      sv.pole.copy(pole);
+      if (ang !== 0) sv.pole.applyAxisAngle(sv.dir, ang);
+      solve2Bone(sh, el, L_UPARM, L_FOREARM, tx, ty, tz, sv.pole.x, sv.pole.y, sv.pole.z);
+    };
+    sv.dir.set(tx, ty, tz);
+    if (sv.dir.lengthSq() < 1e-10) sv.dir.set(0, -1, 0);
+    sv.dir.normalize();
+    const prev = s.swivel;
+    solveAt(0);
+    const pen0 = armPenetration(rig, d, k, bodies, backAllow);
+    if (pen0 <= SWIVEL_EPS && Math.abs(prev) < 1e-4) {
+      s.swivel = 0;
+      return armPenetration(rig, d, k, bodies, backAllow, contact);
+    }
+    const exc0 = shoulderExcess(rig, k);
+    let best = 0, bestCost = Math.max(0, pen0 - SWIVEL_EPS) + SWIVEL_WT * Math.abs(prev) +
+      SWIVEL_WX * exc0;
+    const tryAng = (ang: number) => {
+      solveAt(ang);
+      const pen = Math.max(0, armPenetration(rig, d, k, bodies, backAllow) - SWIVEL_EPS);
+      const cost = pen + SWIVEL_W * Math.abs(ang) + SWIVEL_WT * Math.abs(ang - prev) +
+        SWIVEL_WX * shoulderExcess(rig, k);
+      if (cost < bestCost - 1e-9) { bestCost = cost; best = ang; }
+    };
+    for (let a = SWIVEL_STEP; a <= SWIVEL_MAX + 1e-9; a += SWIVEL_STEP) { tryAng(a); tryAng(-a); }
+    if (prev !== 0) tryAng(prev);
+    // ぱたつかないよう、角の変化を毎秒 SWIVEL_RATE までにする
+    const lim = SWIVEL_RATE * Math.max(0, dt);
+    s.swivel = prev + clamp(best - prev, -lim, lim);
+    solveAt(s.swivel);
+    // 途中の角（振りの移り変わり・手の的が動いたあとの持ち越し）で肩が可動域を超えるなら、
+    // 振らない形に戻す。可動域を超えるより、体に少し触れるほうがまし
+    if (s.swivel !== 0 && shoulderExcess(rig, k) > exc0 + 1) {
+      s.swivel = 0;
+      solveAt(0);
+    }
+    return armPenetration(rig, d, k, bodies, backAllow, contact);
   }
 
   step(rigs: [Rig, Rig], t: number, dt: number) {
@@ -743,32 +903,57 @@ export class CoupleSolver {
         { spine: rigs[0].spine, shoulder: rigs[0].shldr[linked[0]!].position },
         { spine: rigs[1].spine, shoulder: rigs[1].shldr[linked[1]!].position },
       ]);
-      holdPos.current.copy(tmp.hold);
+      const holdArms = [
+        { spine: rigs[0].spine, shoulder: rigs[0].shldr[linked[0]!].position },
+        { spine: rigs[1].spine, shoulder: rigs[1].shldr[linked[1]!].position },
+      ];
 
-      for (let d = 0; d < 2; d++) {
-        const rig = rigs[d], k = linked[d]!, sign = SIDE_SIGN[k];
-        // ワールドのホールド点 → 肩の親（胸郭）ローカル。行列から引くのでねじれても正しい
-        tmp.v.copy(tmp.hold);
-        rig.spine.worldToLocal(tmp.v);
-        // 目標は上で可動域内に丸めてあるので、ここは鈍らせずそのまま解く
-        // （両者が同じ1点を解く = 手が必ず合う）
-        const ty = tmp.v.y - rig.shldr[k].position.y;
-        armPole(sign, ty, tmp.pl);   // 肘の向きは手の高さで決める（定数だと頭上で裏返る）
-        // 肘は**相手のいない側**へ出す。組んでいるときに肘を相手側へ出すのは
-        // 人間はやらないし、やれば相手の体を貫通する
-        const other = rigs[1 - d].root.position;
-        tmp.v2.set(other.x, rig.shldr[k].position.y, other.z);
-        rig.spine.worldToLocal(tmp.v2);
-        tmp.v2.y = 0;
-        if (tmp.v2.lengthSq() > 1e-6) tmp.pl.addScaledVector(tmp.v2.normalize(), -0.7);
-        // 肘の向きは鈍らせない。共有点（tmp.hold）がすでに鈍っているうえに、ここで遅らせると
-        // 体が速く回る場面で肘が付いていけず、相手の胴を抉る
-        // （実測: 前腕→相手の胴 最大 7.8 → 12.0cm に悪化した）。切り替わりの記録だけ取る
-        this.springs[d][k].layer = 'hold';
-        solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
-          tmp.v.x - rig.shldr[k].position.x, ty, tmp.v.z,
-          tmp.pl.x, tmp.pl.y, tmp.pl.z);
+      // 両者が同じ1点を解く = 手が必ず合う。解いた腕（前腕・手）がまだ体に入っていたら、
+      // 共有点を接触の向き（水平）へ押して2人とも解き直す（2回まで。腕が届く範囲でだけ）
+      let exc = 0;
+      for (let it = 0; it < 3; it++) {
+        let deepest: Contact | null = null, e = 0;
+        for (let d = 0; d < 2; d++) {
+          const rig = rigs[d], k = linked[d]!, sign = SIDE_SIGN[k];
+          // ワールドのホールド点 → 肩の親（胸郭）ローカル。行列から引くのでねじれても正しい
+          tmp.v.copy(tmp.hold);
+          rig.spine.worldToLocal(tmp.v);
+          const ty = tmp.v.y - rig.shldr[k].position.y;
+          armPole(sign, ty, tmp.pl);   // 肘の向きは手の高さで決める（定数だと頭上で裏返る）
+          // 肘は**相手のいない側**へ出す。組んでいるときに肘を相手側へ出すのは
+          // 人間はやらないし、やれば相手の体を貫通する
+          const other = rigs[1 - d].root.position;
+          tmp.v2.set(other.x, rig.shldr[k].position.y, other.z);
+          rig.spine.worldToLocal(tmp.v2);
+          tmp.v2.y = 0;
+          if (tmp.v2.lengthSq() > 1e-6) tmp.pl.addScaledVector(tmp.v2.normalize(), -0.7);
+          // 肘の向きは鈍らせない。共有点（tmp.hold）がすでに鈍っているうえに、ここで遅らせると
+          // 体が速く回る場面で肘が付いていけず、相手の胴を抉る
+          // （実測: 前腕→相手の胴 最大 7.8 → 12.0cm に悪化した）。切り替わりの記録だけ取る
+          this.springs[d][k].layer = 'hold';
+          const c = this.contacts[d];
+          this.solveArm(rig, d, k, bodies, tmp.v.x - rig.shldr[k].position.x, ty, tmp.v.z,
+            tmp.pl, it === 0 ? dt : 0, false, c);
+          if (c.depth > SWIVEL_EPS && (!deepest || c.depth > deepest.depth)) deepest = c;
+          e += shoulderExcess(rig, k);
+        }
+        if (it > 0 && e > exc + 1) {
+          // 押した点で肩が可動域を超えるなら、押す前の点に戻して解き直す
+          tmp.hold.copy(cv.pb);
+          it = 1;   // 次の周で解き直して終わる
+          exc = Infinity;
+          continue;
+        }
+        exc = e;
+        if (!deepest || it === 2) break;
+        cv.pb.copy(tmp.hold);
+        cv.po.copy(tmp.hold);
+        cv.po.x += deepest.nx * deepest.depth;
+        cv.po.z += deepest.nz * deepest.depth;
+        if (!reachable(holdArms, cv.po)) break;
+        tmp.hold.copy(cv.po);
       }
+      holdPos.current.copy(tmp.hold);
     } else {
       holdSame.current = null;
     }
@@ -794,9 +979,7 @@ export class CoupleSolver {
       const ty = tmp.v.y - rig.shldr[k].position.y;
       armPole(sign, ty, tmp.pl);
       this.smoothPole(rig, 0, k, 'back', tmp.pl, dt);
-      solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
-        tmp.v.x - rig.shldr[k].position.x, ty, tmp.v.z,
-        tmp.pl.x, tmp.pl.y, tmp.pl.z);
+      this.solveFreeArm(rig, 0, k, bodies, tmp.v, tmp.pl, dt);
     }
 
     // ── レイヤー3.6: クローズドポジション。
@@ -838,10 +1021,10 @@ export class CoupleSolver {
         const ty = Math.min(target.y - rig.shldr[k].position.y, 0);   // 肩より上へは上げない
         armPole(sign, ty, tmp.pl);
         this.smoothPole(rig, d, k, layer, tmp.pl, dt);
-        // 肩の z も引く。引かないと肩を前へ出したぶんだけ手が奥へ行き過ぎる
-        solve2Bone(rig.shldr[k], rig.elbow[k], L_UPARM, L_FOREARM,
-          target.x - rig.shldr[k].position.x, ty, target.z - rig.shldr[k].position.z,
-          tmp.pl.x, tmp.pl.y, tmp.pl.z);
+        // 肩の z も引く（solveFreeArm は肩の位置を引いて解く）。引かないと肩を前へ出した
+        // ぶんだけ手が奥へ行き過ぎる
+        target.y = rig.shldr[k].position.y + ty;
+        this.solveFreeArm(rig, d, k, bodies, target, tmp.pl, dt, !avoid);
       };
       if (closedL >= 0) {
         // フォロワーの背中側（前方の逆）、肩甲骨の高さ。左肩甲骨なので体の左へ寄せる
@@ -955,11 +1138,15 @@ export class CoupleSolver {
         rig.spine.worldToLocal(tmp.v);
         const ty = tmp.v.y - sh.position.y;
         armPole(sign, ty, tmp.pl);
-        if (keyPose) this.smoothPole(rig, d, k, 'free', tmp.pl, dt);
-        // 観測追従（keyPose=0）だけは旧来どおり、信頼度 w で手続きの構えと IK の解を混ぜる
-        solve2Bone(sh, rig.elbow[k], L_UPARM, L_FOREARM,
-          tmp.v.x - sh.position.x, ty, tmp.v.z,
-          tmp.pl.x, tmp.pl.y, tmp.pl.z, w);
+        if (keyPose) {
+          this.smoothPole(rig, d, k, 'free', tmp.pl, dt);
+          this.solveFreeArm(rig, d, k, bodies, tmp.v, tmp.pl, dt);
+        } else {
+          // 観測追従（keyPose=0）だけは旧来どおり、信頼度 w で手続きの構えと IK の解を混ぜる
+          solve2Bone(sh, rig.elbow[k], L_UPARM, L_FOREARM,
+            tmp.v.x - sh.position.x, ty, tmp.v.z,
+            tmp.pl.x, tmp.pl.y, tmp.pl.z, w);
+        }
       }
     }
 

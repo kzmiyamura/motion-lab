@@ -225,6 +225,27 @@ function twistDeg(q: THREE.Quaternion, sign: number, ref: THREE.Vector3) {
   return -sign * a * R2D;
 }
 
+/**
+ * 肩（上腕の向きと捻り）が LIMITS の範囲を超えた量の合計[deg]。jointAngles / limitExcess と
+ * 同じ測り方。ソルバーが肘の振りを選ぶときに「可動域を超える振り」を避けるのに使う
+ */
+export function shoulderExcess(rig: Rig, k: number): number {
+  const sign = SIDE_SIGN[k];
+  const q = rig.shldr[k].quaternion;
+  const u = v3().copy(DOWN).applyQuaternion(q);
+  const elev = Math.acos(Math.max(-1, Math.min(1, -u.y))) * R2D;
+  const ext = Math.asin(Math.max(0, Math.min(1, -u.z))) * R2D;
+  const cross = Math.asin(Math.max(0, Math.min(1, -u.x * sign))) * R2D;
+  let sum = Math.max(0, elev - LIMITS.shoulderFlex) + Math.max(0, ext - LIMITS.shoulderExt) +
+    Math.max(0, cross - LIMITS.shoulderCross) +
+    (u.z < -0.3 ? Math.max(0, elev - LIMITS.shoulderForbiddenElev) : 0);
+  if (elev <= 160) {
+    const tw = twistDeg(q, sign, v3().set(0, 0, -1));
+    if (Number.isFinite(tw)) sum += Math.max(0, LIMITS.twistMin - tw, tw - LIMITS.twistMax);
+  }
+  return sum;
+}
+
 export type ArmAngles = {
   /** 上腕の挙上（0 = 真下、90 = 水平、180 = 真上） */
   elev: number;

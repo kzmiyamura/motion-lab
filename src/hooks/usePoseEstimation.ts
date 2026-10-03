@@ -371,21 +371,68 @@ function makeInitialPatternState(): PatternDetectionState {
   };
 }
 
+/**
+ * 同じアクションのクールダウン判定。
+ * allowRewind=true（外部時刻源）のときは、ループやシークで時刻が前回より戻ったら即座に再検出を許す。
+ * 既定（ローカル動画）は従来どおり「前回から COOLDOWN_SEC 以上進んだか」だけを見る。
+ */
+export function canEmitAfterCooldown(videoTime: number, lastTime: number, allowRewind = false): boolean {
+  if (allowRewind && videoTime < lastTime) return true;
+  return videoTime - lastTime >= COOLDOWN_SEC;
+}
+
+/** usePoseEstimation の追加オプション（すべて省略可。省略時は従来の挙動） */
+export interface PoseEstimationOptions {
+  /**
+   * 解析の時刻源（秒）。ビート位相・シーケンスイベントの time・クールダウンに使う。
+   * 省略時は video.currentTime。タブ共有解析では YouTube プレイヤーの getCurrentTime() を渡す。
+   */
+  getTime?: () => number;
+  /** true なら iOS の時刻キー解析キャッシュを使わない（ライブ映像など） */
+  disableTimeCache?: boolean;
+}
+
+/** 時刻源から秒を読む。getTime が無い・例外・非有限値なら video.currentTime にフォールバック */
+export function resolveAnalysisTime(
+  video: { currentTime: number },
+  getTime?: () => number,
+): number {
+  if (getTime) {
+    try {
+      const t = getTime();
+      if (Number.isFinite(t)) return t;
+    } catch { /* フォールバック */ }
+  }
+  return video.currentTime;
+}
+
+/**
+ * 時刻をキーにした解析キャッシュが使えるか。
+ * MediaStream（srcObject）を流す <video> はライブ映像で currentTime が意味を持たないので使わない。
+ * ローカル動画（src 再生）は従来どおり使う（録画 webm の duration=Infinity でも挙動を変えない）。
+ */
+export function isTimeCacheable(
+  video: { srcObject?: unknown },
+  options: PoseEstimationOptions,
+): boolean {
+  if (options.disableTimeCache || options.getTime) return false;
+  return video.srcObject == null;
+}
+
 function runPatternDetection(
   lm: NormalizedLandmark[],
   videoTime: number,
   bpmVal: number,
   state: PatternDetectionState,
+  allowRewind: boolean,
   emit: (action: string, quality: number, beatNum: number | undefined) => void,
 ) {
   const beatNum = bpmVal > 0
     ? Math.floor((videoTime * bpmVal / 60) % 8) + 1
     : undefined;
 
-  const canEmit = (action: string) => {
-    const last = state.lastEventTime[action] ?? -Infinity;
-    return videoTime - last >= COOLDOWN_SEC;
-  };
+  const canEmit = (action: string) =>
+    canEmitAfterCooldown(videoTime, state.lastEventTime[action] ?? -Infinity, allowRewind);
 
   const doEmit = (action: string, quality: number) => {
     state.lastEventTime[action] = videoTime;
@@ -1539,7 +1586,15 @@ export function usePoseEstimation(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mlTf: any = null,  // TensorFlow.js インスタンス
   mlVersion: 'v1' | 'v2' = 'v2',  // 使用する特徴量バージョン
+  options: PoseEstimationOptions = {},  // 時刻源の差し替えなど（タブ共有解析用）
 ): UsePoseEstimationResult {
+  const optionsRef   = useRef<PoseEstimationOptions>(options);
+  optionsRef.current = options;
+  // 解析時刻（秒）: 既定は video.currentTime、options.getTime があればそちら
+  const readVideoTime = useCallback(
+    (video: HTMLVideoElement) => resolveAnalysisTime(video, optionsRef.current.getTime),
+    [],
+  );
   const modeRef      = useRef<VizMode>(mode);
   modeRef.current    = mode;
   const bpmRef       = useRef(bpm);
@@ -1702,7 +1757,7 @@ export function usePoseEstimation(
 
     const entry: AnnotationEntry = {
       errorFrameIndex: frameIndexRef.current,
-      videoTime: videoRef.current?.currentTime ?? 0,
+      videoTime: videoRef.current ? readVideoTime(videoRef.current) : 0,
       preSceneData: frameBufferRef.current.slice(-POST_SCENE_FRAMES).map(f => ({ ...f, persons: f.persons.map(p => ({ ...p })) })),
       postSceneData: [],
       resolvedBy: 'manual_swap',
@@ -1710,7 +1765,7 @@ export function usePoseEstimation(
       swapDetail: { slot0RoleBefore: r0, slot1RoleBefore: r1, slot0RoleAfter: r1, slot1RoleAfter: r0 },
     };
     pendingAnnotationRef.current = entry;
-  }, [videoRef]);
+  }, [videoRef, readVideoTime]);
 
   // ── デバッグ JSON エクスポート
   const exportDebugLog = useCallback((videoName?: string) => {
@@ -1851,6 +1906,8 @@ export function usePoseEstimation(
         }
 
         if (!video.paused && video.readyState >= 2) {
+          // 時刻源: 既定は video.currentTime。タブ共有解析では YouTube プレイヤーの再生位置を使う
+          const vt = readVideoTime(video);
           const container = canvas.parentElement;
           const rw = container?.clientWidth  ?? Math.round(canvas.getBoundingClientRect().width);
           const rh = container?.clientHeight ?? Math.round(canvas.getBoundingClientRect().height);
@@ -1871,9 +1928,12 @@ export function usePoseEstimation(
                 let all: NormalizedLandmark[][];
                 const rate = video.playbackRate;
 
+                // ライブ映像（MediaStream）や外部時刻源では時刻キーのキャッシュを使わない
+                const cacheable = isTimeCacheable(video, optionsRef.current);
+
                 if (IS_IOS && rate > SLOW_RATE_THRESHOLD) {
                   // iOS 通常速度: キャッシュ優先、ミスなら単一パス
-                  const cached = findCachedResult(analysisCacheRef.current, video.currentTime);
+                  const cached = cacheable ? findCachedResult(analysisCacheRef.current, vt) : null;
                   if (cached !== null) {
                     all = cached;
                   } else {
@@ -1886,8 +1946,8 @@ export function usePoseEstimation(
                   all = rawLm.filter(lm2 => isPoseCoherent(lm2, genderLockedRef.current));
                   ellipseMasksRef.current = rawMasks;  // デバッグ描画用に保存
                   // iOS スロー時はキャッシュに保存（通常速度で再生する際に再利用）
-                  if (IS_IOS) {
-                    analysisCacheRef.current.push({ time: video.currentTime, landmarks: all });
+                  if (IS_IOS && cacheable) {
+                    analysisCacheRef.current.push({ time: vt, landmarks: all });
                     if (analysisCacheRef.current.length > CACHE_MAX_FRAMES) analysisCacheRef.current.shift();
                   }
                 }
@@ -1967,17 +2027,18 @@ export function usePoseEstimation(
                   // ── パターン検出（再生中のみ）
                   runPatternDetection(
                     all[targetIdx],
-                    video.currentTime,
+                    vt,
                     bpmRef.current,
                     patternStateRef.current,
+                    !!optionsRef.current.getTime,  // 外部時刻源ではループ・シークで時刻が戻る
                     (action, quality, beatNum) => {
                       // ターン検出時刻を記録 → 位相チェックを一時抑制
                       if (action === 'Turn') {
-                        lastTurnTimeRef.current = video.currentTime;
+                        lastTurnTimeRef.current = vt;
                       }
                       const evt: SequenceEvent = {
                         id: eventIdRef.current++,
-                        time: video.currentTime,
+                        time: vt,
                         action,
                         quality,
                         beatNum,
@@ -2117,7 +2178,7 @@ export function usePoseEstimation(
                     const slotPoses: { landmarks: NormalizedLandmark[] }[] = [];
                     if (si0 >= 0) slotPoses.push({ landmarks: all[si0] });
                     if (si1 >= 0) slotPoses.push({ landmarks: all[si1] });
-                    if (slotPoses.length > 0) onRawPosesRef.current(slotPoses, video.currentTime);
+                    if (slotPoses.length > 0) onRawPosesRef.current(slotPoses, vt);
                   }
 
                   const personRoles = new Map<number, PersonRole>();
@@ -2272,7 +2333,7 @@ export function usePoseEstimation(
 
                   // ビート番号（役割判定に使用）
                   const currentBeatNum = bpmRef.current > 0
-                    ? Math.floor((video.currentTime * bpmRef.current / 60) % 8) + 1
+                    ? Math.floor((vt * bpmRef.current / 60) % 8) + 1
                     : undefined;
 
 
@@ -2481,7 +2542,9 @@ export function usePoseEstimation(
                   // ターン中・直後（2秒間）は抑制 — ターン時は両者が同方向に動くのが正常
                   // 両者が同時にトラッキングされているフレームのみ実行（stale履歴による誤検知防止）
                   const TURN_SUPPRESS_SEC = 2.0;
-                  const sinceLastTurn = video.currentTime - lastTurnTimeRef.current;
+                  // 外部時刻源でループ・シークにより時刻が戻ったら、前回ターン時刻は無効にする
+                  if (optionsRef.current.getTime && vt < lastTurnTimeRef.current) lastTurnTimeRef.current = -Infinity;
+                  const sinceLastTurn = vt - lastTurnTimeRef.current;
                   if (roleDetectedRef.current && sinceLastTurn > TURN_SUPPRESS_SEC && si0 >= 0 && si1 >= 0) {
                     const ls = slots.find(s => s.role === 'leader');
                     const fs = slots.find(s => s.role === 'follower');
@@ -2567,7 +2630,7 @@ export function usePoseEstimation(
                     const zOrderFront = slots[0].zFront ? 0 : slots[1].zFront ? 1 : -1;
                     const snapshot: FrameSnapshot = {
                       frameIndex: frameIndexRef.current,
-                      videoTime: video.currentTime,
+                      videoTime: vt,
                       distanceBetweenPersons: slots[0].hip && slots[1].hip
                         ? Math.hypot(slots[0].hip.x - slots[1].hip.x, slots[0].hip.y - slots[1].hip.y)
                         : -1,
@@ -2935,7 +2998,7 @@ export function usePoseEstimation(
 
                   // ビートフェーズインジケーター（BPM設定時）
                   if (bpmRef.current > 0) {
-                    drawBeatIndicator(ctx, cw, ch, bpmRef.current, video.currentTime, mirrored);
+                    drawBeatIndicator(ctx, cw, ch, bpmRef.current, vt, mirrored);
                   }
                 }
               } catch {
@@ -2960,7 +3023,7 @@ export function usePoseEstimation(
       landmarkerRef.current?.close?.();
       landmarkerRef.current = null;
     };
-  }, [enabled, videoRef, canvasRef]);
+  }, [enabled, videoRef, canvasRef, readVideoTime]);
 
   return { lockAt, unlock, isLocked, sequence, clearSequence, syncError, clearRoles, roleDetected, swapRoles, annotations, exportDebugLog, debugInfo, roleConfidenceLow, mlResult };
 }

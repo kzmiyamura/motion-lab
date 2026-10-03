@@ -64,7 +64,9 @@ TTY を持たないため `fatal: could not read Username ... Device not configu
 
 ## MediaPipe Pose 実装メモ
 
-- **対象**: `FilePlayer.tsx`（ローカル動画）のみ。YouTube は CORS 制約で対象外
+- **対象**: `FilePlayer.tsx`（ローカル動画）。YouTube は CORS 制約で iframe を直接読めないため、`TabShareAnalyzer.tsx`（YouTube タブの「骨格解析」）で自タブを `getDisplayMedia({ preferCurrentTab })` 共有し、`CropTarget` があれば iframe に切り出して解析する
+  - 時刻は `usePoseEstimation` の `options.getTime`（YouTube の `getCurrentTime()` を補間する `makeYouTubeClock()`）を使う。スロー・ループでもイベント時刻は YouTube 秒。外部時刻源・MediaStream では iOS の時刻キーキャッシュを無効化
+  - 「JSON書き出し」→ `tabshare_<videoId>_<timestamp>.json`（`{ videoId, title?, playbackRate, createdAt, events: [{ t, action, quality, beatNum? }] }`）
 - **モデル**: `modelComplexity: 0`（Lite）、モデルファイルは CDN（jsdelivr）から動的ロード
 - **Canvas**: `<video>` 直上・`pointer-events: none`・同じ CSS transform（mirror/zoom）を同期
 - **letterbox 補正**: `object-fit: contain` のオフセットを計算して landmark 座標をマッピング

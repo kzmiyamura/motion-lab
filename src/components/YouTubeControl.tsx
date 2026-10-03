@@ -7,6 +7,7 @@ import { ModeSwitcher } from './ModeSwitcher';
 import { VideoControls } from './VideoControls';
 import { VideoGrid } from './VideoGrid';
 import { SearchPanel } from './SearchPanel';
+import { TabShareAnalyzer } from './TabShareAnalyzer';
 import { useWakeLock } from '../hooks/useWakeLock';
 import styles from './YouTubeControl.module.css';
 
@@ -294,6 +295,15 @@ export function YouTubeControl({
     if (video.pseudoPlayingRef.current) return;
     setYtPlaying(e.data === 1 || e.data === 3);
   }, [setYtPlaying, video.pseudoPlayingRef]);
+
+  // 骨格解析の切り出し対象（YouTube の iframe）
+  const getPlayerIframe = useCallback((): HTMLIFrameElement | null => {
+    try {
+      const f = playerRef.current?.getIframe?.();
+      if (f instanceof HTMLIFrameElement) return f;
+    } catch { /* ignore */ }
+    return playerSectionRef.current?.querySelector('iframe') ?? null;
+  }, []);
 
   const handleSlowRate = useCallback((rate: SlowRate) => {
     video.setSlowRate(rate);
@@ -598,6 +608,16 @@ export function YouTubeControl({
               : controls
             }
           </div>
+        )}
+
+        {/* 骨格解析（このタブを画面共有して YouTube プレイヤー部分を解析。ダウンロードしない） */}
+        {videoId && (
+          <TabShareAnalyzer
+            bpm={bpm}
+            videoId={videoId}
+            playerRef={playerRef}
+            getIframe={getPlayerIframe}
+          />
         )}
       </div>
 

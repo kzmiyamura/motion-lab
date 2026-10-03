@@ -728,8 +728,14 @@ def detect_pass_side(draw_frames, t_cross, leader_pid):
             "facingBasis": facing_basis, "followerFrom": follower_from}
 
 
-RAISE_WINDOW_SEC = 0.8   # 入れ替わり時刻の前後この範囲で男性の手の高さを見る
-RAISE_RATIO_MIN = 0.25   # 窓内の見えているフレームのうちこの割合以上で頭上なら「手を上げた」
+# 入れ替わり時刻の前 BEFORE 秒〜後 AFTER 秒で男性の手の高さを見る。
+# CBL からのターンは、入れ替わり（3拍目前後）を過ぎてから 5〜6 拍目で手を上げるので後ろを長く取る。
+# 前後 0.8 秒の対称窓では、正解表で「上げた」5件中3件が窓の外（+0.6〜+1.4 秒）で上がっていた
+RAISE_WINDOW_BEFORE_SEC = 0.8
+RAISE_WINDOW_AFTER_SEC = 1.2
+# 頭上に来たフレームがこの数以上なら「手を上げた」。手を頭上に通すのは一瞬（0.2〜0.5 秒）なので
+# 窓内の割合では薄まる（旧: 割合 0.25 以上）
+RAISE_MIN_FRAMES = 3
 
 
 def detect_hand_raise(draw_frames, t_cross, leader_pid):
@@ -748,7 +754,7 @@ def detect_hand_raise(draw_frames, t_cross, leader_pid):
     first = None  # 最初に頭上に来たフレームの (t, 手, 手首x, 女性の腰x or None)
     track = []    # (t, 手首x) 上がった手の軌跡
     for df in draw_frames:
-        if abs(df["t"] - t_cross) > RAISE_WINDOW_SEC:
+        if not -RAISE_WINDOW_BEFORE_SEC <= df["t"] - t_cross <= RAISE_WINDOW_AFTER_SEC:
             continue
         ps = {p.get("pid"): p for p in df["kept"] if p.get("pid") in (0, 1)}
         lp = ps.get(leader_pid)
@@ -779,7 +785,7 @@ def detect_hand_raise(draw_frames, t_cross, leader_pid):
     if seen < 3:
         return None
     ratio = up / seen
-    raised = ratio >= RAISE_RATIO_MIN
+    raised = up >= RAISE_MIN_FRAMES
     out = {"raised": raised, "ratio": round(ratio, 2)}
     if raised:
         out["hand"] = max(hand_votes, key=lambda h: hand_votes[h])

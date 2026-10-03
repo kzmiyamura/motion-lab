@@ -6,10 +6,10 @@
  * **同じ式**をここに純関数として置き、定数を変えたときに肘角と脇の空きを数字で確かめられるようにする。
  */
 
-/** 上腕・前腕の長さ[m]（CoupleFigure と同じ） */
-export const L_UPARM = 0.28, L_FOREARM = 0.27;
-/** 肩の左右オフセット・腰から肩までの高さ[m]（CoupleFigure と同じ） */
-export const SHO_DX = 0.185, SHO_DY = 0.40;
+import { L_UPARM, L_FOREARM, SHO_DX, SHO_DY } from './rigDims';
+
+/** 上腕・前腕の長さ・肩の位置[m]。寸法は rigDims.ts の1か所にある */
+export { L_UPARM, L_FOREARM, SHO_DX, SHO_DY };
 
 /**
  * フォロワーのニュートラルポジション（胸郭ローカル [横, 肩からの高さ, 前]）。

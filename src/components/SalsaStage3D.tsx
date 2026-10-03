@@ -3,6 +3,8 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { MocapFigure, type MotionClip } from './MocapFigure';
 import { buildScriptedCBL, buildScriptedBasic } from '../engine/scriptedClip';
+import { composeRoutine } from '../engine/routineClip';
+import { ROUTINE_EVENT, takePendingRoutine } from '../engine/routineBus';
 import { CoupleFigure } from './CoupleFigure';
 import { detectFace, loadFaces, saveFaces, EMPTY_FACES, type FaceSlots } from '../engine/faceAvatar';
 import { SAMPLE_AVATARS } from './AvatarHeads';
@@ -466,12 +468,15 @@ export function SalsaStage3D() {
 
   // 手描きの合成クリップ（動画データを使わない）。正解の見本として再生する
   /** いま出している手描きクリップ。クローズドの切り替えで同じものを組み直すため覚えておく */
-  const scriptedRef = useRef<{ kind: 'basic' | 'cbl'; timing: 'on1' | 'on2' } | null>(null);
+  const scriptedRef = useRef<{ build: (closed: boolean) => MotionClip } | null>(null);
+  /** 解析レポートから受け取ったルーティンの出どころと、手描きで再現できた割合 */
+  const [routineInfo, setRoutineInfo] = useState<string | null>(null);
   const buildScripted = (kind: 'basic' | 'cbl', timing: 'on1' | 'on2', cl: boolean) =>
     kind === 'basic' ? buildScriptedBasic(timing, cl) : buildScriptedCBL(timing, cl);
 
   const loadScriptedMove = (kind: 'basic' | 'cbl', timing: 'on1' | 'on2', label: string) => {
-    scriptedRef.current = { kind, timing };
+    scriptedRef.current = { build: (cl) => buildScripted(kind, timing, cl) };
+    setRoutineInfo(null);
     loadScripted(() => buildScripted(kind, timing, closed), label);
   };
 
@@ -482,7 +487,7 @@ export function SalsaStage3D() {
     const s = scriptedRef.current;
     if (!s) return;
     const at = clipTimeRef.current;
-    const c = buildScripted(s.kind, s.timing, next);
+    const c = s.build(next);
     setClip(c);
     clipTimeRef.current = at;
     phRef.current.clipTime = at;
@@ -502,6 +507,33 @@ export function SalsaStage3D() {
     setPlaying(true);
     setNowLabel(label);
   };
+
+  // 解析レポートの「3Dで再現」: 技の並びを手描きの振付でつないで再生する。
+  // タブが閉じていた場合はマウント時に、開いていた場合はイベントで受け取る
+  const closedRef = useRef(closed);
+  closedRef.current = closed;
+  const loadScriptedRef = useRef(loadScripted);
+  loadScriptedRef.current = loadScripted;
+  useEffect(() => {
+    const consume = () => {
+      const p = takePendingRoutine();
+      if (!p) return;
+      const routine = p.routine;
+      const { coverage } = composeRoutine(routine, closedRef.current);
+      const total = coverage.reduce((a, c) => a + c.beats, 0);
+      const exact = coverage.filter((c) => c.kind === 'exact').reduce((a, c) => a + c.beats, 0);
+      const approx = coverage.filter((c) => c.kind === 'approx').map((c) => c.name);
+      scriptedRef.current = { build: (cl) => composeRoutine(routine, cl).clip };
+      setRoutineInfo(
+        `解析から再現: ${p.title} — ${coverage.length}技・${total / 8}小節、手描きで再現 ${exact}/${total}拍` +
+        (approx.length ? `（ベーシックで代用: ${approx.join('、')}）` : ''),
+      );
+      loadScriptedRef.current(() => composeRoutine(routine, closedRef.current).clip, `解析ルーティン: ${p.title}`);
+    };
+    consume();
+    window.addEventListener(ROUTINE_EVENT, consume);
+    return () => window.removeEventListener(ROUTINE_EVENT, consume);
+  }, []);
 
   const onSelectClip = (id: string) => {
     setClipId(id);
@@ -790,6 +822,7 @@ export function SalsaStage3D() {
         </div>
       )}
 
+      {routineInfo && <p className={styles.note}>🧍 {routineInfo}</p>}
       {clipErr && <p className={styles.note}>モーションの読み込みに失敗しました: {clipErr}</p>}
       {faceErr && <p className={styles.note}>顔の読み込みに失敗しました: {faceErr}</p>}
 

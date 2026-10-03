@@ -14,6 +14,7 @@ import { FilePlayer } from './components/FilePlayer';
 import { StudioPlayer } from './components/StudioPlayer';
 import { HomeServerLibrary } from './components/HomeServerLibrary';
 import { CaptureTab } from './components/CaptureTab';
+import { ROUTINE_EVENT } from './engine/routineBus';
 import styles from './App.module.css';
 
 // three/R3F は重いので遅延ロード（メインバンドルに含めない）
@@ -52,6 +53,13 @@ function App() {
   useEffect(() => {
     if (urlBpm !== null) setBpm(urlBpm);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 解析レポートの「3Dで再現」→ 3D タブへ移る（読み込みは SalsaStage3D 側）
+  useEffect(() => {
+    const go = () => setMainTab('3d');
+    window.addEventListener(ROUTINE_EVENT, go);
+    return () => window.removeEventListener(ROUTINE_EVENT, go);
+  }, []);
 
   return (
     <>

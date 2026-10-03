@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { getJobDetail, resolveHomeServerUrl, type AnalysisJobDetail } from '../engine/homeServer';
+import { routineFromResult } from '../engine/routineClip';
+import { sendRoutineTo3D } from '../engine/routineBus';
 import styles from './ReportModal.module.css';
 
 type Props = {
@@ -156,6 +158,13 @@ export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
     window.open(GENERATOR_URL, '_blank', 'noopener');
   };
   const canReproduce = countEvents(job?.resultJson ?? null) > 0;
+  // 解析の技の並びを、アプリ内の 3D（手描きの振付を並べたもの）で再生する
+  const routine = routineFromResult(job?.resultJson ?? null);
+  const playIn3D = () => {
+    if (!routine) return;
+    sendRoutineTo3D(routine, videoTitle);
+    onClose();
+  };
 
   return (
     <div className={styles.overlay} onClick={onClose}>
@@ -173,11 +182,18 @@ export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
               : <p className={styles.hint}>このジョブにはレポートがありません（status: {job.status}{job.errorMessage ? ` / ${job.errorMessage}` : ''}）</p>
           )}
         </div>
-        {canReproduce && (
+        {(canReproduce || routine) && (
           <div className={styles.genRow}>
-            <button className={styles.genBtn} onClick={reproduceInGenerator}>
-              🕺 ジェネレーターで再現
-            </button>
+            {routine && (
+              <button className={styles.genBtn} onClick={playIn3D}>
+                🧍 3Dで再現
+              </button>
+            )}
+            {canReproduce && (
+              <button className={styles.genBtn} onClick={reproduceInGenerator}>
+                🕺 ジェネレーターで再現
+              </button>
+            )}
             {copyMsg && <span className={styles.genMsg}>{copyMsg}</span>}
           </div>
         )}

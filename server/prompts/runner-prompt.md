@@ -39,7 +39,7 @@
         `turns: 0.5` は半回転（振り返り）の可能性が高い。男性の振り返りを1回と数えることがある。
         0.5 刻みの端数は、ストリップでどの向きから始まりどの向きで終わったかを見て丸める。**最終判断はストリップ画像で行う**
   - `persons[]` — フレーム毎の計測。スロット番号は空間追跡のIDであり人物の同一性は保証されない（交差で入れ替わり得る）
-  - `summary.beatGrid` — 音声から推定したビート格子: `{bpm, firstBeatSec, beatIntervalSec, confidence}`（推定不能なら null）。
+  - `summary.beatGrid` — 音声から推定したビート格子: `{bpm, firstBeatSec, beatIntervalSec, confidence}`（推定不能なら null。理由は `summary.beatGridReason`: `"silent"` = 動画に音が入っていない（画面収録など）、`"unclear"` = 音はあるがリズムが取れない。silent のときはレポートに「音声なしのためカウント無し」と書く）。
     各イベントには `count8`（8カウント内の仮位置。**位相は未合わせ**）と `beatOffsetSec`（拍からのずれ）が付く。
     **あなたが位相を合わせてカウントを確定する**: On1/On2 の慣例（spec や動画タイトルにスタイルの記載があれば従う。
     例: CBL は 5-6-7 に乗る、On2 のフォロワーターンは 6 で始まることが多い）に沿って、

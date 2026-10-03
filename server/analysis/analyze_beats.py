@@ -92,6 +92,60 @@ def beat_phase(flux, period):
     return best_off
 
 
+# 無音判定: 画面収録などで音声トラックがほぼ空の動画（実測 rms 0.0007〜0.0014、音楽入りは 0.14）。
+# 無音でも自己相関は AAC のフレーム周期などで偽のピーク（235BPM）を出すので、先に弾く
+SILENT_RMS = 0.01
+REFINE_STEP = 0.01   # 拍間隔の詰め（包絡のサンプル単位）
+PHASE_STEP = 0.25
+
+
+def is_silent(x):
+    return len(x) == 0 or float(np.sqrt(np.mean(x.astype(np.float64) ** 2))) < SILENT_RMS
+
+
+def _comb_score(flux, period, phase_step=PHASE_STEP):
+    """拍間隔 period（小数可）の櫛を全位相で当て、最良の (平均強度, 位相) を返す。
+    櫛の歯は線形補間で読むので、拍間隔が包絡のサンプル間隔の整数倍でなくてよい"""
+    n = len(flux)
+    offs = np.arange(0, period, phase_step)
+    k = np.arange(0, int((n - 1) / period))
+    pos = offs[:, None] + period * k[None, :]
+    valid = pos <= n - 1
+    pos = np.where(valid, pos, 0)
+    i = np.floor(pos).astype(int)
+    j = np.minimum(i + 1, n - 1)
+    w = pos - i
+    vals = (flux[i] * (1 - w) + flux[j] * w) * valid
+    scores = vals.sum(axis=1) / np.maximum(1, valid.sum(axis=1))
+    b = int(np.argmax(scores))
+    return float(scores[b]), float(offs[b])
+
+
+def estimate_grid(x, flux, env_sr):
+    """拍間隔を小数精度で求めた格子: {bpm, period, offset, confidence} or None。
+
+    自己相関の最大ラグは整数（包絡 1 サンプル = 23ms）なので、186BPM の曲が 184.6BPM
+    （ラグ 14）に丸められ、格子が 1 分で約 2 拍ずれていた（eval_beat_grid.py で実測）。
+    整数ラグの ±1 の範囲で、櫛を全編に当てたときの乗り具合が最大になる拍間隔を探す。
+    """
+    if is_silent(x):
+        return None
+    est = estimate_bpm(flux, env_sr)
+    if est is None or est[2] < 0.08:
+        return None
+    _, lag, conf = est
+    # 包絡を軽くならして、櫛の歯がオンセットの1サンプルのずれで外れないようにする
+    smooth = np.convolve(flux, np.array([0.25, 0.5, 0.25]), mode="same")
+    best = (-1.0, float(lag), 0.0)
+    for period in np.arange(lag - 1.0, lag + 1.0 + 1e-9, REFINE_STEP):
+        score, off = _comb_score(smooth, period, phase_step=0.5)
+        if score > best[0]:
+            best = (score, float(period), off)
+    period = best[1]
+    _, offset = _comb_score(smooth, period)
+    return {"bpm": 60.0 * env_sr / period, "period": period, "offset": offset, "confidence": conf}
+
+
 def main():
     if len(sys.argv) != 3:
         print("Usage: analyze_beats.py <audio_wav_path> <measurements_json_path>", file=sys.stderr)
@@ -100,20 +154,22 @@ def main():
 
     x, sr = read_wav_mono(audio_path)
     flux, env_sr = onset_envelope(x, sr)
-    est = estimate_bpm(flux, env_sr)
+    grid = estimate_grid(x, flux, env_sr)
 
     with open(meas_path) as f:
         meas = json.load(f)
 
-    if est is None or est[2] < 0.08:
+    if grid is None:
+        silent = is_silent(x)
         meas["summary"]["beatGrid"] = None
-        note = "音声からビートを推定できませんでした（無音・リズム不明瞭）"
+        # 無音（画面収録で音が入っていない等）とリズム不明瞭を区別して判断層に渡す
+        meas["summary"]["beatGridReason"] = "silent" if silent else "unclear"
+        note = "音声が入っていない（無音）" if silent else "音声からビートを推定できませんでした（リズム不明瞭）"
         print(f"beats: {note}", file=sys.stderr)
     else:
-        bpm, period, conf = est
-        off = beat_phase(flux, period)
+        bpm, period, conf = grid["bpm"], grid["period"], grid["confidence"]
         interval = period / env_sr
-        first = off / env_sr
+        first = grid["offset"] / env_sr
         meas["summary"]["beatGrid"] = {
             "bpm": round(bpm, 1),
             "firstBeatSec": round(first, 3),

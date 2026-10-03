@@ -20,6 +20,7 @@ import {
 import { isAnalysisRunning } from './analysisJob.js';
 import { PRESETS, type JobContext } from './presets.js';
 import { runClaude, runClaudeAnchor, ClaudeAuthError, ClaudeRateLimitError } from './claudeRunner.js';
+import { judgeTurns } from './turnJudge.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const JOBS_DIR = path.resolve(__dirname, '../storage/analysis-jobs');
@@ -38,6 +39,9 @@ const JOB_MAX_RETRY = Number(process.env.JOB_MAX_RETRY ?? 3);
 // イベントの取り直し（refine_events.py）: 既定で無効（REFINE_EVENTS=1 で有効）。正解表で改善しなかったため（docs/salsa-knowledge/README.md 反映済み 8）
 const REFINE_EVENTS = process.env.REFINE_EVENTS === '1';
 const REFINE_BUDGET_SEC = Number(process.env.REFINE_BUDGET_SEC ?? 240);
+// ターンの判定（turn judge）: 既定で無効（TURN_JUDGE=1 で有効）。回る向き・回転数を一覧画像で Claude に読ませる（動画 1 本に 1 回）。
+// 正解表 4 本で向き 18/24 → 16/24 と下がったため出していない（docs/salsa-knowledge/README.md 反映済み 11）
+const TURN_JUDGE = process.env.TURN_JUDGE === '1';
 const RATE_LIMIT_BACKOFF_MS = 15 * 60 * 1000; // レート制限時の初回バックオフ（×retry回数で線形増）
 
 let busy = false;
@@ -179,6 +183,25 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
       } catch (e) {
         if (signal.aborted) throw e;
         console.warn(`[jobWorker] event refine skipped: ${e instanceof Error ? e.message.slice(-300) : e}`);
+      }
+    }
+    // ターンの回る向き・回転数を Claude に一覧画像で判定させ、自信 medium 以上なら CV の値を上書きする
+    // （CV は右回りを左回りと読む誤りが片寄って出る。docs/salsa-knowledge/README.md 反映済み 11）。
+    // 失敗・レート制限でも CV の値のまま続ける（レート制限なら後の裁定でも当たり、ジョブごと再試行される）
+    if (TURN_JUDGE && preset.useClaude && preset.cvSteps.some(s => s.script === 'analyze_pair.py') && existsSync(ctx.measurementsPath)) {
+      try {
+        const r = await judgeTurns({
+          pythonBin: PYTHON_BIN,
+          videoPath: ctx.videoPath,
+          tracksPath: ctx.measurementsPath.replace(/\.json$/, '.tracks.json'),
+          measurementsPath: ctx.measurementsPath,
+          workDir: path.join(outDir, 'turn_judge'),
+          signal,
+        });
+        if (r) console.log(`[jobWorker] turn judge: asked=${r.asked} claude=${Math.round(r.elapsedMs / 1000)}s ${r.merged}`);
+      } catch (e) {
+        if (signal.aborted) throw e;
+        console.warn(`[jobWorker] turn judge skipped: ${e instanceof Error ? e.message.slice(-300) : e}`);
       }
     }
     // ビート格子（ロードマップ③）: 音声を WAV 化して BPM・拍時刻を推定し、

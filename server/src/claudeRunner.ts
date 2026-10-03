@@ -104,6 +104,88 @@ export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise
   });
 }
 
+const TURN_JUDGE_PROMPT_PATH = path.resolve(__dirname, '../prompts/turn-judge-prompt.md');
+
+/** turn_judge.py strips が書く events.json の 1 件 */
+export interface TurnJudgeItem {
+  id: string; file: string; t: number; kind: 'turn' | 'cbl'; cvTurner: 'leader' | 'follower';
+  from: number; to: number; frames: number; cvRotations?: number | null;
+}
+
+export interface TurnJudgeRun {
+  /** Claude の答え（{events: [...]}）。読めなければ null */
+  judge: { events: unknown[] } | null;
+  elapsedMs: number;
+  raw: string;
+}
+
+/**
+ * ターンの判定: 場面ごとの一覧画像（turn_judge.py strips）を 1 回の呼び出しでまとめて見せ、
+ * 回った人・向き・回転数・自信を JSON で答えさせる（CLAUDE.md その9: 写真で分かる判断は Claude に聞く）。
+ * 呼び出しは動画 1 本につき 1 回。画像は Read で 1 枚ずつ読むので max-turns は場面数 + 余裕。
+ * レート制限は ClaudeRateLimitError、ログイン失効は ClaudeAuthError、それ以外の失敗は judge: null
+ */
+export function runClaudeTurnJudge(stripDir: string, items: TurnJudgeItem[], signal: AbortSignal): Promise<TurnJudgeRun> {
+  const listing = items.map(it =>
+    `- ${it.id}: \`${it.file}\` — ${it.kind === 'cbl' ? 'CBL（入れ替わり）で手が上がっていた' : 'ターン'}。` +
+    `CV の見立て: ${it.cvTurner === 'leader' ? 'リーダー（青枠）' : 'フォロワー（ピンク枠）'}が回る。` +
+    `${it.from.toFixed(2)}〜${it.to.toFixed(2)} 秒（${it.frames} コマ）`,
+  ).join('\n');
+  const promptText = `${readFileSync(TURN_JUDGE_PROMPT_PATH, 'utf-8')}\n\n## 場面の一覧（${items.length} 件）\n\n${listing}\n`;
+  const started = Date.now();
+  return new Promise((resolve, reject) => {
+    const proc = spawn(CLAUDE_BIN, [
+      '-p',
+      '--allowedTools', 'Read',
+      '--max-turns', String(items.length + 10),
+      '--output-format', 'json',
+    ], {
+      cwd: stripDir,
+      env: { ...process.env },
+      signal,
+      shell: process.platform === 'win32',
+    });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', d => { stdout += d.toString(); });
+    proc.stderr.on('data', d => { stderr += d.toString(); });
+    proc.stdin.on('error', () => { /* noop */ });
+    proc.stdin.write(promptText);
+    proc.stdin.end();
+    proc.on('error', err => reject(new ClaudeAuthError(`claude CLI を起動できません: ${err.message}`)));
+    proc.on('exit', code => {
+      const elapsedMs = Date.now() - started;
+      const combined = `${stdout}\n${stderr}`;
+      let resultText = '';
+      try {
+        resultText = (JSON.parse(stdout) as { result?: string }).result ?? '';
+      } catch { /* エンベロープが壊れている */ }
+      if (/rate limit|usage limit|overloaded/i.test(code === 0 ? resultText : combined) && !/"events"\s*:/.test(resultText)) {
+        reject(new ClaudeRateLimitError(`レート制限を検知しました。\n${tailOf(stdout, stderr)}`));
+        return;
+      }
+      if (code !== 0 && /not logged in|please log ?in|authentication|invalid api key/i.test(combined)) {
+        reject(new ClaudeAuthError(`Claude CLI の再ログインが必要です。\n${tailOf(stdout, stderr)}`));
+        return;
+      }
+      resolve({ judge: code === 0 ? parseJudge(resultText) : null, elapsedMs, raw: resultText || tailOf(stdout, stderr) });
+    });
+  });
+}
+
+/** 答えの文字列から {"events": [...]} を拾う（前後に説明文・コードブロックが付いていても読む） */
+export function parseJudge(text: string): { events: unknown[] } | null {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1)) as { events?: unknown };
+    return Array.isArray(parsed.events) ? { events: parsed.events } : null;
+  } catch {
+    return null;
+  }
+}
+
 export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSignal): Promise<ClaudeRunResult> {
   const promptText = `${readFileSync(PROMPT_PATH, 'utf-8')}\n\n---\n\n${specMarkdown}`;
   copyKnowledge(jobDir);

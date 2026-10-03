@@ -35,6 +35,9 @@ const MODEL_PATH = process.env.YOLO_MODEL_PATH
 const POLL_INTERVAL_MS = 15_000;
 const JOB_TIMEOUT_MS = Number(process.env.JOB_TIMEOUT_MS ?? 60 * 60 * 1000);
 const JOB_MAX_RETRY = Number(process.env.JOB_MAX_RETRY ?? 3);
+// イベントの取り直し（refine_events.py）: 既定で無効（REFINE_EVENTS=1 で有効）。正解表で改善しなかったため（docs/salsa-knowledge/README.md 反映済み 8）
+const REFINE_EVENTS = process.env.REFINE_EVENTS === '1';
+const REFINE_BUDGET_SEC = Number(process.env.REFINE_BUDGET_SEC ?? 240);
 const RATE_LIMIT_BACKOFF_MS = 15 * 60 * 1000; // レート制限時の初回バックオフ（×retry回数で線形増）
 
 let busy = false;
@@ -163,6 +166,20 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     for (const step of preset.cvSteps) {
       const scriptPath = path.resolve(__dirname, '../analysis', step.script);
       await runPython([scriptPath, ...step.args(ctx)], signal);
+    }
+    // 左右の入れ替わり（CBL）とターンの前後だけ 25〜30fps で骨格を取り直し、イベントの時刻・回転を決め直す
+    // （refine_events.py。10fps の入れ替わりは本当の通過から 0〜1 秒遅れて揺れ、無音の動画のカウントがずれる）。
+    // REFINE_EVENTS=1 のときだけ。追加時間は REFINE_BUDGET_SEC で打ち切る。失敗しても 10fps の値のまま続ける
+    if (REFINE_EVENTS && preset.cvSteps.some(s => s.script === 'analyze_pair.py') && existsSync(ctx.measurementsPath)) {
+      try {
+        await runPython([
+          path.resolve(__dirname, '../analysis/refine_events.py'),
+          ctx.videoPath, ctx.modelPath, ctx.measurementsPath, `--budget-sec=${REFINE_BUDGET_SEC}`,
+        ], signal);
+      } catch (e) {
+        if (signal.aborted) throw e;
+        console.warn(`[jobWorker] event refine skipped: ${e instanceof Error ? e.message.slice(-300) : e}`);
+      }
     }
     // ビート格子（ロードマップ③）: 音声を WAV 化して BPM・拍時刻を推定し、
     // measurements.json に beatGrid と各イベントの拍情報を書き加える。

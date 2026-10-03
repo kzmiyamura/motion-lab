@@ -43,8 +43,14 @@ def in_range(gt, t):
     return lo <= t <= hi
 
 
-def load_events(gt, stored):
+def load_events(gt, stored, events_dir=None, name=None):
     out = out_dir(gt)
+    if events_dir:
+        # 外から渡した events（refine_events.py で取り直した measurements 等）。<events_dir>/<名前>.json の summary.events
+        p = os.path.join(events_dir, f"{name}.json")
+        if os.path.exists(p):
+            m = json.load(open(p, encoding="utf-8"))
+            return [e for e in m["summary"]["events"] if in_range(gt, e["t"])], None
     if stored:
         m = json.load(open(os.path.join(out, "measurements.json"), encoding="utf-8"))
         return [e for e in m["summary"]["events"] if in_range(gt, e["t"])], None
@@ -149,8 +155,8 @@ def gt_side(cbl):
     return "left" if hx * py > 0 else "right"
 
 
-def evaluate(gt, stored, verbose):
-    preds, data = load_events(gt, stored)
+def evaluate(gt, stored, verbose, events_dir=None, name=None):
+    preds, data = load_events(gt, stored, events_dir, name)
     res = {"events": {}, "turnDir": Ratio(), "rotations": [], "spinTurns": [], "hold": {"leader": Ratio(), "both": Ratio()},
            "pass": {"depth": Ratio(), "side": Ratio(), "from": Ratio()}, "handRaise": Ratio()}
     log = []
@@ -273,6 +279,7 @@ def fmt(d):
 def main():
     ap_ = argparse.ArgumentParser()
     ap_.add_argument("--stored", action="store_true", help="保存済み measurements.json の events を採点する")
+    ap_.add_argument("--events-dir", help="<dir>/<正解表の名前>.json の summary.events を採点する（無い動画は tracks から）")
     ap_.add_argument("--json", help="指標を JSON で書き出す（前後比較用）")
     ap_.add_argument("--verbose", "-v", action="store_true", help="1件ずつの対応・見逃し・誤検出を出す")
     args = ap_.parse_args()
@@ -286,7 +293,7 @@ def main():
             print(f"  （解析出力が無いので飛ばす: {out_dir(gt)}）")
             report["videos"][name] = None
             continue
-        r = evaluate(gt, args.stored, args.verbose)
+        r = evaluate(gt, args.stored, args.verbose, args.events_dir, name)
         results.append(r)
         report["videos"][name] = to_dict(r)
         print(fmt(report["videos"][name]))

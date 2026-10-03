@@ -93,6 +93,9 @@ SWAP_BEAT = 4.25           # CV の入れ替わり時刻が来る、8 カウン�
 # 0.807 → 0.786、正解の CBL を覆う行の再現率は 0.90 → 0.97 / 0.83 → 0.83。
 # 4.0 は 2f4b6919 で行の一致 0.754、5.0（通過 = 3）は 581ef6a2 で 0.845 に落ち、3.0（通過 = 1）は両方で大きく
 # 落ちる（8 カウントの境目が入れ替わりの集まりの真ん中に来る）
+SWAP_BEAT_REFINED = 3.5    # refine_events.py が入れ替わりの時刻を通過の瞬間（隠れていた区間の真ん中）に取り直したとき。
+                           # 581ef6a2 で 2.0〜4.25 を振って 3.5 が最良（それでも 4.25 の 10fps より下。取り直しは既定で無効）
+REFINED_MIN_SHARE = 0.5    # CV の入れ替わりのうちこの割合以上が取り直し済み（tCoarse あり）なら SWAP_BEAT_REFINED を使う
 BPM_MIN = 150.0            # サルサとして数えるテンポの範囲（踊られるのは大半が 160〜220。video-analysis-cues.md §2.6）
 BPM_MAX = 250.0
 HALF_TEMPO = (75.0, 125.0)  # この範囲のテンポは 2 拍を 1 拍と数えた値（半分のテンポ）なので 2 倍にする
@@ -210,6 +213,24 @@ def swap_times(summary):
     return sorted(e["t"] for e in ev if isinstance(e, dict) and e.get("type") == "CBL" and _num(e.get("t")))
 
 
+def swap_beat_for(summary):
+    """CV の入れ替わりの時刻が来る拍。refine_events.py で取り直した（tCoarse がある）入れ替わりが多ければ
+    SWAP_BEAT_REFINED、そうでなければ 10fps の遅れ込みの SWAP_BEAT"""
+    ev = [e for e in (summary or {}).get("events") or []
+          if isinstance(e, dict) and e.get("type") == "CBL" and _num(e.get("t"))]
+    refined = sum(1 for e in ev if _num(e.get("tCoarse")))
+    return SWAP_BEAT_REFINED if ev and refined >= REFINED_MIN_SHARE * len(ev) else SWAP_BEAT
+
+
+def swap_times_any(summary):
+    """入れ替わりの時刻（取り直した時刻と元の 10fps の時刻の両方）。tracks.json の左右の入れ替わりと照らすのに使う"""
+    out = set(swap_times(summary))
+    for e in (summary or {}).get("events") or []:
+        if isinstance(e, dict) and e.get("type") == "CBL" and _num(e.get("tCoarse")):
+            out.add(e["tCoarse"])
+    return sorted(out)
+
+
 def turn_times(summary):
     """同じく女性のターンの時刻（周期の手がかりを増やすのに使う）"""
     ev = (summary or {}).get("events") or []
@@ -236,7 +257,7 @@ def swap_concentration(swaps, period, drift=0.0, span=1.0):
     return math.hypot(c, s), (math.atan2(s, c) / (2 * math.pi)) % 1
 
 
-def fit_grid_to_swaps(swaps, unit_guess, duration, turns=()):
+def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT):
     """CV の入れ替わり時刻に 8 カウントの格子を当てる。CBL なら入れ替わりは毎回 8 カウントの同じ所
     （On2 は 2 で女が男の横を通る）に来るので、周期を目安の ±SWAP_PERIOD_RANGE で振って位相が最も揃う周期を取る。
     周期（と揃っているかの判定）には女性のターン（turns）も足す。ターンも 8 カウントの決まった所で回るので
@@ -284,7 +305,7 @@ def fit_grid_to_swaps(swaps, unit_guess, duration, turns=()):
     if r_swap < SWAP_MIN_R:
         return None
     # 入れ替わりの平均位置が 8 カウントの SWAP_BEAT 拍目に来るように頭を決める
-    head0 = (mean - SWAP_BEAT / 8) % 1
+    head0 = (mean - swap_beat / 8) % 1
     return {"period": period, "drift": drift, "span": span, "head0": head0, "R": r_swap, "z": z}
 
 
@@ -326,27 +347,27 @@ def nearest_head(heads, t):
     return i if heads[i] - t < t - heads[i - 1] else i - 1
 
 
-def swap_cells(heads, swaps):
-    """各 8 カウントに CV の入れ替わりがあるか。入れ替わりは頭から SWAP_BEAT 拍目に来る想定なので、
+def swap_cells(heads, swaps, swap_beat=SWAP_BEAT):
+    """各 8 カウントに CV の入れ替わりがあるか。入れ替わりは頭から swap_beat 拍目に来る想定なので、
     そこから前後半周期（±4 拍）の入れ替わりをその 8 カウントのものとする"""
     has = [False] * len(heads)
     for s in swaps:
         for j in range(len(heads) - 1):
             b = (heads[j + 1] - heads[j]) / 8
-            c = heads[j] + SWAP_BEAT * b
+            c = heads[j] + swap_beat * b
             if c - 4 * b <= s < c + 4 * b:
                 has[j] = True
                 break
     return has
 
 
-def align_to_swaps(moves, heads, swaps):
+def align_to_swaps(moves, heads, swaps, swap_beat=SWAP_BEAT):
     """Claude の行（時刻順）を 8 カウントへ順番を保って割り当てる。各行はまず元の時刻の最寄りの頭が候補で、
     CBL 系の行が入れ替わりのある 8 カウントに、そうでない行が入れ替わりの無い 8 カウントに来るよう
     前後にずらしてよい（Claude の行の時刻が 1 行ぶんずれていることがあるため）。
     罰: ずらした分 × SWAP_SHIFT_WEIGHT、食い違い × SWAP_ALIGN_WEIGHT。同じ 8 カウントに 2 行 → まとめる"""
     n = len(heads)
-    has = swap_cells(heads, swaps)
+    has = swap_cells(heads, swaps, swap_beat)
     inf = float("inf")
     pref = [nearest_head(heads, m["start"]) for m in moves]
     span = [((heads[j + 1] - heads[j]) if j + 1 < n else (heads[j] - heads[j - 1])) for j in range(n)]
@@ -1038,7 +1059,7 @@ def clean_steps(steps):
 
 # ---------------------------------------------------------------- 本体
 
-def normalize(result, summary, duration=None, default_timing=None, tracks=None):
+def normalize(result, summary, duration=None, default_timing=None, tracks=None, swap_beat=None):
     """result（dict）の routine を整えて返す（result をその場で書き換える）。
     default_timing: Claude が on1/on2 を決めなかったときの数え方（None なら DEFAULT_TIMING）
     tracks: analyze_pair の tracks.json（主ペアの立ち位置を読む。None なら立ち位置と整合チェックは省く）"""
@@ -1059,6 +1080,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
     if duration is None or not _num(duration):
         duration = None
     swap_fit = None
+    sb = swap_beat if _num(swap_beat) else swap_beat_for(summary)
     if beats:
         period, beat, first = beats
         phase = best_phase(starts, period, [first + beat * k for k in range(8)])
@@ -1066,7 +1088,8 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
     else:
         guess = salsa_unit8(unit8_from_routine(moves)) or DEFAULT_UNIT8
         swaps = swap_times(summary)
-        swap_fit = fit_grid_to_swaps(swaps, guess, duration or (max(starts) + guess), turn_times(summary))
+        swap_fit = fit_grid_to_swaps(swaps, guess, duration or (max(starts) + guess), turn_times(summary),
+                                     swap_beat=sb)
         if swap_fit:
             period = swap_fit["period"]
             phase = (swap_fit["head0"] * period) % period
@@ -1087,7 +1110,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
         heads = [phase + k * period for k in range(k0, k1 + 1)]
 
     if swap_fit:
-        cells = align_to_swaps(moves, heads, swaps)
+        cells = align_to_swaps(moves, heads, swaps, sb)
     else:
         cells = [nearest_head(heads, m["start"]) for m in moves]
 
@@ -1122,7 +1145,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
     runs = pair_sides.settled_runs(pair_sides.follower_series(tracks)) if tracks else []
     if runs:
         crosses = pair_sides.crossings(runs)
-        for mv, sides in zip(out, move_sides(out, runs, crosses, beat, duration, swap_times(summary))):
+        for mv, sides in zip(out, move_sides(out, runs, crosses, beat, duration, swap_times_any(summary))):
             mv["sides"] = sides
     fixes = []
     for k, mv in enumerate(out):
@@ -1193,6 +1216,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
         routine["grid"]["z"] = round(swap_fit["z"], 2)
         if swap_fit["drift"]:
             routine["grid"]["driftCycles"] = round(swap_fit["drift"], 3)
+        routine["grid"]["swapBeat"] = sb
     # Claude が書いた bpm は残す。ここで決めた bpm（bpmSource あり）は毎回決め直す（周期が変わったら追従する）
     if not _num(routine.get("bpm")) or routine.get("bpm") <= 0 or routine.get("bpmSource"):
         routine["bpm"] = round(60 / beat)
@@ -1222,7 +1246,8 @@ def main():
     tracks_path = opts.get("tracks") or re.sub(r"\.json$", ".tracks.json", meas_path)
     tracks = pair_sides.load_tracks(tracks_path)
     before = len(((result.get("routine") or {}).get("rawMoves") or (result.get("routine") or {}).get("moves") or []))
-    normalize(result, summary, duration, default_timing, tracks)
+    sb = float(opts["swap-beat"]) if opts.get("swap-beat") else None   # 評価用の上書き
+    normalize(result, summary, duration, default_timing, tracks, sb)
     after = len(((result.get("routine") or {}).get("moves") or []))
     tmp = result_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

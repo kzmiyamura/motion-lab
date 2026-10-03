@@ -17,6 +17,10 @@
  *     … レポートは触らず、振付シート用の技ごとの画像（out/move_frames/）だけを作る
  *   node tools/backfill-report-frames.mjs --move-frames --normalize [<jobId> ...]
  *     … 先に routine を normalize_routine.py で整え（result.json と DB の result_json を更新）、それから画像を作る
+ *   node tools/backfill-report-frames.mjs --move-frames --refine --normalize [<jobId> ...]
+ *     … さらにその前に refine_events.py で入れ替わり・ターンの前後を 25〜30fps で取り直す
+ *       （measurements.json / tracks.json の events を書き換える。取り直し済み（summary.eventRefine あり）なら飛ばす。
+ *       YOLO を回すので重い。1 件ずつ）
  *   jobId 省略時は status=done の全ジョブ
  */
 import { spawnSync } from 'node:child_process';
@@ -42,6 +46,10 @@ const moveFrames = args.includes('--move-frames');
 const MOVE_SCRIPT = path.join(SERVER_DIR, 'analysis/make_move_frames.py');
 const normalize = args.includes('--normalize');
 const NORMALIZE_SCRIPT = path.join(SERVER_DIR, 'analysis/normalize_routine.py');
+const refine = args.includes('--refine');
+const REFINE_SCRIPT = path.join(SERVER_DIR, 'analysis/refine_events.py');
+const MODEL_PATH = process.env.YOLO_MODEL_PATH ?? path.join(SERVER_DIR, 'models/yolov8s-pose.pt');
+const REFINE_BUDGET_SEC = Number(process.env.REFINE_BUDGET_SEC ?? 240);
 const onlyIds = args.filter(a => !a.startsWith('--'));
 
 const db = new DatabaseSync(path.join(SERVER_DIR, 'data/motionlab.db'));
@@ -107,9 +115,25 @@ function backfillMoveFrames(targets) {
       continue;
     }
     if (dryRun) {
-      console.log(`${tag} would ${normalize ? 'normalize routine and ' : ''}make ${moves} move frames`);
+      console.log(`${tag} would ${refine ? 'refine events, ' : ''}${normalize ? 'normalize routine and ' : ''}make ${moves} move frames`);
       t.made++;
       continue;
+    }
+    if (refine) {
+      const measPath = path.join(outDir, 'measurements.json');
+      let refined = false;
+      try {
+        refined = Boolean(JSON.parse(readFileSync(measPath, 'utf-8'))?.summary?.eventRefine);
+      } catch { /* measurements.json が無い・壊れている */ }
+      if (refined) {
+        console.log(`${tag} refine: already refined`);
+      } else {
+        const r = spawnSync(PYTHON_BIN, [REFINE_SCRIPT, videoPath, MODEL_PATH, measPath, `--budget-sec=${REFINE_BUDGET_SEC}`],
+          { encoding: 'utf-8' });
+        const last = (r.stderr || r.error?.message || '').trim().split('\n').pop();
+        // 取り直しに失敗しても 10fps の値のまま続ける（jobWorker と同じ）
+        console.log(`${tag} refine${r.status !== 0 ? ' failed' : ''}: ${last}`);
+      }
     }
     if (normalize) {
       // jobWorker と同じ後処理（8カウントの格子に寄せる・まとめる・steps を付ける）。DB の result_json も揃える

@@ -3,11 +3,13 @@ import type { MotionClip, ArmSegment } from '../components/MocapFigure';
 import { NEUTRAL_HAND } from './armPose';
 import {
   L_THIGH, L_SHIN, L_UPARM, L_FOREARM, HIP_DX, SHO_DX, SHO_DY, LEG_MAX, SIDE_SIGN, HIPS_Y0, HEAD_Y,
+  TORSO_R, HAND_R,
 } from './rigDims';
 import {
   type Guide, type PairGuide, type Hold, buildGuide, buildPair, buildHolds, sampleAt, at, segAt,
   damp, clamp, PAIR_MIN, PAIR_MAX, ARM_REACH, HOLD_LAG,
 } from './coupleGuide';
+import { type Capsule, bodyCapsules, segSegDist, CLOSED_BACK_ALLOW } from './rigMetrics';
 import { measureArms, dumpArms } from './rigDebug';
 
 /**
@@ -50,7 +52,6 @@ function clampToArm(spine: THREE.Object3D, shoulder: THREE.Vector3, world: THREE
   const sign = Math.sign(shoulder.x) || 1;
   spine.worldToLocal(world);
   world.x = sign * clamp((world.x - shoulder.x) * sign, ARM_ACROSS, ARM_OUT) + shoulder.x;
-  world.z = Math.max(world.z, ARM_BACK_MIN);
   // 肩からの距離が腕の長さを超えたら、その肩へ寄せる。
   // 作業用は clampToArm 専用（tmp.ca）。以前は tmp.v を使っていて、呼び出し側が
   // tmp.v を的として渡す経路（フリーの腕・クローズドの手・背中支え）では
@@ -63,18 +64,56 @@ function clampToArm(spine: THREE.Object3D, shoulder: THREE.Vector3, world: THREE
   spine.localToWorld(world);
 }
 
+type ArmBase = { spine: THREE.Object3D; shoulder: THREE.Vector3 };
+/** clampToArm で動かない（＝その腕の届く範囲の中にある）か */
+function reachable(arms: ArmBase[], p: THREE.Vector3) {
+  for (const a of arms) {
+    cv.rc.copy(p);
+    clampToArm(a.spine, a.shoulder, cv.rc);
+    if (cv.rc.distanceToSquared(p) > 1e-6) return false;
+  }
+  return true;
+}
+
 /**
- * 手（腕IKの目標）を胴体の外へ押し出す。**体は空間を占有している**という当たり前を、
- * これまで誰も知らなかった。ホールド点は各自の「腕が届く箱」に丸めるだけだったので、
- * 肩と手の間に相手の胴体があっても素通りし、腕が体を貫通する／背中へ回り込む。
- *
- * 胴体は腰から肩までの垂直な円柱として扱う（軸は root の x/z）。
+ * 仕上げの検証。可動域へ丸めた（clampToArm）あとの点が、まだ誰かの体に入っていないかを
+ * 最後に確かめる。丸めは体を知らないので、それまでの回避を平気で打ち消す。
+ * 押し出した点が腕の届く範囲を外れるなら、「今の点 → 押し出した点」の線上で
+ * **届く範囲のうち一番外**（＝食い込みが最小）の点を二分探索で取る
  */
-export const CYL_R = 0.17;        // 胴体の半径[m]。肩幅 0.37 の内側に収まる程度
-export const CYL_R_SELF = 0.13;   // 自分の胴体は少し細く見る（脇を締める姿勢を殺さないため）
-// CBL の入れ替わり（prep/pass/close）の間だけ自胴を太く見る。
-// 体が回りながらすれ違うので、平時の 0.13 だと腕が自分の脇腹に埋まる
-const CYL_R_SELF_PASS = 0.165;
+function settleOutside(p: THREE.Vector3, bodies: Capsule[][], limbR: number, arms: ArmBase[]) {
+  cv.po.copy(p);
+  for (const caps of bodies) pushOutOfBody(cv.po, caps, limbR);
+  if (cv.po.distanceToSquared(p) < 1e-10) return;
+  if (reachable(arms, cv.po)) { p.copy(cv.po); return; }
+  cv.pa.copy(p);
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 12; i++) {
+    const m = (lo + hi) / 2;
+    cv.pm.lerpVectors(cv.pa, cv.po, m);
+    if (reachable(arms, cv.pm)) lo = m; else hi = m;
+  }
+  p.lerpVectors(cv.pa, cv.po, lo);
+}
+
+/**
+ * 当たり判定の余白[m]。見えている体の表面から、手・前腕の表面までこれだけ空ける。
+ *
+ * 体は**描画しているメッシュと同じカプセル**（rigMetrics.bodyCapsules: 胴・骨盤・首・頭・
+ * スカート）で見る。旧実装は「root 軸の垂直円柱・半径 0.17（自分は 0.13）・腰〜肩の高さ帯」で、
+ * 見た目（胴カプセル 0.135、胸郭はねじれ・左右シフトで root 軸からずれる）と別物だった上に、
+ * 手・前腕の太さを足していなかった。胸の上・首・頭・スカートは誰も見ていなかった。
+ */
+const MARGIN = 0.01;
+/**
+ * 自分の胴を「肩→手の線」が横切るかを見るときの半径。肩関節は胴の表面から 5cm しか
+ * 外に無いので、手の太さまで足すと肩自体が中に入って接線が引けない。線の判定だけは
+ * 胴そのもの + 3cm で見る（旧 CYL_R_SELF_PASS と同じ 0.165）。手そのものは
+ * 他と同じ式（胴 + 手 + 余白）で押し出す
+ */
+const SELF_ROUTE_R = TORSO_R + 0.03;
+/** back_support で手を置く、女の腰中点からの距離（旧 胴円柱 0.17 + 0.05） */
+const BACK_SUPPORT_R = 0.22;
 // フォロワーのニュートラルポジションは engine/armPose.ts（テストから測れるように分離した）
 // リーダーの手を置く肩甲骨。女の腰中点から見た極座標（半径[m]・真後ろから左へ回した角度）。
 // 半径は**見えている胴体（カプセル半径 0.135）の外側**に取る。内側だと手が女の体の
@@ -92,34 +131,63 @@ const CLOSED_SHO_FWD = 0.08;
 // - 右肩が前に出るので、女の背中へ回す右手が届きやすい
 // 回すのは胸郭（spine）だけ。骨盤は女を向いたままなので足運びは変わらない
 const CLOSED_YAW = 40 * (Math.PI / 180);
-function pushOutOfTorso(
-  p: THREE.Vector3, cx: number, cz: number, yLo: number, yHi: number, r: number,
+const cv = {
+  p: new THREE.Vector3(), q: new THREE.Vector3(),
+  po: new THREE.Vector3(), pa: new THREE.Vector3(), pm: new THREE.Vector3(), rc: new THREE.Vector3(),
+};
+
+/** 線分 a-b 上で p に最も近い点 */
+function closestOnSeg(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3, out: THREE.Vector3) {
+  const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+  const l2 = abx * abx + aby * aby + abz * abz;
+  const u = l2 > 1e-12
+    ? clamp(((p.x - a.x) * abx + (p.y - a.y) * aby + (p.z - a.z) * abz) / l2, 0, 1) : 0;
+  return out.set(a.x + abx * u, a.y + aby * u, a.z + abz * u);
+}
+
+/**
+ * 手（腕IKの目標）を体の外へ押し出す。**体は空間を占有している**。
+ * 半径は「体のカプセル + 手足の太さ（limbR）+ 余白」で、自分の体にも相手の体にも同じ式。
+ *
+ * 押し出しは**水平方向だけ**。上へは逃がさない（手を上へ逃がすと「手を挙げて見える」、
+ * back_support の却下と同じ失敗になる）。真上・真下に乗ったときは fallback の水平方向へ
+ */
+function pushOutOfBody(
+  p: THREE.Vector3, caps: Capsule[], limbR: number, fbx = 1, fbz = 0,
 ) {
-  if (p.y < yLo - 0.10 || p.y > yHi + 0.20) return;   // 胴体の高さから外れていれば無関係
-  const dx = p.x - cx, dz = p.z - cz;
-  const d = Math.hypot(dx, dz);
-  if (d >= r) return;
-  if (d < 1e-5) { p.x = cx + r; return; }             // 芯に乗ったら適当な向きへ逃がす
-  const k = r / d;
-  p.x = cx + dx * k;
-  p.z = cz + dz * k;
+  for (let pass = 0; pass < 2; pass++) {
+    for (const c of caps) {
+      const cp = closestOnSeg(p, c.a, c.b, cv.p);
+      const R = c.r + limbR + MARGIN;
+      const dx = p.x - cp.x, dy = p.y - cp.y, dz = p.z - cp.z;
+      if (dx * dx + dy * dy + dz * dz >= R * R) continue;
+      // 同じ高さのまま、横へ「斜めの距離が R になる」ところまで出す
+      const need = Math.sqrt(Math.max(0, R * R - dy * dy));
+      const h = Math.hypot(dx, dz);
+      if (h > 1e-5) { p.x = cp.x + (dx / h) * need; p.z = cp.z + (dz / h) * need; }
+      else { p.x = cp.x + fbx * need; p.z = cp.z + fbz * need; }
+    }
+  }
 }
 
 /**
  * 手の目標を、肩から**まっすぐ届く**位置へ回り込ませる。
  *
- * pushOutOfTorso だけでは足りない。目標を胴体の外へ出しても、肩と手を結ぶ線が
- * 相手の胴体を横切っていれば、そこへ腕を運ぶ IK は必ず体を貫通する
+ * pushOutOfBody だけでは足りない。目標を体の外へ出しても、肩と手を結ぶ線が
+ * 相手の体を横切っていれば、そこへ腕を運ぶ IK は必ず体を貫通する
  * （端点が2つとも外にあることは、線分が外にあることを意味しない）。
  *
- * 横切っていたら、肩から円柱への**接線**の方向へ目標を寄せる。接線上なら
- * 肩から手までが胴体をかすめるだけで、中を通らない。
+ * 横切っていたら（肩→手の線分とカプセルの芯の距離が r 未満）、芯の最近点を通る
+ * 垂直な円柱とみなして、肩からの**接線**の方向へ目標を寄せる。
  */
-function routeAroundTorso(
-  p: THREE.Vector3, sx: number, sz: number, cx: number, cz: number,
-  yLo: number, yHi: number, r: number,
+function routeAroundBody(p: THREE.Vector3, sh: THREE.Vector3, c: Capsule, r: number) {
+  if (segSegDist(sh, p, c.a, c.b, cv.p, cv.q) >= r) return;
+  routeAroundCyl(p, sh.x, sh.z, cv.q.x, cv.q.z, r);
+}
+
+function routeAroundCyl(
+  p: THREE.Vector3, sx: number, sz: number, cx: number, cz: number, r: number,
 ) {
-  if (p.y < yLo - 0.10 || p.y > yHi + 0.20) return;
   const dx = cx - sx, dz = cz - sz;
   const d = Math.hypot(dx, dz);
   if (d <= r + 1e-4) return;                    // 肩が胴体の中。ここでは救えない
@@ -143,7 +211,9 @@ function routeAroundTorso(
 }
 
 // 肩の可動域。肘が裏返る領域（背中側・体を横切る側）へ目標が来ないよう先に丸める
-const ARM_BACK_MIN = -0.04;  // これより後ろへは手を出さない[m]。胸の面より奥へは入れない
+// 手の前後（旧 ARM_BACK_MIN = -0.04「胸の面より奥へは入れない」）は丸めない。
+// 箱の面は体の形を知らないので、通り抜けで2人が横に並ぶと両者の「胸の前」が交わらず、
+// つないだ手が離れていた。手が自分の体に入らないことは胴のカプセル（pushOutOfBody）が受け持つ
 const ARM_ACROSS = -0.20;    // 体の反対側へ回り込める量[m]
 const ARM_OUT = 0.62;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -461,6 +531,9 @@ export class CoupleSolver {
     // （肩の位置を手で展開すると、ねじれ・左右シフトのぶんだけ必ずずれる）
     rigs[0].root.updateMatrixWorld(true);
     rigs[1].root.updateMatrixWorld(true);
+    // 2人の体（胴・骨盤・首・頭・スカート）。腕は体を動かさないので、このフレームはこれで固定
+    const bodies = [bodyCapsules(rigs[0], 0), bodyCapsules(rigs[1], 1)];
+    const torsoOf = (d: number) => bodies[d][0];   // bodyCapsules の先頭は胴
 
     // ── レイヤー3: 接続。つないだ手は2人で共有する1点へ運ぶ。
     // 目標生成は armTimeline（オフライン確定済みの台本）を再生する。旧クリップのみ
@@ -567,34 +640,24 @@ export class CoupleSolver {
       rigs[1].root.updateMatrixWorld(true);
       for (let it = 0; it < 3; it++) {
         for (let d = 0; d < 2; d++) {
-          const rig = rigs[d], other = rigs[1 - d];
-          const yLo = rig.root.position.y + rig.hips.position.y;
-          // 入れ替わり中は自胴を太めに見る（脇を締めた平時の構えは 0.13 のまま残す）
-          const selfR = passing ? CYL_R_SELF_PASS : CYL_R_SELF;
-          pushOutOfTorso(tmp.hold, rig.root.position.x, rig.root.position.z,
-            yLo, yLo + SHO_DY, CYL_R);
-          // 「肩から手までの線が胴体を横切らない」位置へ回り込ませる。
-          // 相手の胴体だけでなく**自分の胴体**にも当てる（実測: つなぎ腕の前腕が
+          const rig = rigs[d];
+          // 手そのものを体の外へ（自分の体。相手の体は相手の番で押す）
+          pushOutOfBody(tmp.hold, bodies[d], HAND_R);
+          // 「肩から手までの線が体を横切らない」位置へ回り込ませる。
+          // 相手の体だけでなく**自分の胴**にも当てる（実測: つなぎ腕の前腕が
           // 自胴へ 4cm 食い込んでいた）
-          const oLo = other.root.position.y + other.hips.position.y;
           tmp.sh.copy(rig.shldr[linked[d]!].position);
           rig.spine.localToWorld(tmp.sh);
-          routeAroundTorso(tmp.hold, tmp.sh.x, tmp.sh.z,
-            other.root.position.x, other.root.position.z,
-            oLo, oLo + SHO_DY, CYL_R);
-          routeAroundTorso(tmp.hold, tmp.sh.x, tmp.sh.z,
-            rig.root.position.x, rig.root.position.z,
-            yLo, yLo + SHO_DY, selfR);
-          // 入れ替わりの間は肩→手の線だけでなく**手そのもの**も自胴の外へ出す。
-          // 体が回りながら相手とすれ違うので、線分は胴を横切らないのに
-          // 手だけが自分の脇腹に入り込む姿勢が作れてしまう
-          if (passing) {
-            pushOutOfTorso(tmp.hold, rig.root.position.x, rig.root.position.z,
-              yLo, yLo + SHO_DY, selfR);
-          }
+          for (const c of bodies[1 - d]) routeAroundBody(tmp.hold, tmp.sh, c, c.r + HAND_R + MARGIN);
+          routeAroundBody(tmp.hold, tmp.sh, torsoOf(d), SELF_ROUTE_R);
           clampToArm(rig.spine, rig.shldr[linked[d]!].position, tmp.hold);
         }
       }
+      // 最後に丸めたのは clampToArm（体を知らない）なので、体の外にいるかを検証して仕上げる
+      settleOutside(tmp.hold, bodies, HAND_R, [
+        { spine: rigs[0].spine, shoulder: rigs[0].shldr[linked[0]!].position },
+        { spine: rigs[1].spine, shoulder: rigs[1].shldr[linked[1]!].position },
+      ]);
       holdPos.current.copy(tmp.hold);
 
       for (let d = 0; d < 2; d++) {
@@ -630,9 +693,9 @@ export class CoupleSolver {
       const yLo = fRoot.y + rigs[1].hips.position.y;
       // フォロワーの背面（前方の逆）× 胴体半径の少し外、胸郭の高さ
       tmp.v.set(
-        fRoot.x - Math.sin(fy) * (CYL_R + 0.05),
+        fRoot.x - Math.sin(fy) * BACK_SUPPORT_R,
         yLo + SHO_DY * 0.6,
-        fRoot.z - Math.cos(fy) * (CYL_R + 0.05),
+        fRoot.z - Math.cos(fy) * BACK_SUPPORT_R,
       );
       clampToArm(rig.spine, rig.shldr[k].position, tmp.v);
       rig.spine.worldToLocal(tmp.v);
@@ -655,24 +718,24 @@ export class CoupleSolver {
         rig.shldr[k].position.set(
           sign * SHO_DX, SHO_DY, damp(rig.shldr[k].position.z, fwd, 0.25),
         );
-        // 相手の胴体を避ける。クローズドは腰の間隔が 0.37m しかないので、
-        // 体の前 0.30m に置くニュートラルの手は**そのままだと相手の胸に 10cm めり込む**
-        //（相手の胴半径 0.17 → 表面は自分の中心から 0.20m）。
-        // リーダーの背中へ回す手は「相手の体を回り込む」のが目的なので避けさせない
+        // 相手の体を避ける。クローズドは腰の間隔が 0.45m しかないので、
+        // 体の前 0.30m に置くニュートラルの手は**そのままだと相手の胸にめり込む**。
+        // リーダーの背中へ回す手は「相手の体を回り込む」のが目的なので回り込ませないが、
+        // 触れている（≤1cm）より深くは入れない
         if (avoid) {
-          const other = rigs[1 - d];
-          const oLo = other.root.position.y + other.hips.position.y;
-          pushOutOfTorso(target, other.root.position.x, other.root.position.z,
-            oLo, oLo + SHO_DY, CYL_R);
+          pushOutOfBody(target, bodies[1 - d], HAND_R);
           tmp.sh.copy(rig.shldr[k].position);
           rig.spine.localToWorld(tmp.sh);
-          routeAroundTorso(target, tmp.sh.x, tmp.sh.z,
-            other.root.position.x, other.root.position.z, oLo, oLo + SHO_DY, CYL_R);
-          const yLo = rig.root.position.y + rig.hips.position.y;
-          pushOutOfTorso(target, rig.root.position.x, rig.root.position.z,
-            yLo, yLo + SHO_DY, CYL_R_SELF);
+          for (const c of bodies[1 - d]) routeAroundBody(target, tmp.sh, c, c.r + HAND_R + MARGIN);
+          pushOutOfBody(target, bodies[d], HAND_R);
+        } else {
+          pushOutOfBody(target, bodies[1 - d], HAND_R - CLOSED_BACK_ALLOW - MARGIN);
         }
         clampToArm(rig.spine, rig.shldr[k].position, target);
+        if (avoid) {
+          settleOutside(target, [bodies[1 - d], bodies[d]], HAND_R,
+            [{ spine: rig.spine, shoulder: rig.shldr[k].position }]);
+        }
         rig.spine.worldToLocal(target);
         const ty = Math.min(target.y - rig.shldr[k].position.y, 0);   // 肩より上へは上げない
         armPole(sign, ty, tmp.pl);
@@ -781,16 +844,13 @@ export class CoupleSolver {
         // また胴を横切る（実測: 前腕の自胴めり込みが 12cm のまま残った）
         clampToArm(rig.spine, sh.position, tmp.v);
         for (let o = 0; o < 2; o++) {
-          const or_ = rigs[o];
-          const yLo = or_.root.position.y + or_.hips.position.y;
-          const r = o === d ? (passing ? CYL_R_SELF_PASS : CYL_R_SELF) : CYL_R;
-          pushOutOfTorso(tmp.v, or_.root.position.x, or_.root.position.z,
-            yLo, yLo + SHO_DY, r);
+          pushOutOfBody(tmp.v, bodies[o], HAND_R);
           // 自分の胴体にも適用する。目標を外へ出すだけでは、肩→手の線分が
           // 自分の胴を横切るケース（実測: 前腕が自胴へ 12cm 食い込む）を防げない
-          routeAroundTorso(tmp.v, tmp.sh.x, tmp.sh.z,
-            or_.root.position.x, or_.root.position.z, yLo, yLo + SHO_DY, r);
+          if (o === d) routeAroundBody(tmp.v, tmp.sh, torsoOf(d), SELF_ROUTE_R);
+          else for (const c of bodies[o]) routeAroundBody(tmp.v, tmp.sh, c, c.r + HAND_R + MARGIN);
         }
+        settleOutside(tmp.v, bodies, HAND_R, [{ spine: rig.spine, shoulder: sh.position }]);
         rig.spine.worldToLocal(tmp.v);
         const ty = tmp.v.y - sh.position.y;
         armPole(sign, ty, tmp.pl);

@@ -83,12 +83,12 @@
   "frames": 678,
   "pen": {
    "armPartner": {
-    "rate": 0.056,
-    "max": 3.5,
-    "p95": 2.3
+    "rate": 0.0531,
+    "max": 3.2,
+    "p95": 2.1
    },
    "armSelf": {
-    "rate": 0.2625,
+    "rate": 0.2655,
     "max": 5,
     "p95": 4.9
    },
@@ -122,11 +122,11 @@
    },
    "humeralTwist": {
     "rate": 0.0018,
-    "max": 69
+    "max": 68
    },
    "elbow": {
-    "rate": 0.0258,
-    "max": 10.2
+    "rate": 0.0225,
+    "max": 10.6
    },
    "hipFlex": {
     "rate": 0,
@@ -157,18 +157,18 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.8
+  "holdGapMax": 33.6
  },
  "routine-on1-open-170": {
   "frames": 848,
   "pen": {
    "armPartner": {
-    "rate": 0.0472,
+    "rate": 0.0436,
     "max": 3.2,
-    "p95": 1.8
+    "p95": 1.6
    },
    "armSelf": {
-    "rate": 0.2087,
+    "rate": 0.2134,
     "max": 5,
     "p95": 4.9
    },
@@ -202,11 +202,11 @@
    },
    "humeralTwist": {
     "rate": 0.0021,
-    "max": 68
+    "max": 66.9
    },
    "elbow": {
-    "rate": 0.0206,
-    "max": 10.2
+    "rate": 0.0183,
+    "max": 10.6
    },
    "hipFlex": {
     "rate": 0,
@@ -237,18 +237,18 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.8
+  "holdGapMax": 33.6
  },
  "routine-on1-open-200": {
   "frames": 720,
   "pen": {
    "armPartner": {
-    "rate": 0.0431,
+    "rate": 0.0417,
     "max": 3.1,
-    "p95": 1.8
+    "p95": 1.7
    },
    "armSelf": {
-    "rate": 0.2083,
+    "rate": 0.2125,
     "max": 5,
     "p95": 4.9
    },
@@ -282,11 +282,11 @@
    },
    "humeralTwist": {
     "rate": 0.0017,
-    "max": 68
+    "max": 66.9
    },
    "elbow": {
-    "rate": 0.0208,
-    "max": 10.1
+    "rate": 0.0181,
+    "max": 10.5
    },
    "hipFlex": {
     "rate": 0,
@@ -317,7 +317,7 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.7
+  "holdGapMax": 33.6
  },
  "basic-on1-closed": {
   "frames": 170,
@@ -403,13 +403,13 @@
   "frames": 678,
   "pen": {
    "armPartner": {
-    "rate": 0.0959,
-    "max": 14.9,
-    "p95": 3
+    "rate": 0.0929,
+    "max": 4.9,
+    "p95": 2.9
    },
    "armSelf": {
-    "rate": 0.2611,
-    "max": 5,
+    "rate": 0.2655,
+    "max": 8.5,
     "p95": 4.9
    },
    "legPartner": {
@@ -441,12 +441,12 @@
     "max": 0
    },
    "humeralTwist": {
-    "rate": 0.0018,
-    "max": 75.6
+    "rate": 0.0033,
+    "max": 81.3
    },
    "elbow": {
-    "rate": 0.0254,
-    "max": 10.2
+    "rate": 0.0221,
+    "max": 10.6
    },
    "hipFlex": {
     "rate": 0,
@@ -477,19 +477,19 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.8
+  "holdGapMax": 33.6
  },
  "routine-on1-closed-170": {
   "frames": 848,
   "pen": {
    "armPartner": {
-    "rate": 0.0955,
-    "max": 14.9,
-    "p95": 3
+    "rate": 0.0896,
+    "max": 5.6,
+    "p95": 2.9
    },
    "armSelf": {
-    "rate": 0.2099,
-    "max": 9.8,
+    "rate": 0.2158,
+    "max": 13.1,
     "p95": 4.9
    },
    "legPartner": {
@@ -513,20 +513,20 @@
     "max": 0
    },
    "shoulderCross": {
-    "rate": 0,
-    "max": 0
+    "rate": 0.0003,
+    "max": 9.1
    },
    "shoulderForbidden": {
     "rate": 0,
     "max": 0
    },
    "humeralTwist": {
-    "rate": 0.0018,
-    "max": 88.4
+    "rate": 0.0029,
+    "max": 107.1
    },
    "elbow": {
-    "rate": 0.0206,
-    "max": 10.2
+    "rate": 0.0183,
+    "max": 10.6
    },
    "hipFlex": {
     "rate": 0,
@@ -557,19 +557,19 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.8
+  "holdGapMax": 33.6
  },
  "routine-on1-closed-200": {
   "frames": 720,
   "pen": {
    "armPartner": {
-    "rate": 0.0972,
-    "max": 15,
-    "p95": 3
+    "rate": 0.0917,
+    "max": 5.3,
+    "p95": 2.9
    },
    "armSelf": {
-    "rate": 0.2097,
-    "max": 9.8,
+    "rate": 0.2153,
+    "max": 13.3,
     "p95": 4.9
    },
    "legPartner": {
@@ -593,20 +593,20 @@
     "max": 0
    },
    "shoulderCross": {
-    "rate": 0,
-    "max": 0
+    "rate": 0.0003,
+    "max": 9.4
    },
    "shoulderForbidden": {
     "rate": 0,
     "max": 0
    },
    "humeralTwist": {
-    "rate": 0.0017,
-    "max": 88.4
+    "rate": 0.0031,
+    "max": 107.1
    },
    "elbow": {
-    "rate": 0.0208,
-    "max": 10.1
+    "rate": 0.0181,
+    "max": 10.5
    },
    "hipFlex": {
     "rate": 0,
@@ -637,7 +637,7 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.7
+  "holdGapMax": 33.6
  },
  "basic-on2-open": {
   "frames": 170,
@@ -723,14 +723,14 @@
   "frames": 678,
   "pen": {
    "armPartner": {
-    "rate": 0.0516,
+    "rate": 0.0531,
     "max": 3.2,
-    "p95": 2.1
+    "p95": 2.2
    },
    "armSelf": {
-    "rate": 0.1962,
-    "max": 12.6,
-    "p95": 5.1
+    "rate": 0.2566,
+    "max": 6.9,
+    "p95": 5
    },
    "legPartner": {
     "rate": 0.031,
@@ -753,20 +753,20 @@
     "max": 0
    },
    "shoulderCross": {
-    "rate": 0,
-    "max": 0
+    "rate": 0.0007,
+    "max": 5.4
    },
    "shoulderForbidden": {
     "rate": 0,
     "max": 0
    },
    "humeralTwist": {
-    "rate": 0.0015,
-    "max": 63.7
+    "rate": 0.0011,
+    "max": 81.2
    },
    "elbow": {
-    "rate": 0.0188,
-    "max": 10.2
+    "rate": 0.0225,
+    "max": 10.5
    },
    "hipFlex": {
     "rate": 0,
@@ -797,19 +797,19 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.9
+  "holdGapMax": 34.1
  },
  "routine-on2-open-170": {
   "frames": 848,
   "pen": {
    "armPartner": {
-    "rate": 0.0472,
+    "rate": 0.0436,
     "max": 3.2,
-    "p95": 1.8
+    "p95": 1.6
    },
    "armSelf": {
     "rate": 0.2111,
-    "max": 5.5,
+    "max": 5.1,
     "p95": 5
    },
    "legPartner": {
@@ -842,11 +842,11 @@
    },
    "humeralTwist": {
     "rate": 0.0021,
-    "max": 70.5
+    "max": 66.4
    },
    "elbow": {
-    "rate": 0.0206,
-    "max": 10.2
+    "rate": 0.0183,
+    "max": 10.5
    },
    "hipFlex": {
     "rate": 0,
@@ -877,19 +877,19 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.9
+  "holdGapMax": 34.1
  },
  "routine-on2-open-200": {
   "frames": 720,
   "pen": {
    "armPartner": {
-    "rate": 0.0431,
+    "rate": 0.0417,
     "max": 3.1,
-    "p95": 1.8
+    "p95": 1.7
    },
    "armSelf": {
-    "rate": 0.2083,
-    "max": 5.4,
+    "rate": 0.2125,
+    "max": 5,
     "p95": 5
    },
    "legPartner": {
@@ -922,11 +922,11 @@
    },
    "humeralTwist": {
     "rate": 0.0017,
-    "max": 70.3
+    "max": 66.4
    },
    "elbow": {
-    "rate": 0.0208,
-    "max": 10.1
+    "rate": 0.0181,
+    "max": 10.4
    },
    "hipFlex": {
     "rate": 0,
@@ -957,7 +957,7 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.8
+  "holdGapMax": 34.1
  },
  "basic-on2-closed": {
   "frames": 170,
@@ -1043,14 +1043,14 @@
   "frames": 678,
   "pen": {
    "armPartner": {
-    "rate": 0.1667,
-    "max": 15.8,
-    "p95": 6.5
+    "rate": 0.1195,
+    "max": 7.8,
+    "p95": 4
    },
    "armSelf": {
-    "rate": 0.2463,
-    "max": 15.1,
-    "p95": 9.4
+    "rate": 0.2714,
+    "max": 16.9,
+    "p95": 13.9
    },
    "legPartner": {
     "rate": 0.6342,
@@ -1069,24 +1069,24 @@
     "max": 0
    },
    "shoulderExt": {
-    "rate": 0,
-    "max": 0
+    "rate": 0.0007,
+    "max": 2.3
    },
    "shoulderCross": {
-    "rate": 0.0229,
-    "max": 18.2
+    "rate": 0.0254,
+    "max": 26.8
    },
    "shoulderForbidden": {
     "rate": 0,
     "max": 0
    },
    "humeralTwist": {
-    "rate": 0.035,
-    "max": 78.7
+    "rate": 0.0402,
+    "max": 101.5
    },
    "elbow": {
-    "rate": 0.0129,
-    "max": 10.2
+    "rate": 0.0111,
+    "max": 10.5
    },
    "hipFlex": {
     "rate": 0,
@@ -1117,19 +1117,19 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.9
+  "holdGapMax": 39.5
  },
  "routine-on2-closed-170": {
   "frames": 848,
   "pen": {
    "armPartner": {
-    "rate": 0.0943,
-    "max": 14.9,
-    "p95": 3
+    "rate": 0.0884,
+    "max": 5.7,
+    "p95": 2.9
    },
    "armSelf": {
     "rate": 0.2134,
-    "max": 10.2,
+    "max": 9.5,
     "p95": 5
    },
    "legPartner": {
@@ -1153,20 +1153,20 @@
     "max": 0
    },
    "shoulderCross": {
-    "rate": 0,
-    "max": 0
+    "rate": 0.0003,
+    "max": 2.9
    },
    "shoulderForbidden": {
     "rate": 0,
     "max": 0
    },
    "humeralTwist": {
-    "rate": 0.0024,
-    "max": 108
+    "rate": 0.0029,
+    "max": 104.4
    },
    "elbow": {
-    "rate": 0.0206,
-    "max": 10.2
+    "rate": 0.0183,
+    "max": 10.5
    },
    "hipFlex": {
     "rate": 0,
@@ -1197,19 +1197,19 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.9
+  "holdGapMax": 34.1
  },
  "routine-on2-closed-200": {
   "frames": 720,
   "pen": {
    "armPartner": {
-    "rate": 0.0931,
-    "max": 15,
+    "rate": 0.0875,
+    "max": 5.3,
     "p95": 2.9
    },
    "armSelf": {
-    "rate": 0.2125,
-    "max": 10.1,
+    "rate": 0.2153,
+    "max": 9.5,
     "p95": 5
    },
    "legPartner": {
@@ -1233,20 +1233,20 @@
     "max": 0
    },
    "shoulderCross": {
-    "rate": 0,
-    "max": 0
+    "rate": 0.0003,
+    "max": 4.1
    },
    "shoulderForbidden": {
     "rate": 0,
     "max": 0
    },
    "humeralTwist": {
-    "rate": 0.0021,
-    "max": 108.2
+    "rate": 0.0031,
+    "max": 104.5
    },
    "elbow": {
-    "rate": 0.0208,
-    "max": 10.1
+    "rate": 0.0181,
+    "max": 10.4
    },
    "hipFlex": {
     "rate": 0,
@@ -1277,20 +1277,20 @@
     "max": 0
    }
   },
-  "holdGapMax": 33.8
+  "holdGapMax": 34.1
  },
  "lift3d-2fda2815": {
   "frames": 1783,
   "pen": {
    "armPartner": {
-    "rate": 0.1088,
-    "max": 15.6,
-    "p95": 6.5
+    "rate": 0.0673,
+    "max": 17.6,
+    "p95": 4.5
    },
    "armSelf": {
-    "rate": 0.4689,
-    "max": 18.6,
-    "p95": 16.1
+    "rate": 0.3864,
+    "max": 18.7,
+    "p95": 14.7
    },
    "legPartner": {
     "rate": 0,
@@ -1305,28 +1305,28 @@
   },
   "limits": {
    "shoulderFlex": {
-    "rate": 0.0001,
-    "max": 8.1
+    "rate": 0.0003,
+    "max": 5.8
    },
    "shoulderExt": {
-    "rate": 0.0027,
-    "max": 24.8
+    "rate": 0.009,
+    "max": 38.8
    },
    "shoulderCross": {
-    "rate": 0.047,
-    "max": 32.3
+    "rate": 0.0451,
+    "max": 37.4
    },
    "shoulderForbidden": {
-    "rate": 0.0007,
-    "max": 59.7
+    "rate": 0.0077,
+    "max": 57.3
    },
    "humeralTwist": {
-    "rate": 0.136,
-    "max": 109.9
+    "rate": 0.1563,
+    "max": 109.8
    },
    "elbow": {
-    "rate": 0.022,
-    "max": 21.2
+    "rate": 0.0193,
+    "max": 17.5
    },
    "hipFlex": {
     "rate": 0,
@@ -1357,20 +1357,20 @@
     "max": 0
    }
   },
-  "holdGapMax": 61
+  "holdGapMax": 63.9
  },
  "lift3d-8c312c6d": {
   "frames": 2167,
   "pen": {
    "armPartner": {
-    "rate": 0.1048,
-    "max": 17.9,
-    "p95": 6
+    "rate": 0.0452,
+    "max": 17.8,
+    "p95": 1.8
    },
    "armSelf": {
-    "rate": 0.3636,
+    "rate": 0.281,
     "max": 18.4,
-    "p95": 12.9
+    "p95": 9.5
    },
    "legPartner": {
     "rate": 0.0023,
@@ -1385,28 +1385,28 @@
   },
   "limits": {
    "shoulderFlex": {
-    "rate": 0.0008,
-    "max": 8.6
+    "rate": 0.0003,
+    "max": 5.6
    },
    "shoulderExt": {
-    "rate": 0.0091,
-    "max": 33.9
+    "rate": 0.0162,
+    "max": 34.8
    },
    "shoulderCross": {
-    "rate": 0.0307,
-    "max": 42.7
+    "rate": 0.0264,
+    "max": 36.2
    },
    "shoulderForbidden": {
-    "rate": 0.0046,
-    "max": 59.7
+    "rate": 0.0185,
+    "max": 58.4
    },
    "humeralTwist": {
-    "rate": 0.1168,
-    "max": 109.4
+    "rate": 0.1256,
+    "max": 109.7
    },
    "elbow": {
-    "rate": 0.0145,
-    "max": 20.2
+    "rate": 0.0209,
+    "max": 12.7
    },
    "hipFlex": {
     "rate": 0,
@@ -1437,20 +1437,20 @@
     "max": 0.8
    }
   },
-  "holdGapMax": 77.6
+  "holdGapMax": 85.9
  },
  "lift3d-bb0efcb9": {
   "frames": 2430,
   "pen": {
    "armPartner": {
-    "rate": 0.084,
-    "max": 17.9,
-    "p95": 4.2
+    "rate": 0.051,
+    "max": 11.1,
+    "p95": 2.1
    },
    "armSelf": {
-    "rate": 0.3778,
+    "rate": 0.2864,
     "max": 18.6,
-    "p95": 14.4
+    "p95": 11.2
    },
    "legPartner": {
     "rate": 0.0012,
@@ -1465,28 +1465,28 @@
   },
   "limits": {
    "shoulderFlex": {
-    "rate": 0.0005,
-    "max": 4
+    "rate": 0.0001,
+    "max": 3.1
    },
    "shoulderExt": {
-    "rate": 0.0117,
-    "max": 38.2
+    "rate": 0.0245,
+    "max": 34.2
    },
    "shoulderCross": {
-    "rate": 0.0264,
-    "max": 33.4
+    "rate": 0.0261,
+    "max": 43.5
    },
    "shoulderForbidden": {
-    "rate": 0.0046,
-    "max": 60
+    "rate": 0.0133,
+    "max": 57.3
    },
    "humeralTwist": {
-    "rate": 0.1179,
-    "max": 109.2
+    "rate": 0.132,
+    "max": 110
    },
    "elbow": {
-    "rate": 0.02,
-    "max": 20.6
+    "rate": 0.0222,
+    "max": 24.1
    },
    "hipFlex": {
     "rate": 0,
@@ -1517,6 +1517,6 @@
     "max": 0
    }
   },
-  "holdGapMax": 66.6
+  "holdGapMax": 66.8
  }
 }

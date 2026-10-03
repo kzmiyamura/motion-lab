@@ -50,11 +50,10 @@ export function wristWorld(rig: Rig, k: number, out = v3()) {
 }
 
 /**
- * 1人ぶんの体をカプセルの列にする。ワールド行列は呼び出し側で確定させておくこと
- * （rig.root.updateMatrixWorld(true)）。
- * @param dress スカートを持つか（フォロワー）
+ * 胴・骨盤・首・頭（＋スカート）だけ。手足が避けるべき「体」。**先頭は必ず胴**。
+ * CoupleSolver の当たり判定もこれを使う（見えている体 = 当たる体）
  */
-export function capsules(rig: Rig, owner: 0 | 1, dress = owner === 1): Capsule[] {
+export function bodyCapsules(rig: Rig, owner: 0 | 1, dress = owner === 1): Capsule[] {
   const out: Capsule[] = [
     cap(rig.spine, TORSO_Y - TORSO_LEN / 2, TORSO_Y + TORSO_LEN / 2, TORSO_R, 'torso', owner, -1),
     cap(rig.hips, -PELVIS_LEN / 2, PELVIS_LEN / 2, PELVIS_R, 'pelvis', owner, -1),
@@ -62,6 +61,16 @@ export function capsules(rig: Rig, owner: 0 | 1, dress = owner === 1): Capsule[]
     cap(rig.head, 0, 0, HEAD_R, 'head', owner, -1),
   ];
   if (dress) for (const [a, b, r] of SKIRT_CAPS) out.push(cap(rig.hips, a, b, r, 'skirt', owner, -1));
+  return out;
+}
+
+/**
+ * 1人ぶんの体と手足をカプセルの列にする。ワールド行列は呼び出し側で確定させておくこと
+ * （rig.root.updateMatrixWorld(true)）。
+ * @param dress スカートを持つか（フォロワー）
+ */
+export function capsules(rig: Rig, owner: 0 | 1, dress = owner === 1): Capsule[] {
+  const out = bodyCapsules(rig, owner, dress);
   for (const k of [0, 1] as const) {
     out.push(cap(rig.shldr[k], 0, -L_UPARM, UPARM_R, 'upperarm', owner, k));
     out.push(cap(rig.elbow[k], 0, -L_FOREARM, FOREARM_R, 'forearm', owner, k));

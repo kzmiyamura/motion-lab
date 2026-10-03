@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { L_FOREARM, SHO_DY, SIDE_SIGN } from './rigDims';
+import { L_FOREARM, SIDE_SIGN } from './rigDims';
 import { clamp } from './coupleGuide';
-import { type Rig, CYL_R, CYL_R_SELF } from './coupleSolver';
+import type { Rig } from './coupleSolver';
+import { type Capsule, capsules, bodyCapsules, capDepth } from './rigMetrics';
 
 /**
  * 計測用（一時）。リグが実際に作った腕の姿勢を胸郭ローカルで測る。
@@ -60,27 +61,18 @@ export function measureArms(rigs: [Rig, Rig], linked: (0 | 1 | null)[], dt: numb
 }
 
 /**
- * 計測用（一時）。**描画されたリグそのもの**の腕の座標と、胴体円柱への食い込みを
- * 時刻窓で吐く。ブラウザで `__armDump = [3.2, 3.6]`（クリップ秒）にすると、
- * 窓内の毎フレーム、肩・肘・手首のワールド座標と、上腕/前腕セグメントが
- * どちらの胴体をどれだけ抉っているか（depth 正 = 貫通）を console.table に出す。
+ * 計測用（一時）。**描画されたリグそのもの**の腕の座標と、体（見えているカプセル）への
+ * 食い込みを時刻窓で吐く。ブラウザで `__armDump = [3.2, 3.6]`（クリップ秒）にすると、
+ * 窓内の毎フレーム、肩・肘・手首のワールド座標と、上腕/前腕/手が
+ * どちらの体をどれだけ抉っているか（depth 正 = 貫通[m]）を console.table に出す。
  * 貫通の犯人は目視ではなくこの数字で確定させる。
  */
 const dv = { a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3() };
-function segCylDepth(
-  a: THREE.Vector3, b: THREE.Vector3,
-  cx: number, cz: number, r: number, yLo: number, yHi: number,
-) {
-  // 線分を20分割し、胴体の高さ帯にある点の軸からの最小XZ距離を測る
-  let best = Infinity, bu = -1;
-  for (let i = 0; i <= 20; i++) {
-    const u = i / 20;
-    const y = a.y + (b.y - a.y) * u;
-    if (y < yLo || y > yHi) continue;
-    const d = Math.hypot(a.x + (b.x - a.x) * u - cx, a.z + (b.z - a.z) * u - cz);
-    if (d < best) { best = d; bu = u; }
-  }
-  return bu < 0 ? null : { depth: r - best, u: bu };
+/** 腕の部位カプセル（上腕/前腕/手）と、ある人の体カプセル群との最大の食い込み */
+function limbDepth(limb: Capsule, body: Capsule[]) {
+  let best = -Infinity;
+  for (const c of body) best = Math.max(best, capDepth(limb, c));
+  return best;
 }
 
 /**
@@ -126,16 +118,15 @@ export function dumpArms(
         肘: `${f2(dv.b.x)},${f2(dv.b.y)},${f2(dv.b.z)}`,
         手首: `${f2(dv.c.x)},${f2(dv.c.y)},${f2(dv.c.z)}`,
       };
-      // 上腕・前腕それぞれを、両者の胴体円柱と突き合わせる
+      // 上腕・前腕・手それぞれを、両者の体カプセルと突き合わせる
+      const limbs = capsules(rig, d as 0 | 1).filter((c) => c.side === k);
       for (let o = 0; o < 2; o++) {
-        const or_ = rigs[o];
-        const yLo = or_.root.position.y + or_.hips.position.y;
-        const r = o === d ? CYL_R_SELF : CYL_R;
-        const up = segCylDepth(dv.a, dv.b, or_.root.position.x, or_.root.position.z, r, yLo, yLo + SHO_DY);
-        const fo = segCylDepth(dv.b, dv.c, or_.root.position.x, or_.root.position.z, r, yLo, yLo + SHO_DY);
+        const body = bodyCapsules(rigs[o], o as 0 | 1);
         const who = o === d ? '自' : '相手';
-        row[`上腕→${who}`] = up ? f2(up.depth) : '-';
-        row[`前腕→${who}`] = fo ? f2(fo.depth) : '-';
+        for (const [part, label] of [['upperarm', '上腕'], ['forearm', '前腕'], ['hand', '手']] as const) {
+          const limb = limbs.find((c) => c.part === part)!;
+          row[`${label}→${who}`] = f2(limbDepth(limb, body));
+        }
       }
       rows.push(row);
     }

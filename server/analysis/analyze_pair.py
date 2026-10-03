@@ -362,7 +362,7 @@ def count_rotations(flips, i_start):
     10fps の骨格では速い連続回転は1周3〜4コマしかなく、反転ペアの連結（振り幅条件つき）では
     途中のペアが条件を外して回転数を少なく数える（正解表で4回転→3、3回転→2）。
     連結はターンの区切り（検出時刻）にだけ使い、回転数は反転の総数から数える
-    （正解表2本の回転数 MAE 0.43 → 0.31。eval_ground_truth.py）
+    （正解表2本の回転数 MAE 0.43 → 0.29。eval_ground_truth.py）
     """
     n, last = 0, None
     for t, _ in flips[i_start:]:

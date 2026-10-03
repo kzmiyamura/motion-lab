@@ -24,13 +24,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import analyze_pair as ap  # noqa: E402
 
-JOBS_DIR = os.path.join(HERE, "..", "storage", "analysis-jobs")
+STORAGE_DIR = os.path.join(HERE, "..", "storage")
+JOBS_DIR = os.path.join(STORAGE_DIR, "analysis-jobs")
 GT_DIR = os.path.join(HERE, "ground_truth")
 MATCH_SEC = 1.0
 
 
-def load_events(job, stored):
-    out = os.path.join(JOBS_DIR, job, "out")
+def out_dir(gt):
+    """解析出力の置き場所。ジョブを経ずに analyze_pair を直接回した動画は outDir（storage からの相対）で指す"""
+    if gt.get("outDir"):
+        return os.path.join(STORAGE_DIR, gt["outDir"])
+    return os.path.join(JOBS_DIR, gt["job"], "out")
+
+
+def load_events(gt, stored):
+    out = out_dir(gt)
     if stored:
         m = json.load(open(os.path.join(out, "measurements.json"), encoding="utf-8"))
         return m["summary"]["events"], None
@@ -134,7 +142,7 @@ def gt_side(cbl):
 
 
 def evaluate(gt, stored, verbose):
-    preds, data = load_events(gt["job"], stored)
+    preds, data = load_events(gt, stored)
     res = {"events": {}, "turnDir": Ratio(), "rotations": [], "spinTurns": [], "hold": {"leader": Ratio(), "both": Ratio()},
            "pass": {"depth": Ratio(), "side": Ratio(), "from": Ratio()}, "handRaise": Ratio()}
     log = []
@@ -186,7 +194,7 @@ def evaluate(gt, stored, verbose):
 
     # ホールド（tracks の原盤から正解時刻で推定する。--stored でも原盤を読む）
     if data is None:
-        data = json.load(open(os.path.join(JOBS_DIR, gt["job"], "out", "measurements.tracks.json"), encoding="utf-8"))
+        data = json.load(open(os.path.join(out_dir(gt), "measurements.tracks.json"), encoding="utf-8"))
     for h in gt["holds"]:
         got = parse_hold(ap.detect_hold(data["frames"], h["t"], data["leaderPid"]))
         res["hold"]["leader"].add(got is not None and got[0] == h["leader"])

@@ -27,7 +27,7 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
   // 動画IDごとの最新解析ジョブ（フォルダ所属の動画のみ取得）
   const [latestJobs, setLatestJobs] = useState<Record<string, AnalysisJob | undefined>>({});
   // レポートモーダル（✅解析済みバッジのタップで開く）
-  const [reportTarget, setReportTarget] = useState<{ jobId: string; title: string } | null>(null);
+  const [reportTarget, setReportTarget] = useState<{ jobId: string; title: string; videoUrl: string | null } | null>(null);
 
   const loadJobs = useCallback(async (targetVideos: HomeServerVideo[]) => {
     const withFolder = targetVideos.filter(v => v.folderId != null);
@@ -258,7 +258,7 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
                         className={styles.jobBadgeDone}
                         role="button"
                         title="解析レポートを開く"
-                        onClick={e => { e.stopPropagation(); setReportTarget({ jobId: j.id, title: v.title }); }}
+                        onClick={e => { e.stopPropagation(); setReportTarget({ jobId: j.id, title: v.title, videoUrl: resolveHomeServerUrl(HOME_SERVER_URL, v.hlsUrl) }); }}
                       >
                         📋 レポートを見る
                       </p>
@@ -294,6 +294,7 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
         <ReportModal
           jobId={reportTarget.jobId}
           videoTitle={reportTarget.title}
+          videoUrl={reportTarget.videoUrl}
           baseUrl={HOME_SERVER_URL}
           onClose={() => setReportTarget(null)}
         />

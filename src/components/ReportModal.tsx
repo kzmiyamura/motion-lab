@@ -2,16 +2,24 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getJobDetail, resolveHomeServerUrl, type AnalysisJobDetail } from '../engine/homeServer';
 import { routineFromResult } from '../engine/routineClip';
 import { sendRoutineTo3D } from '../engine/routineBus';
-import { parseChoreoSheet, parseMoveFrames, reportSummary } from '../engine/choreoSheet';
+import {
+  moveFramesPending, parseChoreoSheet, parseMoveFrames, reportSummary, type SheetRow,
+} from '../engine/choreoSheet';
 import { ChoreoSheet } from './ChoreoSheet';
+import { MoveClipPlayer } from './MoveClipPlayer';
 import styles from './ReportModal.module.css';
 
 type Props = {
   jobId: string;
   videoTitle: string;
   baseUrl: string;
+  /** 元動画の URL（解決済みの HLS playlist）。あれば振付シートのカードから技の区間をスロー再生できる */
+  videoUrl?: string | null;
   onClose: () => void;
 };
+
+const FRAME_POLL_MS = 8000;
+const FRAME_POLL_MAX = 45; // 約6分（57技の画像作成が2〜3分）
 
 // リーダー技ジェネレーター（Artifact）。解析結果を貼り付けて動画のルーティンを再現する
 const GENERATOR_URL = 'https://claude.ai/code/artifact/761235c0-5005-41e4-a315-5772ca8b516e';
@@ -134,7 +142,7 @@ function renderMarkdown(md: string, baseUrl: string): ReactNode[] {
   return out;
 }
 
-export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
+export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: Props) {
   const [job, setJob] = useState<AnalysisJobDetail | null>(null);
   const [error, setError] = useState('');
   const [copyMsg, setCopyMsg] = useState('');
@@ -153,24 +161,42 @@ export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
   const sheet = useMemo(() => parseChoreoSheet(job?.resultJson ?? null), [job]);
   const summary = useMemo(() => (sheet ? reportSummary(job?.reportMd ?? null) : []), [sheet, job]);
 
-  // 技ごとの連続コマ画像（サーバーの out/move_frames/index.json）。無ければ写真なしで出す
+  // 技ごとの連続コマ画像（サーバーの out/move_frames/index.json）。
+  // 画像はジョブ完了の直前（または後からの作り直し）で作られるので、開いた時点でまだ無い・作成途中のことがある。
+  // そのときは揃うまで読み直す（以前は1回きりで、作成中に開くと写真が一枚も出なかった）。
+  // ブラウザのキャッシュで古い・空の index を掴まないよう no-store で取る
   useEffect(() => {
     if (!sheet) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const url = resolveHomeServerUrl(baseUrl, `/analysis-output/${jobId}/out/move_frames/index.json`);
     if (!url) return;
-    fetch(url)
-      .then(r => (r.ok ? r.json() : null))
-      .then(json => {
-        if (cancelled || !json) return;
-        const raw = parseMoveFrames(json, sheet.rows);
-        const resolved = new Map<number, string>();
-        raw.forEach((p, i) => resolved.set(i, p.startsWith('/') ? resolveHomeServerUrl(baseUrl, p) ?? p : p));
-        setMoveFrames(resolved);
-      })
-      .catch(() => { /* 画像なしで表示する */ });
-    return () => { cancelled = true; };
+    let tries = 0;
+    const load = () => {
+      tries++;
+      fetch(url, { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(json => {
+          if (cancelled) return;
+          if (json) {
+            const raw = parseMoveFrames(json, sheet.rows);
+            const resolved = new Map<number, string>();
+            raw.forEach((p, i) => resolved.set(i, p.startsWith('/') ? resolveHomeServerUrl(baseUrl, p) ?? p : p));
+            setMoveFrames(resolved);
+          }
+          if ((!json || moveFramesPending(json)) && tries < FRAME_POLL_MAX) timer = setTimeout(load, FRAME_POLL_MS);
+        })
+        .catch(() => {
+          if (!cancelled && tries < FRAME_POLL_MAX) timer = setTimeout(load, FRAME_POLL_MS);
+        });
+    };
+    load();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [sheet, baseUrl, jobId]);
+
+  // 見て覚える: カードを押すとその技の区間を 0.5 倍で繰り返す（元動画が分かるときだけ）
+  const [clip, setClip] = useState<SheetRow | null>(null);
+  const playRow = (row: SheetRow) => setClip(c => (c?.index === row.index ? null : row));
 
   // 解析結果をクリップボードへコピーし、ジェネレーターを新しいタブで開く。
   // ユーザーはジェネレーターの「📥」に貼り付けて、動画のルーティンを骨格で再現できる。
@@ -210,7 +236,22 @@ export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
                   {summary.map((s, i) => <p key={i} className={styles.para}>{renderInline(s, baseUrl, `sum${i}`)}</p>)}
                 </div>
               )}
-              <ChoreoSheet sheet={sheet} frames={moveFrames} />
+              {videoUrl && clip && clip.start !== null && (
+                <MoveClipPlayer
+                  src={videoUrl}
+                  start={clip.start}
+                  end={clip.end ?? clip.start + 8 * (sheet.beatSec ?? 0.35)}
+                  beatSec={sheet.beatSec}
+                  label={`#${clip.no} ${clip.name}（${clip.counts}）`}
+                  onClose={() => setClip(null)}
+                />
+              )}
+              <ChoreoSheet
+                sheet={sheet}
+                frames={moveFrames}
+                onPlay={videoUrl ? playRow : undefined}
+                playingIndex={clip?.index ?? null}
+              />
               {job.reportMd && (
                 <>
                   <button

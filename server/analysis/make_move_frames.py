@@ -242,8 +242,10 @@ MIN_KEY_GAP = 0.25      # 秒。選んだコマどうしがこれより近けれ
 AFTER_PASS_SEC = 0.5    # 通過の後、新しい側で2人とも写った最初のコマをこの秒数以降から探す
 TURN_MIN_OVERLAP = 0.3  # 回転の区間が技の区間とこれ以上重なれば、その技の回転として扱う
 
-# 間を埋めるコマの説明（On2 の数え方。CBL 系は 3 で男が開く）
+# 間を埋めるコマの説明（On2 = Eddie Torres の数え方。docs/salsa-knowledge/on2-timing-and-terms.md §2.2）
+# ベーシックは 2 で男が下がり 6 で前へ。CBL 系は男が 7〜1 で開き切る（女が 2 で横を通り 5 で着地する）
 FILL_LABEL = {2: "男が下がる", 6: "男が前へ"}
+CBL_FILL_LABEL = {1: "男が開く", 6: "男が前へ"}   # 通過・着地は見えたコマ（key_moments）にだけ書く
 CBL_MOVES = {"cbl", "cbl_inside_turn", "cbl_outside_turn", "reverse_cbl"}
 
 
@@ -334,9 +336,7 @@ def labeled_frames(mv, t0, t1, beat, series, crosses, events):
     for t, label in picks:
         c = count_of(t, t0, beat, counts)
         if label is None:
-            label = FILL_LABEL.get(c, "")
-            if c == 3 and mv.get("move") in CBL_MOVES:
-                label = "男が開く"
+            label = (CBL_FILL_LABEL if mv.get("move") in CBL_MOVES else FILL_LABEL).get(c, "")
         out.append((t, c, label))
     return out
 

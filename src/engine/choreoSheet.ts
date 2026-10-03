@@ -87,39 +87,33 @@ export function holdLabel(start?: RoutineHold | null, end?: RoutineHold | null):
 /**
  * 回る向きの決まり（見出しの凡例に出す。サーバーの normalize_routine.py・analyze_pair の spin と同じ）:
  * 右回り = 回る人自身の右へ = 真上から見て時計回り。
- * 女性のターンは、つないだ手に対してインサイド/アウトサイドで言う（相手との関係で決まるのでダンサーに通じる）
+ * 女性のターンのインサイド/アウトサイドは向きだけで決まる（左回り = インサイド・右回り = アウトサイド。つなぎ手が
+ * 変わっても同じ）。サルサの主流（Dance Dojo）の呼び方で、腕の通り道で呼ぶ流儀は少数派
+ * （docs/salsa-knowledge/on2-timing-and-terms.md §3）。流派で揺れるので左回り/右回りを主に書き、名前は添えるだけ
  */
-export const TURN_LEGEND = '回る向きは回る人自身から見て（右回り＝上から見て時計回り）。インサイド/アウトサイドは女性がつないだ手に対して';
+export const TURN_LEGEND = '回る向きは回る人自身から見て（右回り＝上から見て時計回り）。女性の左回り＝インサイド、右回り＝アウトサイド（つなぐ手に関係なく）';
 
 type TurnLike = NonNullable<RoutineMove['turn']> & { kind?: 'inside' | 'outside' | null };
 export type TurnKind = 'inside' | 'outside';
 
-/** つないでいる女性の手（R/L）。両手・クローズド・離している・不明は null */
-function followerHand(h?: RoutineHold | null): 'R' | 'L' | null {
-  if (h === 'LR' || h === 'RR') return 'R';
-  if (h === 'RL' || h === 'LL') return 'L';
-  return null;
-}
-
 /**
- * 女性のターンのインサイド/アウトサイド。女性の右手でつないでいれば 左回り＝インサイド・右回り＝アウトサイド、
- * 左手なら逆。サーバーが turn.kind を付けていればそれ、無ければ（古い結果）手と向きから決める。決まらなければ null
+ * 女性のターンのインサイド/アウトサイド。向きだけで決める（左回り＝インサイド・右回り＝アウトサイド）。
+ * つなぐ手は見ない（以前のサーバーが女性の左手のとき逆にして付けた turn.kind も、向きがあれば向きで決め直す）。
+ * 向きが分からなければサーバーの turn.kind、それも無ければ null。引数の手は呼び出し側の互換のため残す
  */
-export function turnKind(turn: TurnLike | null | undefined, holdStart?: RoutineHold | null, holdEnd?: RoutineHold | null): TurnKind | null {
+export function turnKind(turn: TurnLike | null | undefined, _holdStart?: RoutineHold | null, _holdEnd?: RoutineHold | null): TurnKind | null {
   if (!turn || (turn.by !== 'follower' && turn.by !== 'both')) return null;
-  if (turn.kind === 'inside' || turn.kind === 'outside') return turn.kind;
-  const hand = followerHand(holdStart) ?? followerHand(holdEnd);
-  if (!hand || (turn.direction !== 'left' && turn.direction !== 'right')) return null;
-  return (turn.direction === 'left') === (hand === 'R') ? 'inside' : 'outside';
+  if (turn.direction === 'left') return 'inside';
+  if (turn.direction === 'right') return 'outside';
+  return turn.kind === 'inside' || turn.kind === 'outside' ? turn.kind : null;
 }
 
 const DIR_LONG = { right: '右回り（時計回り）', left: '左回り（反時計回り）' } as const;
-const DIR_EQ = { right: '右回り＝時計回り', left: '左回り＝反時計回り' } as const;
 const KIND_WORD: Record<TurnKind, string> = { inside: 'インサイドターン', outside: 'アウトサイドターン' };
 
 /**
- * 回転を普通の言葉で。誰が回るかを必ず書き、女性はインサイド/アウトサイドを先に、回る向きを後ろに:
- * 「女: インサイドターン（左回り＝反時計回り）1½回転」「女: 右回り（時計回り）2回転」「男: 右回り（時計回り）1回転」
+ * 回転を普通の言葉で。誰が回るかを必ず書き、回る向きを主に、女性はインサイド/アウトサイドを後ろに添える:
+ * 「女: 左回り（反時計回り）1½回転・インサイドターン」「男: 右回り（時計回り）1回転」
  */
 export function turnLabel(turn: TurnLike | null | undefined, holdStart?: RoutineHold | null, holdEnd?: RoutineHold | null): string | null {
   if (!turn) return null;
@@ -127,8 +121,7 @@ export function turnLabel(turn: TurnLike | null | undefined, holdStart?: Routine
   const n = typeof turn.rotations === 'number' && turn.rotations > 0 ? `${fmtRotations(turn.rotations)}回転` : '回る';
   const d = turn.direction === 'left' || turn.direction === 'right' ? turn.direction : null;
   const kind = turnKind(turn, holdStart, holdEnd);
-  if (kind) return `${who}: ${KIND_WORD[kind]}${d ? `（${DIR_EQ[d]}）` : ''}${n}`;
-  return `${who}: ${d ? DIR_LONG[d] : ''}${n}`;
+  return `${who}: ${d ? DIR_LONG[d] : ''}${n}${kind ? `・${KIND_WORD[kind]}` : ''}`;
 }
 
 const SIDE_WORD = { left: '左', right: '右' } as const;

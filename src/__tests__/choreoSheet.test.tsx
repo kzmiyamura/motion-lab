@@ -71,30 +71,34 @@ describe('choreoSheet（純関数）', () => {
     expect(holdLabel('LR', 'none')).toBe('男の左手と女の右手 → 手を離す');
     expect(holdLabel('none', 'none')).toBe('手を離す');
     expect(holdLabel(null, null)).toBeNull();
-    expect(turnLabel({ by: 'follower', direction: 'left', rotations: 1.5 })).toBe('女: 左回り（反時計回り）1½回転');
+    expect(turnLabel({ by: 'follower', direction: 'left', rotations: 1.5 })).toBe('女: 左回り（反時計回り）1½回転・インサイドターン');
     expect(turnLabel({ by: 'leader', direction: 'right', rotations: 1 })).toBe('男: 右回り（時計回り）1回転');
     expect(turnLabel({ by: 'follower', direction: null, rotations: 2 })).toBe('女: 2回転');
     expect(turnLabel(null)).toBeNull();
     expect(passLabel('left')).toBe('女が男の左側を通る');
   });
 
-  it('女性のターンはつないだ手に対してインサイド/アウトサイド、向きは回る人自身から見て', () => {
+  it('女性のターンは向きだけでインサイド（左回り）/アウトサイド（右回り）、つなぐ手は関係ない', () => {
     const left = { by: 'follower' as const, direction: 'left' as const, rotations: 1 };
     const right = { by: 'follower' as const, direction: 'right' as const, rotations: 2 };
-    // 女性の右手（男左×女右・右手同士）: 左回り＝インサイド・右回り＝アウトサイド
     expect(turnKind(left, 'LR')).toBe('inside');
     expect(turnKind(right, 'RR')).toBe('outside');
-    // 女性の左手（男右×女左・左手同士）: 逆
-    expect(turnKind(right, 'RL')).toBe('inside');
-    expect(turnKind(left, 'LL')).toBe('outside');
-    // 手が分からない・両手・男性のターンは決めない。サーバーの kind があればそれ
-    expect(turnKind(left, 'double')).toBeNull();
-    expect(turnKind(left, null, null)).toBeNull();
+    // 女性の左手でつないでいても同じ（手で逆にしない）
+    expect(turnKind(right, 'RL')).toBe('outside');
+    expect(turnKind(left, 'LL')).toBe('inside');
+    expect(turnKind(left, 'double')).toBe('inside');
+    expect(turnKind(left, null, null)).toBe('inside');
+    // 男性のターンは決めない。古いサーバーが手で逆にして付けた kind より向きを優先
     expect(turnKind({ ...left, by: 'leader' }, 'LR')).toBeNull();
-    expect(turnKind({ ...left, kind: 'outside' }, 'LR')).toBe('outside');
-    expect(turnLabel(right, 'LR')).toBe('女: アウトサイドターン（右回り＝時計回り）2回転');
-    expect(turnLabel(right, null, 'RL')).toBe('女: インサイドターン（右回り＝時計回り）2回転');
+    expect(turnKind({ ...left, kind: 'outside' }, 'LL')).toBe('inside');
+    // 向きが分からなければサーバーの kind
+    expect(turnKind({ by: 'follower', direction: null, kind: 'outside' })).toBe('outside');
+    expect(turnKind({ by: 'follower', direction: null })).toBeNull();
+    expect(turnLabel(right, 'LR')).toBe('女: 右回り（時計回り）2回転・アウトサイドターン');
+    expect(turnLabel(right, null, 'RL')).toBe('女: 右回り（時計回り）2回転・アウトサイドターン');
+    expect(turnLabel({ by: 'leader', direction: 'right', rotations: 1 })).toBe('男: 右回り（時計回り）1回転');
     expect(TURN_LEGEND).toContain('右回り＝上から見て時計回り');
+    expect(TURN_LEGEND).toContain('左回り＝インサイド');
     expect(passLabel('left', { followerStart: 'right', followerEnd: 'left' })).toBe('女が男の左側を通る（画面右→左）');
     expect(passLabel(null, { followerStart: 'right', followerEnd: 'left' })).toBe('女が反対側へ（画面右→左）');
   });
@@ -109,7 +113,7 @@ describe('choreoSheet（純関数）', () => {
       followerStart: 'right', followerEnd: 'left', pass: 'left', hold: 'LR',
       turn: { by: 'follower', direction: 'left', rotations: 1, kind: 'inside' },
     });
-    expect(d.caption).toBe('女が男の左側を通る（画面右→左） ／ 女: インサイドターン（左回り＝反時計回り）1回転');
+    expect(d.caption).toBe('女が男の左側を通る（画面右→左） ／ 女: 左回り（反時計回り）1回転・インサイドターン');
     // 何も起きない技は図を出さない
     expect(diagramFor({ move: 'basic', holdStart: 'LR' })).toBeNull();
   });
@@ -121,7 +125,7 @@ describe('choreoSheet（純関数）', () => {
     expect(s.rows).toHaveLength(4);
     expect(s.rows[2]).toMatchObject({
       no: 3, time: '0:14', counts: '1-8', name: 'CBL＋インサイドターン', start: 14.2, end: 19.4,
-      hold: '男の左手と女の右手 → 右手同士（握手）に持ち替え', turn: '女: インサイドターン（左回り＝反時計回り）1½回転', pass: '女が男の左側を通る', uncertain: true,
+      hold: '男の左手と女の右手 → 右手同士（握手）に持ち替え', turn: '女: 左回り（反時計回り）1½回転・インサイドターン', pass: '女が男の左側を通る', uncertain: true,
     });
     // steps は最大2行
     expect(s.rows[2].steps).toEqual([
@@ -131,7 +135,7 @@ describe('choreoSheet（純関数）', () => {
     expect(s.rows[1].steps).toEqual([]);
     expect(s.rows[0].uncertain).toBe(false);
     // name 省略時は技の語彙から。confidence が低い行は「?」。最後の行の終わりは counts × 拍
-    expect(s.rows[3]).toMatchObject({ name: '右ターン', counts: '1-16', turn: '女: 右回り（時計回り）1回転', uncertain: true, hold: null });
+    expect(s.rows[3]).toMatchObject({ name: '右ターン', counts: '1-16', turn: '女: 右回り（時計回り）1回転・アウトサイドターン', uncertain: true, hold: null });
     expect(s.rows[3].end).toBeCloseTo(19.4 + 16 * 0.625);
   });
 
@@ -266,7 +270,7 @@ describe('ReportModal の振付シート表示', () => {
     expect(third.getByText('左回り1½')).toBeInTheDocument();
     // 回転・通る側は図の下の説明に、手は図の上の行に
     expect(third.getByText('男の左手と女の右手 → 右手同士（握手）に持ち替え')).toBeInTheDocument();
-    expect(third.getByText('女が男の左側を通る ／ 女: インサイドターン（左回り＝反時計回り）1½回転')).toBeInTheDocument();
+    expect(third.getByText('女が男の左側を通る ／ 女: 左回り（反時計回り）1½回転・インサイドターン')).toBeInTheDocument();
     expect(third.queryByText('3行目は出さない')).toBeNull();
     await waitFor(() => {
       expect(third.getByRole('img')).toHaveAttribute('src', `${BASE}/analysis-output/${JOB_ID}/out/move_frames/03_014.2.jpg`);
@@ -302,7 +306,7 @@ describe('ReportModal の振付シート表示', () => {
     expect(third.getAllByTestId('shot-caption')).toHaveLength(1);
     expect(third.getByTestId('shot-caption')).toHaveTextContent('5通過');
     // 上から見た図（SVG は読み上げず、下の説明を読む）
-    expect(third.getByTestId('move-diagram')).toHaveTextContent('女: インサイドターン（左回り＝反時計回り）1½回転');
+    expect(third.getByTestId('move-diagram')).toHaveTextContent('女: 左回り（反時計回り）1½回転・インサイドターン');
     // 元動画が無い（カードが押せない）ときは、コマを押すと原寸を開く
     expect(imgs[1].closest('a')).toHaveAttribute('href', `${BASE}/analysis-output/${JOB_ID}/out/move_frames/03_014.2_1.jpg`);
   });

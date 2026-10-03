@@ -10,15 +10,18 @@ Claude の routine は技イベントの時刻（CBL・ターンの瞬間）か�
 ことがある。ここでそれを機械的に直す:
 
 1. 8カウント（1×8）の長さを決める: 音声のビート格子があれば 8 拍。無ければ（画面収録など無音）
-   CV の左右入れ替わり（summary.events の CBL）が 8 カウントの同じ位置（On2 の CBL なら女が 5 で通る）に
+   CV の左右入れ替わり（summary.events の CBL）が 8 カウントの同じ位置（On2 の CBL なら女が 2 で男の横を通る）に
    最もよく揃う周期・位相（・ゆっくりしたテンポの変化）を、Claude の routine の間隔を目安に探す。
    入れ替わりが少ない・揃わないときは、routine の間隔の中央値から推定し技の頭の時刻に合わせる（従来）
 2. 位相（8カウントの頭がどこか）: 音声なら技の頭の時刻が最もよく乗る拍。入れ替わりで当てたならそれで決まる。
    各技の start を最寄りの 8 カウントの頭へ寄せる。入れ替わりで当てたときは、Claude の行の順番を保ったまま
    CBL 系の行が入れ替わりのある 8 カウントに来るよう前後にずらす（Claude の行の時刻が 1 行ずれることがある）
 3. 同じ頭に寄った技は 1 行にまとめる（ターン・パスがある方を主にする）。counts は次の技の頭までの 8 の倍数
-4. 回転数は ½ 刻みに丸め、2 回転を上限にする（画像で見えていて自信 0.7 以上なら 3 回転まで）。
-   削ったら自信を下げて「?」が付くようにする
+4. 回転数は技ごとの普通の回数（事前分布: CBL ½・CBL＋ターン 1½（ダブルは 2½）・その場のターン 1（ダブル 2）、
+   docs/salsa-knowledge/on2-timing-and-terms.md §5・§8-4）の最寄りに寄せる。画像で見えていて自信 0.7 以上か、
+   CV が全フレームで数えた回転（spin.runs）が同じ数を示すときだけ、寄せずに ½ 刻みの値を残す。
+   2 回転を上限にし（強い証拠があれば 3 回転まで）、使える拍より多い回転は採らない（多回転でも 1 回転 ≈ 1 拍が最短。
+   CV の回転区間があればその拍数、無ければ半分の 8 カウント = 4 拍）。削ったら自信を下げて「?」が付くようにする
 5. 技名は全角 14 文字以内に縮める（括弧書きを落とし「クロスボディリード」→「CBL」等）
 6. 各技に、カウントごとに男女が何をするかの短い行（steps）を付ける。Claude が書いていればそれを使い、
    無ければ技の種類・回転・通る側から決まった言い回しで埋める。
@@ -32,10 +35,12 @@ Claude の routine は技イベントの時刻（CBL・ターンの瞬間）か�
    CBL 系なのに入れ替わっていなければ種類はそのままで「?」を付ける（passCheck に印）。
    インサイドターンは CBL と組むのが普通なので、その場のインサイドターンで入れ替わりが無ければ、前後半分の
    8 カウント以内の持ち主の無い入れ替わりを取って CBL＋インサイドにし、それも無ければ「?」を付ける
-9. 回る向き: 右回り = 回る人自身の右へ = 上から見て時計回り。女性のターンは、つないだ手（女性の右手か左手か）と
-   向きからインサイド/アウトサイドを決め（turn.kind）、技名もそれを主にする（手が分からなければ「女 右回り?」）。
+9. 回る向き: 右回り = 回る人自身の右へ = 上から見て時計回り。女性のターンは向きだけでインサイド/アウトサイドを
+   決める（turn.kind。左回り = インサイド・右回り = アウトサイド。つなぎ手が変わっても同じ。サルサの主流の
+   Dance Dojo の呼び方。docs/salsa-knowledge/on2-timing-and-terms.md §3）。本文（steps・回転の欄）は
+   左回り/右回りを主に書き、インサイド/アウトサイドは技名とラベルに添える。
    手がデータに無くても、CV が男の頭上の手を見ていれば普通のつなぎ（男の左手×女の右手 / 男の右手×女の左手）を
-   推して使う（inferredHold・holdSource="inferred"。同じ側の手どうし・クロスが見えていれば推さない）
+   推してリードする手に使う（inferredHold・holdSource="inferred"。同じ側の手どうし・クロスが見えていれば推さない）
 
 元の行は routine.rawMoves に残す（何度実行しても rawMoves から作り直すので結果は同じ）。
 
@@ -73,12 +78,21 @@ SWAP_PRIOR = 0.1           # 目安から離れた周期への小さな罰（同
 SWAP_DRIFT_MAX = 2.0       # テンポの変化: 終わりまでに等速の格子から最大 2 個分の 8 カウントずれてよい
                            # （周期の当てはめで吸収しきれずに残るずれは drift の ⅛ 程度。¾ 以下なら等速で足りる）
 DRIFT_MIN_GAIN = 0.05      # drift を入れるのは R がこれ以上良くなるときだけ（ノイズへの当てはめすぎを防ぐ）
-SWAP_BEAT = 7.0            # CV の入れ替わり時刻が来る、8 カウントの頭からの拍数（下の説明）
-# SWAP_BEAT: On2 の CBL では男が 2 で下がって 3 で開き、女は 2 で前へ出てそのまま 5 で男の前を通る
-# （腰の左右が入れ替わる）。CV の入れ替わり時刻（detect_cbl）は「入れ替わった後に 2 人とも見えた最初のコマ」
-# なので本当の入れ替わりより遅れる。値は正解表で決めた（1230b3d5 は On2。eval_routine_grid.py、ジョブ
-# 2f4b6919 / 581ef6a2）: 7.0 で正解の入れ替わりの平均がカウント 4.96（= 5 で通る）。6.5 → 4.4、7.5 → 5.5。
-# 行の一致・CBL の再現率は 6.0〜7.0 でほぼ同じ（差は 1〜2 行）なので、On2 の「5 で通る」に合う 7.0 のまま
+SWAP_BEAT = 4.25           # CV の入れ替わり時刻が来る、8 カウントの頭からの拍数（下の説明）
+# SWAP_BEAT: Eddie Torres の On2 の CBL では、男は 6 で前へブレイクして 7〜1 で左へ約 90° 開き、
+# 女は 1〜3 で横断して 2 で男の左側を通る（腰の左右が入れ替わる）。½ 回って 3 前後で線に戻り、5 で着地する
+# （docs/salsa-knowledge/on2-timing-and-terms.md §2.2・§8-2）。
+# CV の入れ替わり時刻（detect_cbl）は「入れ替わった後に 2 人とも見えた最初のコマ」なので本当の入れ替わりより
+# 遅れる（正解表で平均 +3 拍ほど）。値は正解表で決めた（1230b3d5 は On2。eval_routine_grid.py、ジョブ 581ef6a2 /
+# 2f4b6919）: 4.25 で正解の入れ替わりの平均がカウント 2.2（581ef6a2）/ 2.2（2f4b6919）。4.0 → 2.0、5.0 → 3.0。
+# 以前は On1 の数え方を写した「5 で通る」（7.0）にしていた。その頃と比べて（立ち位置を読む拍・その場のターンを
+# 近くの入れ替わりで CBL＋ターンにする処理も合わせて）行の一致は 581ef6a2 で 0.879 → 0.914、2f4b6919 で
+# 0.807 → 0.786、正解の CBL を覆う行の再現率は 0.90 → 0.97 / 0.83 → 0.83。
+# 4.0 は 2f4b6919 で行の一致 0.754、5.0（通過 = 3）は 581ef6a2 で 0.845 に落ち、3.0（通過 = 1）は両方で大きく
+# 落ちる（8 カウントの境目が入れ替わりの集まりの真ん中に来る）
+BPM_MIN = 150.0            # サルサとして数えるテンポの範囲（踊られるのは大半が 160〜220。video-analysis-cues.md §2.6）
+BPM_MAX = 250.0
+HALF_TEMPO = (75.0, 125.0)  # この範囲のテンポは 2 拍を 1 拍と数えた値（半分のテンポ）なので 2 倍にする
 DEFAULT_TIMING = "on2"     # Claude が on1/on2 を書かなかった（unclear）ときの数え方。ユーザーの動画は基本 On2
 SWAP_ALIGN_WEIGHT = 1.0    # 行を入れ替わりに合わせ直すとき、CBL 系の行と入れ替わりの有無が食い違う罰
 SWAP_SHIFT_WEIGHT = 0.5    # 同じく、行を元の時刻から 1 行ぶん動かす罰（1 行ずらして食い違いが 1 つ減るなら動かす）
@@ -114,10 +128,23 @@ def grid_from_beats(summary):
     if not _num(beat):
         bpm = g.get("bpm")
         beat = 60.0 / bpm if _num(bpm) and bpm > 0 else None
+    # 半分のテンポ（2 拍を 1 拍）はここでは直さない: analyze_beats.py が 140〜230 BPM の中でしか探さないので起きない
     if not _num(beat) or not (MIN_UNIT8 / 8 <= beat <= MAX_UNIT8 / 8):
         return None
     first = g.get("firstBeatSec")
     return 8 * beat, beat, float(first) if _num(first) else 0.0
+
+
+def salsa_unit8(u):
+    """1×8 の秒数の目安を、サルサのテンポ（BPM_MIN〜BPM_MAX）に直す。半分のテンポ（75〜125 BPM 相当）は倍速にし、
+    範囲の外は端に寄せる。None はそのまま"""
+    if not _num(u) or u <= 0:
+        return u
+    bpm = 8 * 60 / u
+    if HALF_TEMPO[0] <= bpm <= HALF_TEMPO[1]:
+        bpm *= 2
+    bpm = min(max(bpm, BPM_MIN), BPM_MAX)
+    return 8 * 60 / bpm
 
 
 def unit8_from_routine(moves):
@@ -208,7 +235,7 @@ def swap_concentration(swaps, period, drift=0.0, span=1.0):
 
 def fit_grid_to_swaps(swaps, unit_guess, duration, turns=()):
     """CV の入れ替わり時刻に 8 カウントの格子を当てる。CBL なら入れ替わりは毎回 8 カウントの同じ所
-    （On2 は 5）に来るので、周期を目安の ±SWAP_PERIOD_RANGE で振って位相が最も揃う周期を取る。
+    （On2 は 2 で女が男の横を通る）に来るので、周期を目安の ±SWAP_PERIOD_RANGE で振って位相が最も揃う周期を取る。
     周期（と揃っているかの判定）には女性のターン（turns）も足す。ターンも 8 カウントの決まった所で回るので
     手がかりが増える（1230b3d5: 入れ替わりだけだと z=5.2 で偶然と見分けられないが、ターンを足すと 8.8）。
     8 カウントの頭（位相）は入れ替わりだけで決める（ターンは 1-3 で回る技もあり位置が決まらない）。
@@ -223,8 +250,11 @@ def fit_grid_to_swaps(swaps, unit_guess, duration, turns=()):
         r, _ = swap_concentration(events, p, q, span)
         return r - SWAP_PRIOR * abs(math.log(p / unit_guess)), r
 
-    lo = max(MIN_UNIT8, unit_guess * (1 - SWAP_PERIOD_RANGE))
-    hi = min(MAX_UNIT8, unit_guess * (1 + SWAP_PERIOD_RANGE))
+    # 周期は目安の ±SWAP_PERIOD_RANGE、かつサルサのテンポ（BPM_MIN〜BPM_MAX）の中で探す
+    lo = max(MIN_UNIT8, 8 * 60 / BPM_MAX, unit_guess * (1 - SWAP_PERIOD_RANGE))
+    hi = min(MAX_UNIT8, 8 * 60 / BPM_MIN, unit_guess * (1 + SWAP_PERIOD_RANGE))
+    if lo > hi:
+        return None
     cands = []
     p = lo
     while p <= hi + 1e-9:
@@ -448,10 +478,13 @@ def merge_group(group):
 # 向きの決まり（アプリの凡例・runner-prompt・analyze_pair.spin_hint と同じ）:
 #   右回り = 回る人自身の右へ回る = 真上から見て時計回り。左回り = 自分の左へ = 反時計回り。
 #   analyze_pair の spin（R/L）も「上から見て時計回り = R」で数えている（正面→右向き→背中 なら左回り）。
-# 女性のターンは、ダンサーの言葉では相手との関係で決まるインサイド/アウトサイドを主に言う:
-#   女性が右手でつないでいる（男左×女右・右手同士）とき 左回り = インサイド・右回り = アウトサイド。
-#   女性が左手でつないでいる（男右×女左・左手同士）ときは逆（右回り = インサイド・左回り = アウトサイド）。
-#   両手・クローズド・手を離している・分からないときは決めない（右回り/左回りだけ書き「?」を付ける）
+# 女性のターンのインサイド/アウトサイドは回る向きだけで決める（つなぎ手に関係なく）:
+#   左回り（反時計回り）= インサイド・右回り（時計回り）= アウトサイド。
+#   サルサの主流（Dance Dojo）は「Right to left parallel」「握手」でも右回りを Outside Turn、交差持ちの左回り
+#   （Butterfly）も Inside Turn の変化形と呼ぶ。腕の通り道で呼ぶ流儀（Wikipedia の Direction of movement・
+#   スウィング・バチャータ）は持ち手が変わると呼び名が逆になるが少数派（docs/salsa-knowledge/on2-timing-and-terms.md §3）。
+#   流派で呼び名が揺れるので、本文は左回り/右回りを主に書き、インサイド/アウトサイドはラベルとして添える。
+#   （c48a154・fd85662 では女性が左手でつなぐと逆にしていたが、この決まりに戻した）
 
 DIR_SHORT = {"right": "右回り", "left": "左回り"}
 DIR_LONG = {"right": "右回り（時計回り）", "left": "左回り（反時計回り）"}
@@ -486,14 +519,15 @@ def turn_hold(mv):
     return None
 
 
-def turn_kind(turn, hold):
-    """女性のターンのインサイド/アウトサイド（上の決まり）。決められなければ None"""
+def turn_kind(turn, hold=None):
+    """女性のターンのインサイド/アウトサイド（上の決まり: 左回り = インサイド・右回り = アウトサイド）。
+    hold は使わない（つなぎ手で呼び名を変えない。引数は呼び出し側の互換のため残す）。向きが分からなければ None"""
     if not isinstance(turn, dict) or turn.get("by") not in ("follower", "both"):
         return None
-    d, h = turn.get("direction"), follower_hand(hold)
-    if d not in DIR_SHORT or h is None:
+    d = turn.get("direction")
+    if d not in DIR_SHORT:
         return None
-    return "inside" if (d == "left") == (h == "R") else "outside"
+    return "inside" if d == "left" else "outside"
 
 
 def rot_text(n):
@@ -507,13 +541,14 @@ def rot_text(n):
 
 
 def turn_text(turn, default_dir=None, kind=None):
-    """カードの本文に書く回り方。例: 「インサイドターン（左回り）1½回」「右回り（時計回り）2回」"""
+    """カードの本文に書く回り方。向きを主に、インサイド/アウトサイドは後ろに添える。
+    例: 「左回り1½回（インサイド）」「右回り（時計回り）2回」"""
     if not isinstance(turn, dict):
         return ""
     d = turn.get("direction") or default_dir
     n = rot_text(turn.get("rotations"))
-    if kind in KIND_WORD:
-        return f"{KIND_WORD[kind]}ターン（{DIR_SHORT.get(d, '')}）{n}".replace("（）", "")
+    if kind in KIND_WORD and d in DIR_SHORT:
+        return f"{DIR_SHORT[d]}{n}（{KIND_WORD[kind]}）"
     return f"{DIR_LONG.get(d, '')}{n}" or "回る"
 
 
@@ -537,9 +572,9 @@ def turn_name(mv):
         return f"男 {DIR_SHORT[d]}{suffix}" if move == "leader_turn" and d in DIR_SHORT else None
     kind = turn.get("kind")
     if move in IN_PLACE_TURNS:
-        if kind:
-            return f"{KIND_WORD[kind]}ターン{suffix}"
-        return f"女 {DIR_SHORT[d]}{suffix}?" if d in DIR_SHORT else None
+        # その場のターンは向きで呼ぶ（「左回りターン」）。インサイド/アウトサイドは CBL＋ターンの名前に使い、
+        # その場のターンでは回転の欄にラベルとして添えるだけ（on2-timing-and-terms.md §8-6・§8-7）
+        return f"{DIR_SHORT[d]}ターン{suffix}" if d in DIR_SHORT else None
     if move in ("cbl_inside_turn", "cbl_outside_turn"):
         if kind:
             return f"CBL＋{KIND_WORD[kind]}{suffix}"
@@ -598,11 +633,18 @@ def template_steps(mv, timing):
 
 
 def template_steps_on2(mv):
-    """On2 の言い方。ブレークは 2 と 6（男は 2 で後ろ・6 で前、女はその逆）。
-    CBL は男が 2 で下がった直後の 3 で開き、女は 2 で前へ出てそのまま 5 で男の横を抜け、6-7 で向き直る。
-    ターンは 1-2-3 で準備し 5-6-7 でリード、女は 5-6 で回って 7 で止まる。
-    リードする手（男の左手/右手）・女が男のどちら側を抜けるか・回る向き（インサイド/アウトサイドと右回り/左回り）を
-    欄の値から書く。分からない要素は書かない（「手を上げる」等）"""
+    """On2（Eddie Torres 式。踏むのは 1-2-3 / 5-6-7、ブレイクは 2 と 6）の言い方。
+    docs/salsa-knowledge/on2-timing-and-terms.md §2.2・§4・§8 に合わせる:
+    - ベーシック: 男は 2 で右足を後ろ・6 で左足を前、女はその逆（2 で左足を前・6 で右足を後ろ）
+    - CBL 系: 男は前の 8 カウントの 6 で前へブレイクして 7〜1 で左へ約 90° 開く（行の頭 = 1 で開き切る）。
+      女は 1〜3 で横断し 2 で男の横を通る（「7-1で開く」の 7 は前の 8 カウントの 7）。素の CBL は 3 前後で ½ 回って線に戻り、5 で着地。
+      ターン付き（インサイド/アウトサイド）は 2 で回り始め 2-3-(4)-5 で 1½、5 で着地
+    - その場の右回り（スポット）: 前の 8 カウントの 5-6-7 でプレップし、1（早ければ 8）から回る。1-2-3
+    - その場の左回り: 2 から回る（2-3）、5 で着地
+    - コパ: 2 で男の前へ入り 3 で背中を見せて止まり、4 で出口、5 で元の側へ戻る
+    - 男自身の回転は男の前半（On2 では 5-6-7）
+    リードする手（男の左手/右手）・女が男のどちら側を抜けるか・回る向き（左回り/右回りを主に、インサイド/アウトサイドを
+    添える）を欄の値から書く。分からない要素は書かない（「手を上げる」等）"""
     move = mv.get("move")
     turn = mv.get("turn") if isinstance(mv.get("turn"), dict) else None
     who = (turn or {}).get("by")
@@ -610,36 +652,46 @@ def template_steps_on2(mv):
     ftxt = turn_text(turn, kind=kind) if who in ("follower", "both") else ""
     hand = HAND_WORD.get(mv.get("leadHand"), "手")
     ps = SIDE_WORD.get(mv.get("passSide"))
-    via = f"男の{ps}側を抜け" if ps else "男の前を抜け"
+    via = f"男の{ps}側を通り" if ps else "男の横を通り"
     a, b = "1-2-3", "5-6-7"
-    prep_l, prep_f = "2で下がり3で左へ開く", "2で前へ出る"
     if move == "basic":
-        rows = [(a, "2で後ろへ", "2で前へ"), (b, "6で前へ", "6で後ろへ")]
+        rows = [(a, "2で右足を後ろへ", "2で左足を前へ"), (b, "6で左足を前へ", "6で右足を後ろへ")]
     elif move == "cbl":
-        rows = [(a, prep_l, prep_f), (b, f"{hand}で左へ送り向きを戻す", f"5で{via}6-7で向き直る")]
+        rows = [(a, f"7-1で左へ開き{hand}で送る", f"2で{via}3で½回る"),
+                (b, "5で向き直り6で前へ", "5で着地し6で後ろへ")]
     elif move in ("cbl_inside_turn", "cbl_outside_turn"):
         d = "left" if move == "cbl_inside_turn" else "right"
-        rows = [(a, prep_l, prep_f),
-                (b, f"{hand}を頭上へ上げて回す", f"5で{via}6で{turn_text(turn, d, kind)}・7で向き直る")]
+        lead = f"{hand}を頭上へ上げ内へ回す" if d == "left" else f"{hand}を外へ振り出し頭上で回す"
+        rows = [(a, f"7-1で左へ開き{lead}", f"2で{via}{turn_text(turn, d, kind)}"),
+                (b, "5で向き直り6で前へ", "3-(4)-5で回り切り5で着地・6で後ろへ")]
     elif move == "reverse_cbl":
-        rows = [(a, "2で下がり3で右へ開く", prep_f),
-                (b, f"{hand}で右へ送り向きを戻す", f"5で{via}{('6で' + ftxt + '・') if ftxt else '6-7で'}向き直る")]
+        rows = [(a, f"7-1で右へ開き{hand}で送る", f"2で{via}" + (f"{ftxt}" if ftxt else "3で½回る")),
+                (b, "5で向き直り6で前へ", "5で着地し6で後ろへ")]
     elif move in IN_PLACE_TURNS:
-        d = "right" if move in ("right_turn", "outside_turn") else "left"
-        rows = [(a, f"2で下がり{hand}を上げる", "2で前へ"),
-                (b, f"{hand}を頭上で回す", f"5-6で{turn_text(turn, d, kind)}・7はその場で向き直る")]
+        d = (turn or {}).get("direction")
+        if d not in DIR_SHORT:
+            d = "right" if move in ("right_turn", "outside_turn") else "left"
+        txt = turn_text(turn, d, kind)
+        if d == "right":
+            # スポットの右回り: プレップは前の 8 カウントの 5-6-7（手が 6 で下・7 で上・1 で頂点）、1 から回る
+            rows = [(a, f"{hand}を頭上で回す（前の5-6-7で準備）", f"1から{txt}・3で正対"),
+                    (b, "6で前へ", "6で後ろへ")]
+        else:
+            rows = [(a, f"2で下がり{hand}を上げ内へ回す", f"2から{txt}"),
+                    (b, "6で前へ", "5で着地し6で後ろへ")]
     elif move == "leader_turn":
-        rows = [(a, f"自分で{turn_text(turn) or '回る'}", "その場"), (b, "6で前へ", "6で後ろへ")]
+        rows = [(a, "2で後ろへ", "2で前へ"), (b, f"5-6-7で自分で{turn_text(turn) or '回る'}", "6で後ろへ")]
     elif move == "copa":
-        rows = [(a, prep_l, "2で前へ出る"), (b, f"{hand}で引き戻す", "5で半回転して元の側へ戻る")]
+        rows = [(a, f"7-1で左へ開き{hand}で引き込む", "2で男の前へ入り3で背を向けて止まる"),
+                (b, f"{hand}で引き戻す", "5で½回って元の側へ戻る")]
     elif move == "hand_change":
-        rows = [(a, "手を持ち替える", "ベーシック"), (b, "ベーシック", "ベーシック")]
+        rows = [(a, "手を持ち替える", "2で前へ"), (b, "6で前へ", "6で後ろへ")]
     elif move == "shine":
         rows = [("1-8", "手を離して各自", "手を離して各自")]
     elif move == "wrap":
-        rows = [(a, f"2で下がり{hand}を上げる", "2で前へ"), (b, "腕で包む", "5-6で巻かれて並ぶ")]
+        rows = [(a, f"{hand}を上げ内へ巻き込む", "2-3で左回りで巻かれる"), (b, "腕で包む", "男の横に並ぶ")]
     elif move == "hammerlock":
-        rows = [(a, f"2で下がり{hand}を上げる", "2で前へ"), (b, "背中で手を止める", "5-6で回り手が背中に")]
+        rows = [(a, f"{hand}を腰の高さで回す", "1から回り手が背中へ"), (b, "背中で手を止める", "6で後ろへ")]
     elif move == "shadow":
         rows = [(a, "女の後ろへ", "2で前へ"), (b, "同じ向きで踊る", "同じ向き")]
     elif move == "dip":
@@ -647,17 +699,23 @@ def template_steps_on2(mv):
     else:
         if not ftxt and not (turn and who == "leader"):
             return []
-        rows = [(b, f"{hand}でリード" if ftxt else f"自分で{turn_text(turn)}", f"5-6で{ftxt}" if ftxt else "その場")]
+        if ftxt:
+            rows = [(a, f"{hand}でリード", f"2から{ftxt}")]
+        else:
+            rows = [(b, f"5-6-7で自分で{turn_text(turn)}", "その場")]
     return [{"count": c, "leader": l, "follower": f} for c, l, f in rows]
 
 
 # ---------------------------------------------------------------- 立ち位置（tracks.json）とパスの整合
 
-SIDE_START_BEATS = 1.0    # 行の始まりの立ち位置: 頭からこの拍数までに最後に確かめた側
-SIDE_END_BEATS = -0.5     # 行の終わりの立ち位置: 次の行の頭からこの拍数（負 = 手前）以降に最初に確かめた側
-# 正解表（1230b3d5・ジョブ 581ef6a2）で開始 -0.5〜2 拍・終了 -1.5〜2.5 拍を振り、1.0 / -0.5 が CBL 再現率 0.9・
-# 行の一致 0.879 で最良（終了を -1.5 にすると、CV の入れ替わりが遅れて 8 拍目に出た行を「入れ替わり無し」と読む）
-# 行ごとの局所位相（swapAt を 5 拍目に寄せてカウントを付け直す）は試して入れていない（1230b3d5・581ef6a2）:
+SIDE_START_BEATS = 0.0    # 行の始まりの立ち位置: 頭（カウント 1、女が通る 2 の手前）までに最後に確かめた側
+SIDE_END_BEATS = -2.5     # 行の終わりの立ち位置: 次の行の頭からこの拍数（負 = 手前）以降に最初に確かめた側
+# （カウント 6½ 以降 = 5 で着地して 6 で後ろへブレイクした後）
+# 正解表（1230b3d5・ジョブ 581ef6a2、SWAP_BEAT 4.0）で開始 -2〜1.5 拍・終了 -3.5〜0.5 拍を振り、開始 -1〜0.5・
+# 終了 -2.5〜0.5 が行の一致 0.897・入れ替わりの再現率 0.935 で最良。On2 で意味の通る 0 / -2.5 にした
+# （以前の「5 で通る」格子では 1.0 / -0.5 が最良だった）
+# 行ごとの局所位相（swapAt を 5 拍目に寄せてカウントを付け直す）は試して入れていない（1230b3d5・581ef6a2、
+# 以下は以前の「5 で通る」格子での記録）:
 # swapAt（CV の入れ替わりの 0.6 秒以内）の元の CV 時刻は正解の通過から -1.0〜+1.7 秒（最大 5 拍）ばらつき、
 # 遅れる側に寄るので、CBL 系の行の swapAt のカウントは 6〜8 に
 # 偏り（46 件中 27 件）、正解の通過（平均 5.2）とは合わない。両向きに寄せると正解の通過が 5±1 に入る割合が
@@ -672,8 +730,8 @@ CROSS_CV_SEC = 0.6        # 入れ替わりは、CV の CBL イベントがこ�
 
 def move_sides(moves, runs, crosses, beat, duration, cv_swaps=()):
     """各行の開始・終了で女性が画面の左右どちらにいたか（tracks.json の主ペアの腰の位置）。
-    開始は 2 拍目までに最後に確かめた側、終了は 7½ 拍目以降に最初に確かめた側（On2 なら 5 で通って
-    6-7 で向き直るので、通過の途中を読まない）。swapAt はその行の中で左右が入れ替わった時刻
+    開始は 1 拍目までに最後に確かめた側、終了は 6½ 拍目以降に最初に確かめた側（On2 なら 2 で通って
+    5 で着地するので、通過の途中を読まない）。swapAt はその行の中で左右が入れ替わった時刻
     （CV の CBL イベントと重なるものだけ）"""
     confirmed = [c for c in crosses if any(abs(s - c["t"]) <= CROSS_CV_SEC for s in cv_swaps)]
     out = []
@@ -773,6 +831,75 @@ def cv_spin(summary, t0, t1, by="follower"):
     return None
 
 
+# 回転数の事前分布（技ごとの普通の回数。先頭ほど普通。docs/salsa-knowledge/on2-timing-and-terms.md §5・§8-4）:
+# CBL ½、CBL＋インサイド/アウトサイド 1½（ダブルは 2½）、その場のターン 1（ダブル 2）、男のターン 1（2）
+ROT_PRIOR = {
+    "cbl": (0.5,),
+    "cbl_inside_turn": (1.5, 2.5), "cbl_outside_turn": (1.5, 2.5),
+    "reverse_cbl": (0.5, 1.5, 2.5),
+    "right_turn": (1.0, 2.0), "left_turn": (1.0, 2.0), "inside_turn": (1.0, 2.0), "outside_turn": (1.0, 2.0),
+    "leader_turn": (1.0, 2.0),
+}
+MIN_BEATS_PER_ROT = 1.0     # 多回転でも 1 回転に最低 1 拍（シングルは ≈ 2 拍）。これより多い回転は採らない
+TURN_WINDOW_BEATS = 4.0     # CV の回転区間が無いときに回転に使える拍（半分の 8 カウント。On2 の 2-3-(4)-5 等）
+
+
+def cv_spin_info(summary, t0, t1, by="follower"):
+    """行の中で回り始めた CV のターン（全フレームで数え直した spin）: {"dir", "turns", "dur"}。
+    dir/turns は全部の run が同じ向きのときだけ（左に回ってから右に回り直した等は数が当てにならないので None）。
+    dur は回っていた区間の秒数（無ければ None）。ターンが無ければ None"""
+    for e in (summary or {}).get("events") or []:
+        if not isinstance(e, dict) or e.get("type") != "Turn" or e.get("by") != by:
+            continue
+        sp = e.get("spin") or {}
+        a, b = sp.get("from", e.get("t")), sp.get("to")
+        if not _num(a) or not (t0 - 0.3 <= a < t1):
+            continue
+        runs = [r for r in sp.get("runs") or [] if r.get("dir") in DIR_SHORT and _num(r.get("turns"))]
+        dirs = {r["dir"] for r in runs}
+        one = len(dirs) == 1
+        return {"dir": next(iter(dirs)) if one else None,
+                "turns": sum(r["turns"] for r in runs) if one else None,
+                "dur": (b - a) if _num(b) and b > a else None}
+    return None
+
+
+def apply_rotation_prior(mv, spin, beat):
+    """回転数を技の普通の回数（ROT_PRIOR）の最寄りに寄せ、使える拍より多い回転を削る。戻り値は直した印（変えなければ None）。
+    - 寄せないのは強い証拠があるとき: 画像で見えて自信 STRONG_CONF 以上、または CV の回転（同じ向きの run だけ）が
+      同じ数（±¼）を示すとき（例: CBL＋インサイドで 1 回転で止める = チェック・ラップの入り）
+    - 拍の上限: 回転に使える拍（TURN_WINDOW_BEATS。CV の回転区間がそれより長ければその拍数。CV の区間は見えていた
+      間だけなので下限であって上限ではない）÷ MIN_BEATS_PER_ROT。MAX_ROT と合わせて二重の歯止め
+    元の値は turn.claudeRotations、寄せた理由は turn.rotationSource（prior / beats）に残す"""
+    turn = mv.get("turn")
+    if not isinstance(turn, dict) or not _num(turn.get("rotations")):
+        return None
+    r = turn["rotations"]
+    new, src = r, None
+    prior = ROT_PRIOR.get(mv.get("move"))
+    if mv.get("move") == "leader_turn" and turn.get("by") != "leader":
+        prior = None
+    if prior and r not in prior:
+        conf = mv.get("confidence")
+        seen = mv.get("evidence") == "seen" and _num(conf) and conf >= STRONG_CONF
+        cv = spin.get("turns") if spin and spin.get("dir") == turn.get("direction") else None
+        if not seen and not (_num(cv) and abs(cv - r) <= 0.25):
+            new = min(prior, key=lambda p: (abs(p - r), prior.index(p)))
+            src = "prior"
+    if beat and beat > 0:
+        dur = (spin or {}).get("dur")
+        beats = max(TURN_WINDOW_BEATS, dur / beat if _num(dur) else 0.0)
+        cap = max(0.5, math.floor(beats / MIN_BEATS_PER_ROT * 2) / 2)
+        if new > cap:
+            new, src = cap, "beats"
+    if new == r:
+        return None
+    turn.setdefault("claudeRotations", r)
+    turn["rotations"] = new
+    turn["rotationSource"] = src
+    return f"rotations:{r}->{new}({src})"
+
+
 def check_direction(mv, spin):
     """Claude の回る向きが CV の数えた向きと逆なら CV に合わせて「?」を付ける。戻り値は直した印（変えなければ None）。
     Claude はストリップ画像（上限 12 件）の無いターンを推測で書くことがあり、581ef6a2 の 0:01.76 の行は
@@ -824,40 +951,47 @@ def check_pass(mv, cv_side):
 INSIDE_NEAR_BEATS = 4.0   # インサイドターンの行の外でも、この拍数（半分の 8 カウント）以内の入れ替わりはその技のパスとみなす
 
 
-def check_inside_turns(out, beat, timing):
-    """女性のインサイドターンは普通 CBL と組む（CBL＋インサイドターン: 女性は反対側へ抜けて 5-6-7 で内回り）。
-    その場のインサイドターンの行で入れ替わりが無いとき:
+def check_inside_turns(out, beat, timing, summary=None):
+    """移動しながらの女性のターンは普通 CBL と組む（CBL＋インサイド/アウトサイド: 女性は 2 で男の横を抜けながら
+    2-3-(4)-5 で 1½）。その場のターン（左回り・右回り）の行で入れ替わりが無いとき:
     - 前後の行の、この行から半分の 8 カウント以内に CV の入れ替わりがあり、その行が CBL 系でない（入れ替わりの
-      持ち主がいない）なら、この行を CBL＋インサイドに付け替える
-    - そうでなければ種類はそのままで「?」を付ける
-    戻り値は直した印のリスト"""
+      持ち主がいない）なら、この行を CBL＋インサイド（左回り）/ CBL＋アウトサイド（右回り）に付け替えて「?」を付ける
+      （インサイド/アウトサイドを手で決めていた頃は、女の左手の右回りも「インサイド」としてここで付け替えていた）
+    - そうでなければ、その場のターンのまま。入れ替わりの無い左回転・右回転は普通の技（MG の Left turn / Right turn）
+      なので「?」は付けない（on2-timing-and-terms.md §8-7）。以前はインサイドに「?」を付けていた
+    戻り値は直した印のリスト（付け替えたものだけ）"""
     fixes = []
     for k, mv in enumerate(out):
         turn = mv.get("turn") or {}
         sides = mv.get("sides")
-        if mv.get("move") not in IN_PLACE_TURNS or turn.get("kind") != "inside" or not sides or sides.get("swapAt"):
+        kind = turn.get("kind")
+        if mv.get("move") not in IN_PLACE_TURNS or kind not in KIND_WORD or not sides or sides.get("swapAt"):
             continue
+        target = f"cbl_{kind}_turn"
         t0 = mv["start"]
         t1 = out[k + 1]["start"] if k + 1 < len(out) else t0 + mv["counts"] * beat
         near = None
         for j in (k - 1, k + 1):
+            # CBL 系の行の入れ替わりはその行のもの。2 つ以上あるとき近い端の 1 つを取るのも試したが、正解表で
+            # 行の一致が 0.914 → 0.862（581ef6a2）/ 0.786 → 0.768（2f4b6919）に落ちたので入れていない
             if not (0 <= j < len(out)) or out[j].get("move") in CBL_MOVES:
                 continue
             for s in (out[j].get("sides") or {}).get("swapAt") or []:
                 if t0 - INSIDE_NEAR_BEATS * beat <= s < t1 + INSIDE_NEAR_BEATS * beat:
                     near = (j, s)
         if near:
-            fix = f"insideTurnNearSwap:{mv['move']}->cbl_inside_turn@{near[1]}"
-            mv["move"] = "cbl_inside_turn"
+            fix = f"turnNearSwap:{mv['move']}->{target}@{near[1]}"
+            mv["move"] = target
             mv["passSide"] = mv.get("passSide") if mv.get("passSide") in ("left", "right") else None
-            mv["name"] = turn_name(mv) or DEFAULT_NAME["cbl_inside_turn"]
+            rot = apply_rotation_prior(mv, cv_spin_info(summary, t0, t1), beat)
+            if rot:
+                mv["rotationCheck"] = rot
+            mv["name"] = turn_name(mv) or DEFAULT_NAME[target]
             mv["steps"] = template_steps(mv, timing)
             mv["stepsSource"] = "template"
-        else:
-            fix = "insideTurnNoSwap"
-        mv["passCheck"] = mv.get("passCheck") or fix
-        mark_uncertain(mv)
-        fixes.append(fix)
+            mv["passCheck"] = mv.get("passCheck") or fix
+            mark_uncertain(mv)
+            fixes.append(fix)
     return fixes
 
 
@@ -927,7 +1061,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
         phase = best_phase(starts, period, [first + beat * k for k in range(8)])
         tempo_src = "audio"
     else:
-        guess = unit8_from_routine(moves) or DEFAULT_UNIT8
+        guess = salsa_unit8(unit8_from_routine(moves)) or DEFAULT_UNIT8
         swaps = swap_times(summary)
         swap_fit = fit_grid_to_swaps(swaps, guess, duration or (max(starts) + guess), turn_times(summary))
         if swap_fit:
@@ -1005,6 +1139,10 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
             if mv["move"] != before and mv["move"] in DEFAULT_NAME:
                 mv["name"] = DEFAULT_NAME[mv["move"]]
             mark_uncertain(mv)
+        # 回転数を技の普通の回数へ（技の種類が決まった後で）
+        rot = apply_rotation_prior(mv, cv_spin_info(summary, t0, t1), beat)
+        if rot:
+            mv["rotationCheck"] = rot
         # リードする手: 片手でつないでいれば男性のその手、無ければ CV が見た頭上に上がった手
         mv["leadHand"] = leader_hand(turn_hold(mv) or mv.get("holdStart")) or cv_lead_hand(summary, t0, t1)
         turn = mv.get("turn")
@@ -1013,9 +1151,14 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
             turn.pop("kind", None)
             if kind:
                 turn["kind"] = kind
-                # CBL＋ターンの種類は向きと手で決まる方に合わせる（Claude の付けた inside/outside と食い違うことがある）
+                # 技の種類を回る向きに合わせる（Claude の付けた inside/outside・右/左ターンと食い違うことがある。
+                # CV の向きで直した行も。例: Claude の「右ターン」で CV が左回り → left_turn）
                 if mv["move"] in ("cbl_inside_turn", "cbl_outside_turn"):
                     mv["move"] = f"cbl_{kind}_turn"
+                elif mv["move"] in IN_PLACE_TURNS:
+                    # その場のターンは右回り/左回りで呼ぶ（インサイド/アウトサイドは CBL と組んだ形の名前。
+                    # on2-timing-and-terms.md §8-7: 入れ替わりの無い左回転は left_turn）
+                    mv["move"] = f"{turn['direction']}_turn"
         q = bool(re.search(r"[?？]$", mv.get("name") or ""))
         tn = turn_name(mv)
         if tn:
@@ -1028,7 +1171,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
         mv["steps"] = steps or template_steps(mv, timing)
         mv["stepsSource"] = "claude" if steps else "template"
 
-    fixes += check_inside_turns(out, beat, timing)
+    fixes += check_inside_turns(out, beat, timing, summary)
 
     routine["rawMoves"] = raw
     routine["moves"] = out
@@ -1036,6 +1179,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
     routine["timingSource"] = timing_src
     routine["passChecks"] = len(fixes)
     routine["directionChecks"] = sum(1 for m in out if m.get("directionCheck"))
+    routine["rotationChecks"] = sum(1 for m in out if m.get("rotationCheck"))
     routine["grid"] = {
         "unitSec": round(period, 3), "beatSec": round(beat, 4), "phaseSec": round(phase % period, 3),
         "source": tempo_src,

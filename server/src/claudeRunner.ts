@@ -11,7 +11,7 @@
  *   識別は割れやすいので、判定に使った出力の末尾を必ずエラーメッセージに含める
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,6 +21,26 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN ?? 'claude';
 const PROMPT_PATH = path.resolve(__dirname, '../prompts/runner-prompt.md');
 const ANCHOR_PROMPT_PATH = path.resolve(__dirname, '../prompts/anchor-prompt.md');
 const MAX_TURNS = process.env.CLAUDE_MAX_TURNS ?? '30';
+/**
+ * 裁定役が必要なときだけ Read する技辞典・On2 の拍の資料（docs/salsa-knowledge）。
+ * claude は cwd = jobDir・Read のみ許可で動くので、ジョブの作業ディレクトリの knowledge/ に写して渡す
+ */
+const KNOWLEDGE_DIR = path.resolve(__dirname, '../../docs/salsa-knowledge');
+const KNOWLEDGE_FILES = ['move-dictionary.md', 'on2-timing-and-terms.md'];
+
+/** 辞典を jobDir/knowledge/ に写す。無くても裁定はできる（プロンプトに要約がある）ので失敗は無視 */
+function copyKnowledge(jobDir: string): void {
+  try {
+    const dst = path.join(jobDir, 'knowledge');
+    mkdirSync(dst, { recursive: true });
+    for (const f of KNOWLEDGE_FILES) {
+      const src = path.join(KNOWLEDGE_DIR, f);
+      if (existsSync(src)) copyFileSync(src, path.join(dst, f));
+    }
+  } catch (e) {
+    console.warn(`[claudeRunner] knowledge copy failed: ${(e as Error).message}`);
+  }
+}
 
 /** レート制限・使用量上限。リトライ（バックオフ）対象 */
 export class ClaudeRateLimitError extends Error {}
@@ -86,6 +106,7 @@ export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise
 
 export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSignal): Promise<ClaudeRunResult> {
   const promptText = `${readFileSync(PROMPT_PATH, 'utf-8')}\n\n---\n\n${specMarkdown}`;
+  copyKnowledge(jobDir);
 
   return new Promise((resolve, reject) => {
     const proc = spawn(CLAUDE_BIN, [

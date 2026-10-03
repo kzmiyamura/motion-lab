@@ -37,13 +37,19 @@ def out_dir(gt):
     return os.path.join(JOBS_DIR, gt["job"], "out")
 
 
+def in_range(gt, t):
+    """evalRange [開始, 終了]（秒）の内側か。録画停止時の画面などは範囲外にして採点しない"""
+    lo, hi = gt.get("evalRange") or (float("-inf"), float("inf"))
+    return lo <= t <= hi
+
+
 def load_events(gt, stored):
     out = out_dir(gt)
     if stored:
         m = json.load(open(os.path.join(out, "measurements.json"), encoding="utf-8"))
-        return m["summary"]["events"], None
+        return [e for e in m["summary"]["events"] if in_range(gt, e["t"])], None
     data = json.load(open(os.path.join(out, "measurements.tracks.json"), encoding="utf-8"))
-    return ap.detect_events(data["frames"], data["leaderPid"]), data
+    return [e for e in ap.detect_events(data["frames"], data["leaderPid"]) if in_range(gt, e["t"])], data
 
 
 def match(gt_items, preds):
@@ -95,8 +101,9 @@ def _r(x):
     return None if x is None else round(x, 3)
 
 
-def score_events(gt_items, preds):
-    """optional な正解は、対応した検出を誤検出に数えず、見逃しても取りこぼしに数えない"""
+def score_events(gt_items, preds, count_fp=True):
+    """optional な正解は、対応した検出を誤検出に数えず、見逃しても取りこぼしに数えない。
+    count_fp=False は正解側が出来事を数え切れていない（turnsComplete: false）ときで、誤検出を数えない"""
     c = Counter()
     pairs = match(gt_items, preds)
     matched_g = {gi for gi, _ in pairs}
@@ -105,7 +112,8 @@ def score_events(gt_items, preds):
         if not gt_items[gi].get("optional"):
             c.tp += 1
     c.fn += sum(1 for gi, g in enumerate(gt_items) if gi not in matched_g and not g.get("optional"))
-    c.fp += sum(1 for pi in range(len(preds)) if pi not in matched_p)
+    if count_fp:
+        c.fp += sum(1 for pi in range(len(preds)) if pi not in matched_p)
     return c, pairs
 
 
@@ -173,7 +181,7 @@ def evaluate(gt, stored, verbose):
     for by, key in (("follower", "Turn.follower"), ("leader", "Turn.leader")):
         g_items = [g for g in gt["turns"] if g["by"] == by]
         p_items = [e for e in preds if e["type"] == "Turn" and e["by"] == by]
-        c, pairs = score_events(g_items, p_items)
+        c, pairs = score_events(g_items, p_items, count_fp=gt.get("turnsComplete", True))
         res["events"][key] = c
         for gi, pi in pairs:
             g, p = g_items[gi], p_items[pi]
@@ -196,6 +204,8 @@ def evaluate(gt, stored, verbose):
     if data is None:
         data = json.load(open(os.path.join(out_dir(gt), "measurements.tracks.json"), encoding="utf-8"))
     for h in gt["holds"]:
+        if h.get("optional"):
+            continue
         got = parse_hold(ap.detect_hold(data["frames"], h["t"], data["leaderPid"]))
         res["hold"]["leader"].add(got is not None and got[0] == h["leader"])
         if h.get("follower"):
@@ -272,6 +282,10 @@ def main():
         gt = json.load(open(path, encoding="utf-8"))
         name = os.path.splitext(os.path.basename(path))[0]
         print(f"== {name}")
+        if not os.path.exists(os.path.join(out_dir(gt), "measurements.tracks.json")):
+            print(f"  （解析出力が無いので飛ばす: {out_dir(gt)}）")
+            report["videos"][name] = None
+            continue
         r = evaluate(gt, args.stored, args.verbose)
         results.append(r)
         report["videos"][name] = to_dict(r)

@@ -12,7 +12,9 @@
 | `video` | 何の動画か（人が読むメモ） |
 | `job` | 解析ジョブ ID（`storage/analysis-jobs/<job>/out/measurements.tracks.json` を読む） |
 | `outDir` | ジョブを経ずに解析した動画だけ。`storage` からの相対パス（例 `gt-sheets/8c312c6d/out`）。`job` より優先 |
-| `leaderAtStart` | 冒頭で男性が画面の `"left"` / `"right"` どちらか |
+| `leaderAtStart` | 冒頭で男性が画面の `"left"` / `"right"` どちらか（メモ。採点はしない — 入場直後や冒頭の CBL で「冒頭」が定まらないため。人物の取り違えは各 CBL の `from` で測る） |
+| `evalRange` | 採点する範囲 `[開始秒, 終了秒]`。録画停止時の画面・リールのループなどを外す。範囲外の検出は無視する（省略時は全編） |
+| `turnsComplete` | `false` = ターンを全部は拾えていない（速くて 0.5 秒刻みで読めない等）。ターンの誤検出を数えない（省略時 true） |
 | `cbl[]` | 男女の左右の入れ替わり。`kind`: `"cbl"`（クロスボディリード）/ `"swap"`（その他の入れ替わり）。`from`: 入れ替わる前に女性がいた側 `"left"`/`"right"`。`depth`: 女性が男性の手前を通ったら `"near"`、奥なら `"far"`。`leaderHandRaised`: 男性が手を頭上に上げたか（true/false） |
 | `turns[]` | ターン。`by`: `"follower"`/`"leader"`。`runs`: 回った向きと回数の並び（`dir` は本人から見て `"left"`=反時計回り / `"right"`=時計回り。途中で逆回りに変わったら run を分ける） |
 | `holds[]` | その時刻に手をつないでいる手。`leader` / `follower` は `"L"` / `"R"` / `"both"` / `null`（離している） |

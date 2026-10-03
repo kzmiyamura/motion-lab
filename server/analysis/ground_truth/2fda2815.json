@@ -1,0 +1,34 @@
+{
+  "video": "2fda2815（Instagram リール画面録画: スタジオでのサルサ On2 ペアワーク、約31秒。0:30.5〜 iPhone コントロールセンター）",
+  "job": "87003970-09bc-4030-8a6e-156f140d296a",
+  "source": "storage/gt-sheets/2fda2815 コマ一覧（0.5秒刻み）を目視で読み取り（2026-10-03）",
+  "leaderAtStart": "right",
+  "evalRange": [0, 30.5],
+  "notes": [
+    "男性=グレーのシャツ、女性=白トップス・黒パンツ。固定カメラに近い（パンは小さい）",
+    "背景の鏡に撮影者（黒服でスマホを構える人）が映る。0:08〜0:12 ごろ奥にピンクのシャツの人物も映る。ペアと誤認しやすい",
+    "0:21〜0:27 は男性がカメラに背を向けて女性をほぼ隠している。この間の入れ替わりは脚・腕の位置から推定（depth は far）",
+    "女性のターンは向きの順番（左向き→背中→右向き）から右回りと読んだ。0.5秒刻みで途中が飛ぶものは optional",
+    "0:30.5〜 録画停止時の iPhone コントロールセンター。評価対象外"
+  ],
+  "cbl": [
+    {"t": 3.3, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": false, "memo": "0:03 CBL（手は胸の高さ）"},
+    {"t": 5.0, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:05 女性が手前を通って左へ、腕を上げて回る"},
+    {"t": 9.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:09 女性が手前を通って右へ"},
+    {"t": 13.0, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": true, "memo": "0:13 頭上で手をつないだまま手前を通って左へ"},
+    {"t": 20.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:20 ターン直後に手前を通って右へ"},
+    {"t": 21.3, "kind": "swap", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:21 男性の背中の陰で女性が左へ"},
+    {"t": 23.8, "kind": "swap", "from": "left", "depth": "far", "leaderHandRaised": null, "memo": "0:23 男性の陰から右へ"},
+    {"t": 27.5, "kind": "swap", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:27 男性の陰を通って左へ"}
+  ],
+  "turns": [
+    {"t": 6.0, "by": "follower", "runs": [{"dir": "right", "turns": null}], "optional": true, "memo": "0:05〜0:06 CBL 後に右回り?（回数不明）"},
+    {"t": 10.8, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:10 頭上で手をつないで右ターン"},
+    {"t": 13.0, "by": "follower", "runs": [{"dir": "right", "turns": null}], "optional": true, "memo": "0:13 CBL からのアウトサイドターン?"},
+    {"t": 19.2, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:19 頭上で右ターン（右向き→正面→左向き→右向き）"},
+    {"t": 28.3, "by": "follower", "runs": [{"dir": "right", "turns": null}], "optional": true, "memo": "0:28 両腕を頭上で回る（男性の陰から出た直後）"}
+  ],
+  "holds": [
+    {"t": 4.2, "leader": "L", "follower": "R"}
+  ]
+}

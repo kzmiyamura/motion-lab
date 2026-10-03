@@ -1,0 +1,37 @@
+{
+  "video": "8c312c6d（Instagram リール画面録画: スタジオでのペアワーク、約36秒。0:36.5〜 iPhone コントロールセンター）",
+  "outDir": "gt-sheets/8c312c6d/out",
+  "source": "storage/gt-sheets/8c312c6d コマ一覧（0.5秒刻み）を目視で読み取り（2026-10-03）",
+  "leaderAtStart": "left",
+  "evalRange": [0, 36.0],
+  "turnsComplete": false,
+  "notes": [
+    "男性=黒ベスト・白袖・バンダナ、女性=黒Tシャツ（胸に白・赤の帯）・ポニーテール",
+    "背景の鏡の前に見学者が数人立っている（黒服が多く、ペアと誤認しやすい）。鏡にも人が映る",
+    "撮影者は手持ちで小さくパンする。入れ替わりは撮影位置の移動ではなく2人の移動と判断した",
+    "ターンは0.5秒刻みで途中が飛ぶため、向きは読めないものが多い（全て optional）",
+    "holds は空: 手のつなぎが連続コマで確定できる場面が無かった",
+    "0:36.0 で動画終了（再生ボタン表示）、0:36.5〜 iPhone コントロールセンター。評価対象外"
+  ],
+  "cbl": [
+    {"t": 1.5, "kind": "swap", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:01 クローズドで回り、女性が男性の奥を通って左へ"},
+    {"t": 6.5, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": true, "memo": "0:06 頭上で手を回して女性が手前を通り右へ"},
+    {"t": 9.2, "kind": "cbl", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:09 男性が手前、女性が奥を通って左へ"},
+    {"t": 10.5, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:10 女性が回りながら手前を通って右へ"},
+    {"t": 15.8, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:15 女性が手前を通って左へ"},
+    {"t": 20.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:20 女性が背中を見せて手前を通り右へ"},
+    {"t": 25.0, "kind": "cbl", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:25 男性の背中の陰で左へ"},
+    {"t": 26.6, "kind": "cbl", "from": "left", "depth": "far", "leaderHandRaised": null, "memo": "0:26 男性が手前、女性は奥を通って右へ"},
+    {"t": 28.0, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:28 女性が背中を見せて手前を通り左へ"},
+    {"t": 31.7, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:31 女性が両腕を上げて手前を通り右へ"}
+  ],
+  "turns": [
+    {"t": 4.0, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:03〜0:04 頭上の手の下で回る?"},
+    {"t": 6.0, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:06 CBL 中のターン?"},
+    {"t": 14.0, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:13〜0:14 頭上で手をつないでターン"},
+    {"t": 21.5, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:21 頭上で手をつないでターン（背中→正面→横）"},
+    {"t": 29.2, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:29 腕を頭の近くでスピン?"},
+    {"t": 33.2, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:33 両腕を上げて回る（手は離している）"}
+  ],
+  "holds": []
+}

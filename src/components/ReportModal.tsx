@@ -1,7 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getJobDetail, resolveHomeServerUrl, type AnalysisJobDetail } from '../engine/homeServer';
 import { routineFromResult } from '../engine/routineClip';
 import { sendRoutineTo3D } from '../engine/routineBus';
+import { parseChoreoSheet, parseMoveFrames, reportSummary } from '../engine/choreoSheet';
+import { ChoreoSheet } from './ChoreoSheet';
 import styles from './ReportModal.module.css';
 
 type Props = {
@@ -136,6 +138,8 @@ export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
   const [job, setJob] = useState<AnalysisJobDetail | null>(null);
   const [error, setError] = useState('');
   const [copyMsg, setCopyMsg] = useState('');
+  const [showDetail, setShowDetail] = useState(false);
+  const [moveFrames, setMoveFrames] = useState<Map<number, string>>(() => new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +148,29 @@ export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
       .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'レポートの取得に失敗しました'); });
     return () => { cancelled = true; };
   }, [baseUrl, jobId]);
+
+  // 振付シート（result.json の routine.moves があれば既定の表示。無ければ従来の Markdown）
+  const sheet = useMemo(() => parseChoreoSheet(job?.resultJson ?? null), [job]);
+  const summary = useMemo(() => (sheet ? reportSummary(job?.reportMd ?? null) : []), [sheet, job]);
+
+  // 技ごとの連続コマ画像（サーバーの out/move_frames/index.json）。無ければ写真なしで出す
+  useEffect(() => {
+    if (!sheet) return;
+    let cancelled = false;
+    const url = resolveHomeServerUrl(baseUrl, `/analysis-output/${jobId}/out/move_frames/index.json`);
+    if (!url) return;
+    fetch(url)
+      .then(r => (r.ok ? r.json() : null))
+      .then(json => {
+        if (cancelled || !json) return;
+        const raw = parseMoveFrames(json, sheet.rows);
+        const resolved = new Map<number, string>();
+        raw.forEach((p, i) => resolved.set(i, p.startsWith('/') ? resolveHomeServerUrl(baseUrl, p) ?? p : p));
+        setMoveFrames(resolved);
+      })
+      .catch(() => { /* 画像なしで表示する */ });
+    return () => { cancelled = true; };
+  }, [sheet, baseUrl, jobId]);
 
   // 解析結果をクリップボードへコピーし、ジェネレーターを新しいタブで開く。
   // ユーザーはジェネレーターの「📥」に貼り付けて、動画のルーティンを骨格で再現できる。
@@ -176,7 +203,30 @@ export function ReportModal({ jobId, videoTitle, baseUrl, onClose }: Props) {
         <div className={styles.body}>
           {error && <p className={styles.error}>{error}</p>}
           {!job && !error && <p className={styles.hint}>読み込み中…</p>}
-          {job && (
+          {job && sheet && (
+            <>
+              {summary.length > 0 && (
+                <div className={styles.summary}>
+                  {summary.map((s, i) => <p key={i} className={styles.para}>{renderInline(s, baseUrl, `sum${i}`)}</p>)}
+                </div>
+              )}
+              <ChoreoSheet sheet={sheet} frames={moveFrames} />
+              {job.reportMd && (
+                <>
+                  <button
+                    type="button"
+                    className={styles.detailToggle}
+                    aria-expanded={showDetail}
+                    onClick={() => setShowDetail(v => !v)}
+                  >
+                    {showDetail ? '詳細を閉じる ▲' : '詳細を表示 ▼'}
+                  </button>
+                  {showDetail && <div className={styles.detail}>{renderMarkdown(job.reportMd, baseUrl)}</div>}
+                </>
+              )}
+            </>
+          )}
+          {job && !sheet && (
             job.reportMd
               ? renderMarkdown(job.reportMd, baseUrl)
               : <p className={styles.hint}>このジョブにはレポートがありません（status: {job.status}{job.errorMessage ? ` / ${job.errorMessage}` : ''}）</p>

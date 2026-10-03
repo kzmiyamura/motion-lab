@@ -190,6 +190,41 @@
   outline-offset: 2px;
 }
 
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.detailToggle {
+  align-self: flex-start;
+  margin-top: 0.3rem;
+  background: none;
+  border: 1px solid var(--color-border2);
+  border-radius: 999px;
+  color: var(--color-fg-dim);
+  font-size: 0.72rem;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+@media (max-width: 480px) {
+  .overlay {
+    padding: 0.4rem;
+  }
+
+  .modal {
+    max-height: 96vh;
+    padding: 0.7rem;
+  }
+}
+
 .genMsg {
   font-size: 0.64rem;
   color: var(--color-fg-dim);

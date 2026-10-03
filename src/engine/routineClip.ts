@@ -60,7 +60,7 @@ const FPS = 30;
 const BLEND_BEATS = 1;                // 技の継ぎ目を混ぜる幅（前後 0.5 拍ずつ）
 const N_JOINTS = 19;
 
-const MOVE_LABEL: Record<RoutineMoveId, string> = {
+export const MOVE_LABEL: Record<RoutineMoveId, string> = {
   basic: 'ベーシック',
   cbl: 'クロスボディリード',
   right_turn: '右ターン',

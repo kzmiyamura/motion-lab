@@ -399,6 +399,13 @@ EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
 # 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
 CBL_COOLDOWN_SEC = 0.6
+# CBL の判定から外す「背の縮んだ」コマ: 本人の前後 CBL_SIZE_WIN_SEC 秒の bbox 高さ中央値の
+# この割合未満。ペアが重なって片方が隠れたコマで、背景の小さいダンサー（ペアの 0.55〜0.67 倍）が
+# 2人目として拾われ、左右の偽の入れ替わりになる（1230b3d5 の CBL 誤検出の主因。57〜60秒のディップ等）。
+# 5本で CBL P 0.687→0.76・R 0.851 のまま、他の指標は不変（eval_ground_truth.py）。
+# 0.75 にすると本物の交差のコマも落ちて R 0.821 に下がるので上げない
+CBL_SIZE_RATIO = 0.7
+CBL_SIZE_WIN_SEC = 3.0
 # ターンの向きの目安（spin）を見る窓: イベント時刻の前後
 SPIN_PRE_SEC = 0.4
 SPIN_POST_SEC = 1.6
@@ -485,12 +492,25 @@ def detect_cbl(draw_frames):
 
     CBL の定義そのものである「2人の左右位置の入れ替わり」を検出する。
     腰X差の符号反転のうち、交差の前後 CBL_WINDOW_SEC 以内に十分な分離
-    （CBL_MIN_SEP 以上）が両側にあるものだけを採用（密着中のジッタを弾く）
+    （CBL_MIN_SEP 以上）が両側にあるものだけを採用（密着中のジッタを弾く）。
+    どちらかが本人の普段の背丈より大きく縮んだコマは別人の取り違えとみなして使わない（CBL_SIZE_RATIO）
     """
+    heights = {0: [], 1: []}  # pid -> [(t, bbox 高さ)]
+    for df in draw_frames:
+        for p in df["kept"]:
+            if p.get("pid") in heights and p.get("bbox"):
+                heights[p["pid"]].append((df["t"], p["bbox"][3] - p["bbox"][1]))
+
+    def shrunk(pid, t, p):
+        if not p.get("bbox"):
+            return False
+        hs = sorted(h for tt, h in heights[pid] if abs(tt - t) <= CBL_SIZE_WIN_SEC)
+        return (p["bbox"][3] - p["bbox"][1]) < CBL_SIZE_RATIO * hs[len(hs) // 2]
+
     pair = []  # (t, hipX[pid0] - hipX[pid1])
     for df in draw_frames:
         by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
-        if 0 in by_pid and 1 in by_pid:
+        if 0 in by_pid and 1 in by_pid and not any(shrunk(k, df["t"], by_pid[k]) for k in (0, 1)):
             pair.append((df["t"], by_pid[0]["hipX"] - by_pid[1]["hipX"]))
     events = []
     last_event = -1e9

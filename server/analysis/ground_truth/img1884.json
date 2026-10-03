@@ -29,6 +29,7 @@
     {"t": 51.5, "by": "follower", "runs": [{"dir": "left", "turns": 1}], "memo": "0:51 フリースピン?"},
     {"t": 54.5, "by": "follower", "runs": [{"dir": "left", "turns": 1}], "memo": "0:54 レフトターン"},
     {"t": 56.6, "by": "follower", "runs": [{"dir": "left", "turns": 1}], "memo": "0:56 フリースピン"},
+    {"t": 59.8, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:59.8 背中が見え回っているようだが、0:59.6 の CBL? の通過動作との区別は未確定"},
     {"t": 61.8, "by": "follower", "runs": [{"dir": "left", "turns": 1}], "memo": "1:01 インサイドターン"},
     {"t": 63.7, "by": "follower", "runs": [{"dir": null, "turns": null}], "memo": "1:03 アンダーアームターン（向き不明）"},
     {"t": 66.8, "by": "follower", "runs": [{"dir": "left", "turns": 1}], "memo": "1:06 インサイドターン"},

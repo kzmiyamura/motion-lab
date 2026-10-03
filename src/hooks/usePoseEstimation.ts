@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { predictLeaderProbSync, predictLeaderProbSyncV2, normalizeKeyJointsV2 } from '../engine/poseClassifier';
+import { PairMoveDetector, type PairMove } from '../engine/pairMoves';
 
 // @mediapipe/tasks-vision の exports 形式が非標準のため型を自前定義
 interface NormalizedLandmark { x: number; y: number; z: number; visibility?: number; }
@@ -351,10 +352,8 @@ interface PatternDetectionState {
   turnFrames: number;
   sideFrames: number;
   dipFrames: number;
-  cblFrames: number;
   hammerFrames: number;
   baseShoulderSpan: number;   // -1 = not initialized
-  baseHipX: number;           // -1 = not initialized
   lastEventTime: Record<string, number>;  // action → last video time
 }
 
@@ -363,10 +362,8 @@ function makeInitialPatternState(): PatternDetectionState {
     turnFrames: 0,
     sideFrames: 0,
     dipFrames: 0,
-    cblFrames: 0,
     hammerFrames: 0,
     baseShoulderSpan: -1,
-    baseHipX: -1,
     lastEventTime: {},
   };
 }
@@ -426,6 +423,7 @@ function runPatternDetection(
   state: PatternDetectionState,
   allowRewind: boolean,
   emit: (action: string, quality: number, beatNum: number | undefined) => void,
+  onTurnHint: () => void,
 ) {
   const beatNum = bpmVal > 0
     ? Math.floor((videoTime * bpmVal / 60) % 8) + 1
@@ -462,7 +460,9 @@ function runPatternDetection(
     ? (hL.y + hR.y) / 2
     : hasVis(hL) ? hL.y : hasVis(hR) ? hR.y : null;
 
-  // ── 1. Turn detection ────────────────────────────────────────────────
+  // ── 1. Turn の手がかり（イベントにはしない）─────────────────────────
+  // Turn / CBL のイベントは 2人の関係を見る PairMoveDetector（engine/pairMoves.ts）が出す。
+  // ここの肩幅収縮は位相モニタリングを抑制するための即時ヒント（onTurnHint）にだけ使う
   if (hasVis(sL) && hasVis(sR)) {
     const shoulderSpan = Math.abs(sR.x - sL.x);
 
@@ -475,8 +475,8 @@ function runPatternDetection(
     if (isTurning) {
       state.turnFrames++;
       if (state.turnFrames >= 4 && canEmit('Turn')) {
-        const quality = Math.min(1, 0.5 + state.turnFrames * 0.05);
-        doEmit('Turn', quality);
+        state.lastEventTime['Turn'] = videoTime;
+        onTurnHint();
         state.turnFrames = 0;
       }
     } else {
@@ -517,29 +517,7 @@ function runPatternDetection(
     }
   }
 
-  // ── 4. CBL (Cross Body Lead) detection ───────────────────────────────
-  if (hipMidX !== null) {
-    const hipX = hipMidX;
-
-    if (state.baseHipX < 0) {
-      state.baseHipX = hipX;
-    }
-
-    const hipShift = Math.abs(hipX - state.baseHipX);
-
-    if (hipShift > 0.20) {
-      state.cblFrames++;
-      if (state.cblFrames >= 5 && canEmit('CBL')) {
-        doEmit('CBL', 0.65);
-        state.cblFrames = 0;
-        state.baseHipX = hipX; // reset baseline after emit
-      }
-    } else {
-      state.cblFrames = 0;
-      // Slowly update baseHipX when stable
-      state.baseHipX = state.baseHipX * 0.98 + hipX * 0.02;
-    }
-  }
+  // ── 4. CBL は PairMoveDetector（2人の左右の入れ替わり）で検出する ──────
 
   // ── 5. Hammerlock detection ──────────────────────────────────────────
   if (hasVis(shoulderR) && hasVis(elbowR) && hasVis(wristR) && hipMidY !== null) {
@@ -1338,12 +1316,30 @@ function computeHeadEllipse(lm: NormalizedLandmark[]): EllipseMask {
  * @returns { landmarks, masks } — landmarks はマージ済み全人物、
  *          masks は Pass2 で使用した楕円（デバッグ描画用）
  */
+/**
+ * 2パス目の検出が1パス目と同一人物（頭を隠して再検出しただけ）か。
+ * 両肩・両腰の4点の平均距離が胴長の 35% 未満なら同一人物とみなす。
+ * 旧判定（腰中点が 0.2 以内なら重複）は、組んで踊るペアの2人目（腰が近い）を必ず捨てていた。
+ */
+export function isSamePose(a: NormalizedLandmark[], b: NormalizedLandmark[]): boolean {
+  const idx = [11, 12, 23, 24];
+  if (idx.some(i => !a[i] || !b[i])) {
+    const ha = computeMidHip(a), hb = computeMidHip(b);
+    return !!ha && !!hb && Math.hypot(ha.x - hb.x, ha.y - hb.y) < 0.05;
+  }
+  const d = idx.reduce((s, i) => s + Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y), 0) / idx.length;
+  const torso = Math.hypot((a[11].x + a[12].x - a[23].x - a[24].x) / 2, (a[11].y + a[12].y - a[23].y - a[24].y) / 2);
+  return d < Math.max(0.02, torso * 0.35);
+}
+
 function runTwoPassDetect(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   landmarker: any,
   video: HTMLVideoElement,
   now: number,
   offCanvas: HTMLCanvasElement,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  imageLandmarker?: any,
 ): { landmarks: NormalizedLandmark[][]; masks: EllipseMask[] } {
   const r1 = landmarker.detectForVideo(video, now);
   const p1 = r1.landmarks as NormalizedLandmark[][];
@@ -1351,6 +1347,34 @@ function runTwoPassDetect(
 
   const vw = video.videoWidth, vh = video.videoHeight;
   if (vw <= 0 || vh <= 0 || !p1.length) return { landmarks: p1, masks: [] };
+
+  // 1人しか取れていないとき: その人の頭を隠して IMAGE モードの別インスタンスで再検出する（2人目を探す）。
+  // VIDEO モードで再検出すると追跡中の1人目を拾い直すだけになる
+  if (imageLandmarker && p1.length === 1) {
+    // 正方形のキャンバスに中央寄せで描く（非正方形の入力は MediaPipe の座標投影が崩れ、潰れた骨格が返る）
+    const S = Math.max(vw, vh);
+    const ox = Math.round((S - vw) / 2), oy = Math.round((S - vh) / 2);
+    if (offCanvas.width !== S || offCanvas.height !== S) { offCanvas.width = S; offCanvas.height = S; }
+    const cctx = offCanvas.getContext("2d");
+    if (cctx) {
+      cctx.fillStyle = "#808080";
+      cctx.fillRect(0, 0, S, S);
+      cctx.drawImage(video, ox, oy, vw, vh);
+      const m = computeHeadEllipse(p1[0]);
+      cctx.beginPath();
+      cctx.ellipse(m.cx * vw + ox, m.cy * vh + oy, m.rx * vw, m.ry * vh, 0, 0, Math.PI * 2);
+      cctx.fill();
+      const r2 = imageLandmarker.detect(offCanvas);
+      const merged = [...p1];
+      for (const lm2 of (r2.landmarks as NormalizedLandmark[][])) {
+        // 正方形キャンバス座標 → 動画全体の正規化座標
+        const full = lm2.map(l => ({ ...l, x: (l.x * S - ox) / vw, y: (l.y * S - oy) / vh }));
+        if (!computeMidHip(full)) continue;
+        if (!merged.some(lm1 => isSamePose(lm1, full))) merged.push(full);
+      }
+      return { landmarks: merged, masks: [m] };
+    }
+  }
 
   if (offCanvas.width !== vw || offCanvas.height !== vh) {
     offCanvas.width = vw; offCanvas.height = vh;
@@ -1369,18 +1393,14 @@ function runTwoPassDetect(
     ctx2.fill();
   }
 
-  const r2 = landmarker.detectForVideo(offCanvas, now + 1);
+  // IMAGE モードの別インスタンスがあればそちらで（VIDEO モードの追跡状態を汚さず、毎回人物検出する）
+  const r2 = imageLandmarker ? imageLandmarker.detect(offCanvas) : landmarker.detectForVideo(offCanvas, now + 1);
   const p2 = r2.landmarks as NormalizedLandmark[][];
 
   const merged = [...p1];
   for (const lm2 of p2) {
-    const h2 = computeMidHip(lm2);
-    if (!h2) continue;
-    const dup = p1.some(lm1 => {
-      const h1 = computeMidHip(lm1);
-      return h1 && Math.hypot(h1.x - h2.x, h1.y - h2.y) < 0.2;
-    });
-    if (!dup) merged.push(lm2);
+    if (!computeMidHip(lm2)) continue;
+    if (!p1.some(lm1 => isSamePose(lm1, lm2))) merged.push(lm2);
   }
   return { landmarks: merged, masks };
 }
@@ -1614,6 +1634,9 @@ export function usePoseEstimation(
   const rafRef        = useRef<number | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const landmarkerRef = useRef<any>(null);
+  // 2パス目（頭を隠した画像の再検出）専用。IMAGE モードなので毎回人物検出から行う（VIDEO モードの追跡に引きずられて1人目を拾い直さない）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const landmarker2Ref = useRef<any>(null);
 
   // ── ロックオン状態
   const lockedRef = useRef<Centroid | null>(null);
@@ -1642,6 +1665,7 @@ export function usePoseEstimation(
 
   // ── パターン検出状態
   const patternStateRef = useRef<PatternDetectionState>(makeInitialPatternState());
+  const pairDetectorRef = useRef<PairMoveDetector>(new PairMoveDetector());
   // ターン検出後の位相チェック抑制用（ターン中は同方向移動が正常なため）
   const lastTurnTimeRef = useRef<number>(-Infinity);
 
@@ -1714,6 +1738,7 @@ export function usePoseEstimation(
   const clearSequence = useCallback(() => {
     setSequence([]);
     patternStateRef.current = makeInitialPatternState();
+    pairDetectorRef.current.reset();
   }, []);
 
   // ── ロール判定リセット
@@ -1889,6 +1914,48 @@ export function usePoseEstimation(
       if (cancelled) { landmarker.close(); return; }
       landmarkerRef.current = landmarker;
 
+      // 2パス目用（失敗しても1パス目だけで動く）
+      try {
+        const landmarker2 = await PoseLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+          runningMode: 'IMAGE',
+          numPoses: NUM_POSES,
+          minPoseDetectionConfidence: DETECT_CONFIDENCE,
+          minPosePresenceConfidence: PRESENCE_CONFIDENCE,
+        });
+        if (cancelled) { landmarker2.close(); return; }
+        landmarker2Ref.current = landmarker2;
+      } catch (e) {
+        console.warn('[Pose] 2パス目用 landmarker の初期化に失敗（1パス目のみで続行）', e);
+      }
+
+      // PairMoveDetector の確定済みイベントをシーケンスに追加
+      let lastPairTime = -Infinity;
+      let lastPairWall = 0;
+      let pairFlushed = true;
+      function emitPairMoves(moves: PairMove[]) {
+        if (moves.length === 0) return;
+        const bpmVal = bpmRef.current;
+        const evts: SequenceEvent[] = moves.map(m => ({
+          id: eventIdRef.current++,
+          time: m.t,
+          action: m.action,
+          quality: m.quality,
+          beatNum: bpmVal > 0 ? Math.floor((m.t * bpmVal / 60) % 8) + 1 : undefined,
+        }));
+        // ループ再生で同じ区間をもう一度通ったときの重複（同じ技・ほぼ同じ時刻）は足さない
+        setSequence(prev => {
+          const fresh = evts.filter(e => !prev.some(p => p.action === e.action && Math.abs(p.time - e.time) < 0.5));
+          return fresh.length ? [...prev, ...fresh].sort((a, b) => a.time - b.time).slice(-300) : prev;
+        });
+      }
+      /** 再生が止まった（一時停止・終了・時刻が1秒進まない）ら未確定分を確定させる */
+      function flushPairMoves() {
+        if (pairFlushed) return;
+        pairFlushed = true;
+        emitPairMoves(pairDetectorRef.current.flush());
+      }
+
       function loop() {
         if (!activeRef.current || cancelled) return;
 
@@ -1908,6 +1975,8 @@ export function usePoseEstimation(
         if (!video.paused && video.readyState >= 2) {
           // 時刻源: 既定は video.currentTime。タブ共有解析では YouTube プレイヤーの再生位置を使う
           const vt = readVideoTime(video);
+          // 外部時刻源（YouTube）は共有映像が流れ続けても再生位置が止まることがある（一時停止・終了）
+          if (vt === lastPairTime && performance.now() - lastPairWall > 1000) flushPairMoves();
           const container = canvas.parentElement;
           const rw = container?.clientWidth  ?? Math.round(canvas.getBoundingClientRect().width);
           const rh = container?.clientHeight ?? Math.round(canvas.getBoundingClientRect().height);
@@ -1942,7 +2011,7 @@ export function usePoseEstimation(
                   }
                 } else {
                   // PC（常時）/ iOS スロー再生時: 2パスカスケード（楕円マスク）
-                  const { landmarks: rawLm, masks: rawMasks } = runTwoPassDetect(lm, video, now, offscreenCanvasRef.current!);
+                  const { landmarks: rawLm, masks: rawMasks } = runTwoPassDetect(lm, video, now, offscreenCanvasRef.current!, landmarker2Ref.current);
                   all = rawLm.filter(lm2 => isPoseCoherent(lm2, genderLockedRef.current));
                   ellipseMasksRef.current = rawMasks;  // デバッグ描画用に保存
                   // iOS スロー時はキャッシュに保存（通常速度で再生する際に再利用）
@@ -1951,6 +2020,22 @@ export function usePoseEstimation(
                     if (analysisCacheRef.current.length > CACHE_MAX_FRAMES) analysisCacheRef.current.shift();
                   }
                 }
+
+                // 検出器の回帰評価用トレース（window.__POSE_TRACE__ を配列にしたときだけ記録）
+                const trace = (window as unknown as { __POSE_TRACE__?: unknown[] }).__POSE_TRACE__;
+                if (Array.isArray(trace)) {
+                  trace.push({
+                    t: Math.round(vt * 1000) / 1000,
+                    p: all.map(p => p.map(l => [
+                      Math.round(l.x * 1000) / 1000, Math.round(l.y * 1000) / 1000,
+                      Math.round((l.visibility ?? 1) * 100) / 100,
+                    ])),
+                  });
+                }
+
+                // ── Turn / CBL（2人の関係から。数秒遅れて確定し、time は発生時刻）
+                if (vt !== lastPairTime) { lastPairTime = vt; lastPairWall = now; pairFlushed = false; }
+                emitPairMoves(pairDetectorRef.current.push(vt, all));
 
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -2032,10 +2117,6 @@ export function usePoseEstimation(
                     patternStateRef.current,
                     !!optionsRef.current.getTime,  // 外部時刻源ではループ・シークで時刻が戻る
                     (action, quality, beatNum) => {
-                      // ターン検出時刻を記録 → 位相チェックを一時抑制
-                      if (action === 'Turn') {
-                        lastTurnTimeRef.current = vt;
-                      }
                       const evt: SequenceEvent = {
                         id: eventIdRef.current++,
                         time: vt,
@@ -2045,6 +2126,8 @@ export function usePoseEstimation(
                       };
                       setSequence(prev => [...prev, evt].slice(-300));
                     },
+                    // ターンらしい瞬間を記録 → 位相チェックを一時抑制
+                    () => { lastTurnTimeRef.current = vt; },
                   );
 
                   // ── ロールスロット更新 & 役割判定 ────────────────────────
@@ -3006,6 +3089,8 @@ export function usePoseEstimation(
               }
             }
           }
+        } else if (video.paused) {
+          flushPairMoves();
         }
 
         rafRef.current = requestAnimationFrame(loop);
@@ -3022,6 +3107,8 @@ export function usePoseEstimation(
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
       landmarkerRef.current?.close?.();
       landmarkerRef.current = null;
+      landmarker2Ref.current?.close?.();
+      landmarker2Ref.current = null;
     };
   }, [enabled, videoRef, canvasRef, readVideoTime]);
 

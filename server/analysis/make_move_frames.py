@@ -9,7 +9,7 @@
 
 書き出し:
   <out_dir>/<NN>_<start>.jpg   NN = 技の番号（1始まり）
-  <out_dir>/index.json         {"version": 1, "moves": [{"index", "start", "end", "url"}]}
+  <out_dir>/index.json         {"version": 1, "complete": bool, "moves": [{"index", "start", "end", "url"}]}
                                index は routine.moves の 0 始まりの位置。画像が作れなかった技は載せない
 何度実行しても同じ結果になる（out_dir 内の古い jpg は消してから書く）。
 
@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import sys
+import time
 
 import cv2
 
@@ -78,6 +79,23 @@ def frame_times(t0, t1, counts):
     return [t0 + (end - t0) * k / (n - 1) for k in range(n)]
 
 
+def write_index(out_dir, entries, done):
+    """index.json を原子的に書く（読み手が書きかけの JSON を掴まない）。
+    done=False は作成中の印で、フロントは揃うまで読み直す"""
+    path = os.path.join(out_dir, "index.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "complete": done, "moves": entries}, f, ensure_ascii=False, indent=1)
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            # Windows: サーバーが配信中で開いていると置き換えられない。少し待ってやり直す
+            time.sleep(0.05 * (attempt + 1))
+    os.replace(tmp, path)
+
+
 def main():
     if len(sys.argv) < 7:
         print(__doc__, file=sys.stderr)
@@ -108,6 +126,8 @@ def main():
     duration = (cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0) / fps or None
 
     os.makedirs(out_dir, exist_ok=True)
+    # 古い画像を消す前に index を空にしておく（消えた画像を指す index が残らないように）
+    write_index(out_dir, [], done=False)
     for old in glob.glob(os.path.join(out_dir, "*.jpg")):
         os.remove(old)
 
@@ -126,10 +146,11 @@ def main():
             "index": i, "start": round(t0, 2), "end": round(t1, 2),
             "url": f"{url_prefix.rstrip('/')}/{name}",
         })
+        # 1枚できるたびに index.json を書き直す（作っている途中にレポートを開いても、できた分の写真は出る）
+        write_index(out_dir, entries, done=False)
     cap.release()
 
-    with open(os.path.join(out_dir, "index.json"), "w", encoding="utf-8") as f:
-        json.dump({"version": 1, "moves": entries}, f, ensure_ascii=False, indent=1)
+    write_index(out_dir, entries, done=True)
     print(f"done: {len(entries)}/{len(moves)} moves", file=sys.stderr)
 
 

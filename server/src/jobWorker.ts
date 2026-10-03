@@ -227,9 +227,13 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
   if (preset.useClaude) {
     try {
       const r = await runClaude(jobDir, job.spec_snapshot, signal);
-      if (r.resultJson) await makeMoveFrames(job.id, ctx, signal);
+      let normalized: string | null = null;
+      if (r.resultJson) {
+        normalized = await normalizeRoutine(job.id, ctx, signal);
+        await makeMoveFrames(job.id, ctx, signal);
+      }
       const reportMd = (await withSceneFrames(job.id, ctx, r.reportMd, signal)) + debugVideoSection(job.id);
-      const resultJson = r.resultJson
+      const resultJson = normalized ?? r.resultJson
         ?? JSON.stringify({ pipeline: 'p2-claude', preset: job.preset, note: 'result.json 未生成（report.md のみ）' });
       markJobDone(job.id, resultJson, reportMd);
       console.log(`[jobWorker] job ${job.id} done (claude)`);
@@ -304,6 +308,26 @@ async function withSceneFrames(jobId: string, ctx: JobContext, reportMd: string,
   } catch (e) {
     console.warn(`[jobWorker] scene frames skipped: ${e instanceof Error ? e.message : e}`);
     return reportMd;
+  }
+}
+
+/**
+ * result.json の routine を振付シートとして踊れる形に整える（normalize_routine.py）:
+ * 技の頭を 8 カウントの頭へ寄せて counts を時間と合わせ、細切れ・重複の行をまとめ、回転数の上限・技名の長さを抑え、
+ * カウントごとの男女の動き（steps）を付ける。整えた result.json の中身を返す。失敗したら null（元のまま使う）
+ */
+async function normalizeRoutine(jobId: string, ctx: JobContext, signal: AbortSignal): Promise<string | null> {
+  const resultPath = path.join(jobDirOf(jobId), 'out', 'result.json');
+  try {
+    await runPython([
+      path.resolve(__dirname, '../analysis/normalize_routine.py'),
+      resultPath,
+      ctx.measurementsPath,
+    ], signal);
+    return readFileSync(resultPath, 'utf-8');
+  } catch (e) {
+    console.warn(`[jobWorker] routine normalize skipped: ${e instanceof Error ? e.message : e}`);
+    return null;
   }
 }
 

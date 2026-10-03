@@ -15,6 +15,8 @@
  *   node tools/backfill-report-frames.mjs [--dry-run] [<jobId> ...]
  *   node tools/backfill-report-frames.mjs --move-frames [--dry-run] [<jobId> ...]
  *     … レポートは触らず、振付シート用の技ごとの画像（out/move_frames/）だけを作る
+ *   node tools/backfill-report-frames.mjs --move-frames --normalize [<jobId> ...]
+ *     … 先に routine を normalize_routine.py で整え（result.json と DB の result_json を更新）、それから画像を作る
  *   jobId 省略時は status=done の全ジョブ
  */
 import { spawnSync } from 'node:child_process';
@@ -38,6 +40,8 @@ const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const moveFrames = args.includes('--move-frames');
 const MOVE_SCRIPT = path.join(SERVER_DIR, 'analysis/make_move_frames.py');
+const normalize = args.includes('--normalize');
+const NORMALIZE_SCRIPT = path.join(SERVER_DIR, 'analysis/normalize_routine.py');
 const onlyIds = args.filter(a => !a.startsWith('--'));
 
 const db = new DatabaseSync(path.join(SERVER_DIR, 'data/motionlab.db'));
@@ -103,9 +107,20 @@ function backfillMoveFrames(targets) {
       continue;
     }
     if (dryRun) {
-      console.log(`${tag} would make ${moves} move frames`);
+      console.log(`${tag} would ${normalize ? 'normalize routine and ' : ''}make ${moves} move frames`);
       t.made++;
       continue;
+    }
+    if (normalize) {
+      // jobWorker と同じ後処理（8カウントの格子に寄せる・まとめる・steps を付ける）。DB の result_json も揃える
+      const n = spawnSync(PYTHON_BIN, [NORMALIZE_SCRIPT, resultPath, path.join(outDir, 'measurements.json')], { encoding: 'utf-8' });
+      if (n.status !== 0) {
+        console.log(`${tag} normalize failed: ${(n.stderr || n.error?.message || '').trim().slice(-300)}`);
+        t.failed++;
+        continue;
+      }
+      db.prepare('UPDATE analysis_jobs SET result_json = ? WHERE id = ?').run(readFileSync(resultPath, 'utf-8'), job.id);
+      console.log(`${tag} ${(n.stderr || '').trim().split('\n').pop()}`);
     }
     const r = spawnSync(PYTHON_BIN, [
       MOVE_SCRIPT, videoPath,

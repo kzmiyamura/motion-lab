@@ -38,7 +38,7 @@ const tmp = {
   qs: new THREE.Quaternion(),
   hold: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3(),
   v: new THREE.Vector3(), v2: new THREE.Vector3(), w2: new THREE.Vector3(),
-  pl: new THREE.Vector3(), sh: new THREE.Vector3(),
+  pl: new THREE.Vector3(), sh: new THREE.Vector3(), ca: new THREE.Vector3(),
 };
 
 /**
@@ -51,10 +51,15 @@ function clampToArm(spine: THREE.Object3D, shoulder: THREE.Vector3, world: THREE
   spine.worldToLocal(world);
   world.x = sign * clamp((world.x - shoulder.x) * sign, ARM_ACROSS, ARM_OUT) + shoulder.x;
   world.z = Math.max(world.z, ARM_BACK_MIN);
-  // 肩からの距離が腕の長さを超えたら、その肩へ寄せる
-  tmp.v.subVectors(world, shoulder);
-  const len = tmp.v.length();
-  if (len > ARM_REACH) world.copy(shoulder).addScaledVector(tmp.v, ARM_REACH / len);
+  // 肩からの距離が腕の長さを超えたら、その肩へ寄せる。
+  // 作業用は clampToArm 専用（tmp.ca）。以前は tmp.v を使っていて、呼び出し側が
+  // tmp.v を的として渡す経路（フリーの腕・クローズドの手・背中支え）では
+  // **的そのものが「的 − 肩」に上書きされていた**（2026-10-03 発見）。
+  // フォロワーのニュートラルが胸ではなく腰の正中に出ていた（「今こしあたりにあるぞ」
+  // 「何も変わっていない気がする」）のはこれ
+  tmp.ca.subVectors(world, shoulder);
+  const len = tmp.ca.length();
+  if (len > ARM_REACH) world.copy(shoulder).addScaledVector(tmp.ca, ARM_REACH / len);
   spine.localToWorld(world);
 }
 

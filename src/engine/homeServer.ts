@@ -165,8 +165,12 @@ export async function uploadVideoToHomeServer(
     (sum, i) => sum + Math.min(chunkSize, file.size - i * chunkSize), 0,
   );
   let doneBytes = alreadyLoaded;
+  // 表示は後戻りさせない。iOS Safari はチャンクを送信バッファに積んだ時点で全量を報告し、
+  // 送り直し（再試行）が入るとそのチャンクの先頭まで戻るため、そのままだとバーが 0 に戻って見える
+  let shownLoaded = alreadyLoaded;
   const report = (inFlight: number) => {
-    const loaded = doneBytes + inFlight;
+    shownLoaded = Math.max(shownLoaded, doneBytes + inFlight);
+    const loaded = shownLoaded;
     const elapsedSec = (Date.now() - startTime) / 1000;
     const speedBps = elapsedSec > 0 ? (loaded - alreadyLoaded) / elapsedSec : 0;
     onProgress?.({

@@ -125,8 +125,10 @@ uploadsRouter.put('/:uploadId/chunks/:index', requireWriteToken, async (req, res
       return res.status(400).json({ error: `chunk size mismatch: expected ${expected}, got ${written}` });
     }
     await rename(tmpPath, partPath);
+    console.log(`[uploads] ${uploadId} chunk ${index + 1}/${meta.totalChunks} received (${written} bytes)`);
     res.json({ index, received: written });
   } catch (err) {
+    console.warn(`[uploads] ${uploadId} chunk ${index + 1}/${meta.totalChunks} failed: ${err instanceof Error ? err.message : String(err)}`);
     await rm(tmpPath, { force: true }).catch(() => {});
     if (!res.headersSent) res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

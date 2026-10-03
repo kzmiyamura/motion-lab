@@ -266,18 +266,23 @@ def key_moments(mv, t0, t1, series, crosses, events):
     end = max(t0, t1 - 0.05)
     sides = mv.get("sides") or {}
     out = []
-    s0, s1 = SIDE_JA.get(sides.get("followerStart")), SIDE_JA.get(sides.get("followerEnd"))
-    out.append((t0, f"スタート（女は{s0}）" if s0 else "スタート", 0))
     swap_at = sides.get("swapAt") or []
-    for c in crosses:
-        if not (t0 <= c["t"] < t1):
-            continue
-        # normalize_routine が CV の入れ替わりと重なるものだけ swapAt に残している（密着中の腰の重なりは除く）
-        if "sides" in mv and not any(abs(c["t"] - s) <= 0.05 for s in swap_at):
-            continue
-        out.append((c["t"], "通過", 1))
+    # normalize_routine が CV の入れ替わりと重なるものだけ swapAt に残している（密着中の腰の重なりは除く）
+    passes = [c for c in crosses if t0 <= c["t"] < t1
+              and not ("sides" in mv and not any(abs(c["t"] - s) <= 0.05 for s in swap_at))]
+    # 始まり・終わりの側: 区間の中で入れ替わったなら、最初の通過の前の側と最後の通過の後の側（写真と合う）。
+    # sides.followerEnd は 6½ 拍目から読むので、それより後で戻った（1 つの 8 カウントで行って戻る）ときに食い違う
+    s0 = SIDE_JA.get(passes[0]["from"] if passes else sides.get("followerStart"))
+    s1 = SIDE_JA.get(passes[-1]["to"] if passes else sides.get("followerEnd"))
+    out.append((t0, f"スタート（女は{s0}）" if s0 else "スタート", 0))
+    for k, c in enumerate(passes):
+        # 1 つの技に通過は 1 回。行って戻る入れ替わり（最初の通過の逆向き）は「戻る」と書く
+        # （581ef6a2 のカード 1: 0:00 のクローズドで回りながら 0.74 秒に右へ、2.08 秒に左へ戻り、両方「通過」だった）
+        back = k > 0 and c["from"] != passes[0]["from"]
+        out.append((c["t"], f"女が{SIDE_JA[c['to']]}へ戻る" if back else "通過", 1))
+        nxt = passes[k + 1]["t"] if k + 1 < len(passes) else end
         after = next((t for t, s in series if t >= c["t"] + AFTER_PASS_SEC and s == c["to"]), None)
-        if after is not None and after < end:
+        if after is not None and after < min(end, nxt) and not back:
             out.append((after, f"女が{SIDE_JA[c['to']]}へ抜けた", 4))
     turn = mv.get("turn") if isinstance(mv.get("turn"), dict) else {}
     who = "leader" if mv.get("move") == "leader_turn" or turn.get("by") == "leader" else "follower"

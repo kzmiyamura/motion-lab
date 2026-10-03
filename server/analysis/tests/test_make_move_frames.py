@@ -197,6 +197,22 @@ class KeyMomentTest(unittest.TestCase):
         labels = [f[2] for f in labeled_frames(mv, 1.76, 4.34, self.BEAT, series, crosses, events)]
         self.assertNotIn("通過", labels)
 
+    def test_there_and_back_is_one_pass_and_one_return(self):
+        # 581ef6a2 のカード 1: 1 つの 8 カウントで右へ通って（0.74）左へ戻る（2.08）。followerEnd は 6½ 拍目から読むので
+        # 戻る前の「右」になっていた。通過は 1 回だけ、2 回目は「戻る」、終わりの側は最後の通過の後の側
+        mv = {"move": "cbl", "counts": 8,
+              "sides": {"followerStart": "left", "followerEnd": "right", "swapAt": [0.74, 2.08]}}
+        series = [(0.4, "left"), (0.59, "left"), (0.89, "right"), (1.5, "right"), (1.88, "right"),
+                  (2.28, "left"), (2.6, "left")]
+        crosses = [{"t": 0.74, "from": "left", "to": "right", "hiddenFrom": 0.59, "hiddenTo": 0.89},
+                   {"t": 2.08, "from": "right", "to": "left", "hiddenFrom": 1.88, "hiddenTo": 2.28}]
+        frames = labeled_frames(mv, 0.1, 2.68, self.BEAT, series, crosses, [])
+        labels = [f[2] for f in frames]
+        self.assertEqual(labels.count("通過"), 1)
+        self.assertIn("女が左へ戻る", labels)
+        self.assertEqual(labels[0], "スタート（女は左）")
+        self.assertEqual(labels[-1], "終わり（女は左）")
+
     def test_fills_with_count_labels_when_nothing_happens(self):
         frames = labeled_frames({"move": "cbl", "counts": 8}, 0.0, 2.6, self.BEAT, [], [], [])
         self.assertEqual(len(frames), 5)

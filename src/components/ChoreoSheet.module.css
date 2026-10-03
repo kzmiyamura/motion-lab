@@ -147,6 +147,27 @@
   box-shadow: 0 0 0 1px var(--color-accent) inset;
 }
 
+/* 練習モード: 範囲ループの中・範囲の始め・長押しできるカード */
+.inRange {
+  border-left: 4px solid var(--color-accent);
+}
+
+.anchor {
+  border-style: dashed;
+  border-color: var(--color-accent);
+}
+
+.pressable {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.pressable img {
+  -webkit-touch-callout: none;
+  pointer-events: none;
+}
+
 .playMark {
   margin-left: auto;
   font-size: 0.75rem;

@@ -4,10 +4,12 @@ import { routineFromResult } from '../engine/routineClip';
 import { sendRoutineTo3D } from '../engine/routineBus';
 import {
   mapFrameUrls, moveFramesPending, parseChoreoSheet, parseMoveFrames, reportSummary,
-  type MoveFrameSet, type SheetRow,
+  type MoveFrameSet,
 } from '../engine/choreoSheet';
 import { ChoreoSheet } from './ChoreoSheet';
 import { MoveClipPlayer } from './MoveClipPlayer';
+import { PracticeToolbar } from './PracticeBar';
+import { usePracticeSession } from '../hooks/usePracticeSession';
 import styles from './ReportModal.module.css';
 
 type Props = {
@@ -196,9 +198,9 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
     return () => { cancelled = true; clearTimeout(timer); };
   }, [sheet, baseUrl, jobId]);
 
-  // 見て覚える: カードを押すとその技の区間を 0.5 倍で繰り返す（元動画が分かるときだけ）
-  const [clip, setClip] = useState<SheetRow | null>(null);
-  const playRow = (row: SheetRow) => setClip(c => (c?.index === row.index ? null : row));
+  // 練習モード: カード = その技をスローで繰り返し（元動画があるとき）、長押し/範囲ループ = #3〜#6 を繰り返し、
+  // 通し練習 = 全部をカウント付きで。動画が無い・再生できないときはカウントとカードの光だけで進む
+  const practice = usePracticeSession(sheet, job?.resultJson ?? null);
 
   // 解析結果をクリップボードへコピーし、ジェネレーターを新しいタブで開く。
   // ユーザーはジェネレーターの「📥」に貼り付けて、動画のルーティンを骨格で再現できる。
@@ -238,21 +240,38 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
                   {summary.map((s, i) => <p key={i} className={styles.para}>{renderInline(s, baseUrl, `sum${i}`)}</p>)}
                 </div>
               )}
-              {videoUrl && clip && clip.start !== null && (
+              {practice.session && practice.timeline && (
                 <MoveClipPlayer
-                  src={videoUrl}
-                  start={clip.start}
-                  end={clip.end ?? clip.start + 8 * (sheet.beatSec ?? 0.35)}
-                  beatSec={sheet.beatSec}
-                  label={`#${clip.no} ${clip.name}（${clip.counts}）`}
-                  onClose={() => setClip(null)}
+                  key={practice.session.kind}
+                  src={videoUrl ?? null}
+                  timeline={practice.timeline}
+                  from={practice.session.from}
+                  to={practice.session.to}
+                  loop={practice.session.loop}
+                  label={practice.session.label}
+                  onClose={practice.close}
+                  onCurrent={practice.setCurrent}
                 />
               )}
               <ChoreoSheet
                 sheet={sheet}
                 frames={moveFrames}
-                onPlay={videoUrl ? playRow : undefined}
-                playingIndex={clip?.index ?? null}
+                onPlay={videoUrl ? practice.playRow : undefined}
+                playingIndex={practice.session ? practice.current : null}
+                toolbar={practice.timeline ? (
+                  <PracticeToolbar
+                    onRunThrough={practice.runThrough}
+                    pickingFromNo={practice.pickFromNo}
+                    onStartPick={practice.startPick}
+                    onCancelPick={practice.cancelPick}
+                    hasVideo={!!videoUrl}
+                  />
+                ) : undefined}
+                range={practice.session && practice.session.kind !== 'move' ? { from: practice.session.from, to: practice.session.to } : null}
+                picking={practice.pickFrom !== null}
+                anchorIndex={practice.pickFrom !== null && practice.pickFrom >= 0 ? practice.pickFrom : null}
+                onPick={practice.pick}
+                onLongPress={practice.timeline ? practice.longPress : undefined}
               />
               {job.reportMd && (
                 <>

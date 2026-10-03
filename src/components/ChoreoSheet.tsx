@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type { ChoreoSheetData, MoveFrameSet, SheetRow } from '../engine/choreoSheet';
 import styles from './ChoreoSheet.module.css';
 import { MoveDiagram } from './MoveDiagram';
@@ -9,9 +9,61 @@ type Props = {
   frames: Map<number, MoveFrameSet>;
   /** 元動画が見られるとき: カードを押すとその技の区間をスローで流す */
   onPlay?: (row: SheetRow) => void;
-  /** 再生中の行 index */
+  /** 再生中の行 index（練習中は今流れている技。変わったらそのカードへ画面を送る） */
   playingIndex?: number | null;
+  /** シートの上に出す操作（練習モードの「通し練習」「範囲ループ」） */
+  toolbar?: ReactNode;
+  /** 範囲ループ中の行 index（両端を含む）。カードに印を付ける */
+  range?: { from: number; to: number } | null;
+  /** 範囲を選んでいる途中: カードを押すと onPick（再生しない）。anchorIndex は選んだ始めの行 */
+  picking?: boolean;
+  anchorIndex?: number | null;
+  onPick?: (row: SheetRow) => void;
+  /** カードの長押し（範囲ループの始め） */
+  onLongPress?: (row: SheetRow) => void;
 };
+
+const LONG_PRESS_MS = 480;
+const LONG_PRESS_SLOP_PX = 10;
+
+/** カードの長押し。指が動いた（スクロール）ら取り消す。長押しの後の click は捨てる */
+function useLongPress(onLongPress?: (row: SheetRow) => void) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const origin = useRef<{ x: number; y: number } | null>(null);
+  const fired = useRef(false);
+  const clear = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    origin.current = null;
+  };
+  useEffect(() => clear, []);
+  if (!onLongPress) return null;
+  return {
+    fired,
+    bind: (row: SheetRow) => ({
+      onPointerDown: (e: ReactPointerEvent) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        clear();
+        fired.current = false;
+        origin.current = { x: e.clientX, y: e.clientY };
+        timer.current = setTimeout(() => {
+          timer.current = null;
+          fired.current = true;
+          try { navigator.vibrate?.(15); } catch { /* noop */ }
+          onLongPress(row);
+        }, LONG_PRESS_MS);
+      },
+      onPointerMove: (e: ReactPointerEvent) => {
+        const o = origin.current;
+        if (o && Math.hypot(e.clientX - o.x, e.clientY - o.y) > LONG_PRESS_SLOP_PX) clear();
+      },
+      onPointerUp: clear,
+      onPointerCancel: clear,
+      onPointerLeave: clear,
+      onContextMenu: (e: ReactMouseEvent) => { e.preventDefault(); },
+    }),
+  };
+}
 
 /**
  * 技の連続コマ。v2（1コマずつ）はカード幅の半分強で横スクロール（スナップ）、
@@ -57,24 +109,64 @@ function MovePhotos({ set, row, linkOut }: { set: MoveFrameSet; row: SheetRow; l
  * 技名を大きく、その下にカウントごとの男女の動き（1-2-3 男:… 女:…）、手・回転・通る側は普通の言葉で小さく、
  * 最後に技の区間の連続コマ写真。元動画があればカードを押すとその技だけ 0.5 倍で繰り返し流す
  */
-export function ChoreoSheet({ sheet, frames, onPlay, playingIndex }: Props) {
+export function ChoreoSheet({
+  sheet, frames, onPlay, playingIndex, toolbar, range, picking, anchorIndex, onPick, onLongPress,
+}: Props) {
+  const listRef = useRef<HTMLOListElement>(null);
+  const longPress = useLongPress(onLongPress);
+
+  // 練習中: 今の技のカードを画面の真ん中へ送る
+  useEffect(() => {
+    if (playingIndex === null || playingIndex === undefined) return;
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${playingIndex}"]`);
+    el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  }, [playingIndex]);
+
   return (
     <section className={styles.sheet} aria-label="振付シート">
       {sheet.header.length > 0 && (
         <p className={styles.header}>{sheet.header.join(' · ')}</p>
       )}
       {sheet.legend && <p className={styles.legend}>{sheet.legend}</p>}
-      {onPlay && <p className={styles.tip}>カードを押すと、その技を 0.5 倍で繰り返し再生</p>}
-      <ol className={styles.rows}>
+      {toolbar}
+      {onPlay && !toolbar && <p className={styles.tip}>カードを押すと、その技を 0.5 倍で繰り返し再生</p>}
+      <ol className={styles.rows} ref={listRef}>
         {sheet.rows.map(row => {
           const photos = frames.get(row.index);
           const playable = !!onPlay && row.start !== null;
           const playing = playingIndex === row.index;
+          const timed = row.start !== null;
+          const inRange = !!range && row.index >= Math.min(range.from, range.to) && row.index <= Math.max(range.from, range.to);
+          const pickable = !!picking && !!onPick && timed;
+          const lp = longPress && timed ? longPress.bind(row) : null;
           return (
             <li
               key={row.index}
-              className={`${styles.row} ${playable ? styles.playable : ''} ${playing ? styles.playing : ''}`}
+              data-index={row.index}
+              className={[
+                styles.row,
+                playable || pickable ? styles.playable : '',
+                playing ? styles.playing : '',
+                inRange ? styles.inRange : '',
+                anchorIndex === row.index ? styles.anchor : '',
+                lp ? styles.pressable : '',
+              ].filter(Boolean).join(' ')}
               data-testid="choreo-row"
+              {...lp}
+              onClickCapture={e => {
+                // 長押しの直後の click・範囲選び中の click は再生（や写真のリンク）に渡さない
+                if (longPress?.fired.current) {
+                  longPress.fired.current = false;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  return;
+                }
+                if (pickable) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onPick!(row);
+                }
+              }}
               onClick={playable ? () => onPlay!(row) : undefined}
               role={playable ? 'button' : undefined}
               tabIndex={playable ? 0 : undefined}

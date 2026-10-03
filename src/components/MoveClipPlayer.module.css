@@ -86,3 +86,100 @@
   font-size: 0.8rem;
   color: #fff;
 }
+
+/* 動画なし（カウントだけ）: 大きな数字 */
+.countsOnly {
+  min-height: 9rem;
+}
+
+.bigCount {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 9rem;
+  font-size: 5rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+
+.bigCount .accent {
+  color: var(--color-accent);
+}
+
+.countsOnly .count {
+  font-size: 1.15rem;
+}
+
+/* 今の技・次の技（1 拍前に目立たせる） */
+.cue {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.4rem;
+  right: 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.3rem;
+  pointer-events: none;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.now,
+.next {
+  max-width: 100%;
+  padding: 0.1rem 0.4rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.next {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.75);
+  transition: transform 0.08s, background 0.08s;
+}
+
+.next.soon {
+  background: var(--color-accent);
+  color: #000;
+  transform: scale(1.12);
+}
+
+.overlayBtn,
+.audioBtn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 0.6rem 1rem;
+  border: none;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 800;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.audioBtn {
+  top: auto;
+  bottom: 2.2rem;
+  transform: translateX(-50%);
+  background: var(--color-accent);
+  color: #000;
+  font-size: 0.85rem;
+}
+
+.note {
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.72rem;
+  color: var(--color-fg-dim);
+  background: var(--color-ui-dark2);
+}

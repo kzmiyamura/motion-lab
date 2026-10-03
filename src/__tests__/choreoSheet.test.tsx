@@ -235,9 +235,18 @@ describe('ReportModal の振付シート表示', () => {
       };
     }));
   });
+  // jsdom の <video>/<audio> は play() を持たない（練習プレイヤー・画面スリープ防止が呼ぶ）
+  let playSpy: ReturnType<typeof vi.spyOn>;
+  let pauseSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    pauseSpy = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    playSpy.mockRestore();
+    pauseSpy.mockRestore();
   });
 
   it('1行 = 1技のカード（技名・カウントごとの動き・普通の言葉・写真）で出し、詳細は折りたたむ', async () => {
@@ -332,6 +341,43 @@ describe('ReportModal の振付シート表示', () => {
     // もう一度押すと閉じる
     fireEvent.click(rows[2]);
     await waitFor(() => expect(screen.queryByText('0.5×')).toBeNull());
+  });
+
+  it('通し練習: 全部の技をカウント付きで流し、次の技の名前を出す（動画なしでもカウントだけで進む）', async () => {
+    render(<ReportModal jobId={JOB_ID} videoTitle="テスト" baseUrl={BASE} onClose={() => {}} />);
+    await screen.findAllByTestId('choreo-row');
+    fireEvent.click(screen.getByRole('button', { name: '▶ 通し練習' }));
+    expect(await screen.findByText('通し練習（#1〜#4）')).toBeInTheDocument();
+    // カウントイン中は最初の技が「次」
+    expect(await screen.findByTestId('practice-next')).toHaveTextContent('次: ベーシック');
+    // 速さ・クリック・声の操作。動画が無いので「動画の音」は出さない
+    expect(screen.getByRole('button', { name: '0.75×' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'クリック' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: /動画$/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '再生を閉じる' }));
+    await waitFor(() => expect(screen.queryByText('通し練習（#1〜#4）')).toBeNull());
+  });
+
+  it('範囲ループ: カードの長押しで始め、もう 1 枚押すと #2〜#4 を繰り返す', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<ReportModal jobId={JOB_ID} videoTitle="テスト" baseUrl={BASE} videoUrl={`${BASE}/hls/v/playlist.m3u8`} onClose={() => {}} />);
+    const rows = await screen.findAllByTestId('choreo-row');
+    fireEvent.pointerDown(rows[1], { button: 0, clientX: 10, clientY: 10 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    fireEvent.pointerUp(rows[1]);
+    // 長押しの後の click は再生に渡さない
+    fireEvent.click(rows[1]);
+    expect(screen.queryByText(/^#2 CBL/)).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('#2 から。終わりのカードを押してください');
+    fireEvent.click(rows[3]);
+    expect(await screen.findByText('範囲ループ #2〜#4')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ループ' })).toHaveAttribute('aria-pressed', 'true');
+    // ボタンからも選べる（1 枚目 = 始め、2 枚目 = 終わり。逆順でもよい）
+    fireEvent.click(screen.getByRole('button', { name: '⟷ 範囲ループ' }));
+    expect(screen.getByRole('status')).toHaveTextContent('始めのカードを押してください');
+    fireEvent.click(rows[2]);
+    fireEvent.click(rows[0]);
+    expect(await screen.findByText('範囲ループ #1〜#3')).toBeInTheDocument();
   });
 
   it('routine が無いジョブは従来の Markdown をそのまま出す', async () => {

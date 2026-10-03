@@ -242,7 +242,7 @@ APPEARANCE_EMA = 0.1       # 外見リファレンスの更新率（小さいほ
 
 
 def torso_hist(frame, bbox):
-    """人物 bbox 上部の HSV 色ヒストグラム（正規化済み64次元）を返す。
+    """人物 bbox 上部の HSV 色ヒストグラム（正規化済み128次元: 色相8×彩度4×明度4）を返す。
 
     幾何学的特徴（SHR・身長・肩幅）はどれも「体の向き」か「カメラ距離」に
     敏感で、女性が手前に来るターン区間で3特徴が揃って誤投票する実測があった。
@@ -255,7 +255,9 @@ def torso_hist(frame, bbox):
     if x1 - x0 < 4 or y1 - y0 < 4:
         return None
     hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-    hist = cv2.calcHist([hsv], [0, 1], None, [8, 8], [0, 180, 0, 256])
+    # 色相・彩度に加えて明度も使う。黒い服とグレーの服は色相・彩度がほぼ同じで明度だけが違い、
+    # 明度なしでは見分けられずにすれ違いの瞬間に ID が入れ替わっていた（9/23 ScreenRecording で実測）
+    hist = cv2.calcHist([hsv], [0, 1, 2], None, [8, 4, 4], [0, 180, 0, 256, 0, 256])
     cv2.normalize(hist, hist, 1.0, 0.0, cv2.NORM_L1)
     return hist.flatten()
 
@@ -340,7 +342,7 @@ CBL_PIVOT_SUPPRESS_SEC = 1.2  # CBLの±この秒数内のリーダーのター�
 EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
 # 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
-CBL_COOLDOWN_SEC = 1.0
+CBL_COOLDOWN_SEC = 0.6
 # ターンの向きの目安（spin）を見る窓: イベント時刻の前後
 SPIN_PRE_SEC = 0.4
 SPIN_POST_SEC = 1.6
@@ -634,6 +636,157 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid):
     return out
 
 
+PASS_DEPTH_WINDOW = 0.35           # すれ違いの前後この秒数で奥行き（手前/奥）を読む
+PASS_ANKLE_MIN_DIFF = 0.015        # 足首の高さの差がこれ未満なら奥行きは足首では決めない（正規化）
+
+
+def _ankle_y(p):
+    """両足首（COCO 15/16）の低い方＝床に近い方の y。見えなければ None"""
+    k = p.get("kps")
+    if not k:
+        return None
+    ys = [k[i][1] for i in (15, 16) if k[i][2] >= SPIN_KP_MIN]
+    return max(ys) if ys else None
+
+
+def _kp_visibility(p):
+    """上半身の keypoint（鼻・肩・肘・手首・腰）の平均信頼度。重なって隠れると下がる"""
+    k = p.get("kps")
+    if not k:
+        return None
+    idx = (0, 5, 6, 7, 8, 9, 10, 11, 12)
+    return sum(k[i][2] for i in idx) / len(idx)
+
+
+def detect_pass_side(draw_frames, t_cross, leader_pid):
+    """左右の入れ替わりで、女性が男性の体から見て左右どちら側を通ったかを推定する。
+
+    上から見た方位（E=画面右・W=画面左・S=カメラ側・N=奥）で、すれ違う前の男性の向き h と、
+    すれ違う瞬間の女性の位置 p（男性から見て手前 S か奥 N）の外積 hx*py - hy*px の符号で決める
+    （正=男性の左）。ユーザーの言い方「基本の CBL は女性が男性の左を通る」と一致する向きの取り方
+    （例: 女性の方＝W を向いた男性の手前を女性が通る → 左）。
+    - 奥行き: すれ違う前後で足首が画面の下にある方が手前。足首で決まらなければ上半身の見え方
+      （重なって隠れた方が奥）。片方しか検出されないフレームは、見えている方が手前
+    - 男性の向き: すれ違う前に女性がいた側を向いていたとみなす（向かい合うのが基本の立ち位置。
+      正解表で10件中10件この通りだった）
+    """
+    if leader_pid is None:
+        return None
+    follower_pid = 1 - leader_pid
+
+    def people(df):
+        return {p.get("pid"): p for p in df["kept"] if p.get("pid") in (0, 1)}
+
+    # すれ違う前に女性が画面の左右どちらにいたか
+    before = [people(df) for df in draw_frames if t_cross - 1.2 <= df["t"] < t_cross - 0.1]
+    dx = [b[follower_pid]["hipX"] - b[leader_pid]["hipX"] for b in before if leader_pid in b and follower_pid in b]
+    if not dx:
+        return None
+    follower_from = "right" if sorted(dx)[len(dx) // 2] > 0 else "left"
+
+    # 奥行き: 女性が手前（near）か奥（far）か
+    votes = 0.0
+    for df in draw_frames:
+        if abs(df["t"] - t_cross) > PASS_DEPTH_WINDOW:
+            continue
+        ps = people(df)
+        if leader_pid in ps and follower_pid not in ps:
+            votes -= 1.0  # 女性が隠れて見えない → 女性が奥
+            continue
+        if follower_pid in ps and leader_pid not in ps:
+            votes += 1.0
+            continue
+        if leader_pid not in ps:
+            continue
+        fa, la = _ankle_y(ps[follower_pid]), _ankle_y(ps[leader_pid])
+        if fa is not None and la is not None and abs(fa - la) >= PASS_ANKLE_MIN_DIFF:
+            votes += 1.0 if fa > la else -1.0
+            continue
+        fv, lv = _kp_visibility(ps[follower_pid]), _kp_visibility(ps[leader_pid])
+        if fv is not None and lv is not None and abs(fv - lv) >= 0.1:
+            votes += 0.5 if fv > lv else -0.5
+    follower_depth = "near" if votes > 0 else "far" if votes < 0 else "unknown"
+
+    # 男性の向き: 入れ替わりの前は女性の方を向いているとみなす。
+    # 人手の正解表（2本19件）で向きが E/W に決まる10件はすべて「女性の方」だった。顔と肩から測る方式は
+    # 同じ10件で1件外した（向きの読み違い）ので、測らずにこの規則を使う
+    leader_facing = "E" if follower_from == "right" else "W"
+    facing_basis = "towardFollower"
+
+    if follower_depth == "unknown":
+        side = "unknown"
+    else:
+        hx = 1 if leader_facing == "E" else -1
+        py = -1 if follower_depth == "near" else 1
+        side = "left" if hx * py > 0 else "right"   # 外積 hx*py - hy*px（hy=0, px≈0）
+    return {"side": side, "followerDepth": follower_depth, "leaderFacing": leader_facing,
+            "facingBasis": facing_basis, "followerFrom": follower_from}
+
+
+RAISE_WINDOW_SEC = 0.8   # 入れ替わり時刻の前後この範囲で男性の手の高さを見る
+RAISE_RATIO_MIN = 0.25   # 窓内の見えているフレームのうちこの割合以上で頭上なら「手を上げた」
+
+
+def detect_hand_raise(draw_frames, t_cross, leader_pid):
+    """入れ替わりの前後で、男性の手首が頭（鼻、無ければ肩より上）より上がったかを測る。
+
+    女性が男性の奥を通って見えなくなっても、男性の手は見えていることが多い。手が頭上に上がっていれば
+    その入れ替わりにはターンが入っている（ターンの合図）。上がった手の左右と、上がり始めの横方向
+    （男性の体から見て、女性がいる側へ向かうか＝inward、反対へ＝outward）も返す。
+    戻り値 {raised, ratio, hand, firstMove} / 男性がほぼ見えなければ None
+    """
+    if leader_pid is None:
+        return None
+    follower_pid = 1 - leader_pid
+    seen = up = 0
+    hand_votes = {"L": 0, "R": 0}
+    first = None  # 最初に頭上に来たフレームの (t, 手, 手首x, 女性の腰x or None)
+    track = []    # (t, 手首x) 上がった手の軌跡
+    for df in draw_frames:
+        if abs(df["t"] - t_cross) > RAISE_WINDOW_SEC:
+            continue
+        ps = {p.get("pid"): p for p in df["kept"] if p.get("pid") in (0, 1)}
+        lp = ps.get(leader_pid)
+        k = lp.get("kps") if lp else None
+        if not k:
+            continue
+        if k[0][2] >= SPIN_KP_MIN:
+            head_y = k[0][1]
+        else:
+            sh = [k[i][1] for i in (5, 6) if k[i][2] >= SPIN_KP_MIN]
+            if not sh:
+                continue
+            head_y = min(sh) - 0.05  # 肩から頭頂までのおおよその高さ
+        seen += 1
+        hi = None
+        for hand, idx in (("L", 9), ("R", 10)):
+            if k[idx][2] >= SPIN_KP_MIN and k[idx][1] < head_y and (hi is None or k[idx][1] < hi[1]):
+                hi = (hand, k[idx][1], k[idx][0])
+        if hi is None:
+            continue
+        up += 1
+        hand_votes[hi[0]] += 1
+        fp = ps.get(follower_pid)
+        if first is None:
+            first = (df["t"], hi[0], hi[2], fp["hipX"] if fp else None, lp["hipX"])
+        if hi[0] == first[1]:
+            track.append(hi[2])
+    if seen < 3:
+        return None
+    ratio = up / seen
+    raised = ratio >= RAISE_RATIO_MIN
+    out = {"raised": raised, "ratio": round(ratio, 2)}
+    if raised:
+        out["hand"] = max(hand_votes, key=lambda h: hand_votes[h])
+        # 上がり始めの横の動き: 最初の数フレームの手首xの変化を、女性がいる側の向き（男性の腰から見た）と比べる
+        if first is not None and first[3] is not None and len(track) >= 3:
+            dx = track[min(3, len(track) - 1)] - track[0]
+            toward = 1 if first[3] > first[4] else -1
+            if abs(dx) >= 0.01:
+                out["firstMove"] = "inward" if dx * toward > 0 else "outward"
+    return out
+
+
 HOLD_DIST = 0.07       # 手首間の正規化距離がこれ未満なら「つないでいる」
 HOLD_WINDOW_SEC = 0.35  # イベント時刻の前後この範囲でホールドを判定
 HOLD_SEG_MIN_SEC = 0.5  # ホールドタイムラインに載せる区間の最小長
@@ -726,7 +879,9 @@ def detect_events(draw_frames, leader_pid):
     リーダーの単独ターン（フック ターン等）は近傍に何も無ければ検出される
     """
     cbl_times = detect_cbl(draw_frames)
-    events = [{"t": t, "type": "CBL", "by": "pair", "hold": detect_hold(draw_frames, t, leader_pid)}
+    events = [{"t": t, "type": "CBL", "by": "pair", "hold": detect_hold(draw_frames, t, leader_pid),
+               "pass": detect_pass_side(draw_frames, t, leader_pid),
+               "handRaise": detect_hand_raise(draw_frames, t, leader_pid)}
               for t in cbl_times]
 
     turns = {0: detect_turns(draw_frames, 0), 1: detect_turns(draw_frames, 1)}

@@ -339,6 +339,11 @@ TURN_MAX_ROTATIONS = 3     # 連続回転の上限（それ以上はジッタの
 CBL_MIN_SEP = 0.08         # 交差前後で必要な左右分離（正規化X。ジッタの往復を弾く）
 CBL_WINDOW_SEC = 2.0       # 交差の前後この秒数内に十分な分離があること
 CBL_PIVOT_SUPPRESS_SEC = 1.2  # CBLの±この秒数内のリーダーのターンはCBLのピボット動作として棄却
+# リーダーのターンは向きの目安（spin）で正味この角度以上回ったものだけ残す。
+# 男性が振り返って戻る・相手を見て向き直る動きは「RL」「LR」（正味0°）になり、
+# 正解表2本で男性ターンの誤検出5件中3件がこれだった（eval_ground_truth.py）。
+# 女性には使わない: 10fps の spin は速い連続ターンで向きが取れず、本物でも正味0°〜180°になる
+LEADER_TURN_MIN_NET_DEG = 360
 EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
 # 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
@@ -898,9 +903,11 @@ def detect_events(draw_frames, leader_pid):
                 continue
             if by == "leader" and any(abs(t - ft) <= CBL_PIVOT_SUPPRESS_SEC for ft in follower_turn_times):
                 continue
+            spin = spin_hint(draw_frames, pid, t)
+            if by == "leader" and abs((spin or {}).get("netDeg", 0)) < LEADER_TURN_MIN_NET_DEG:
+                continue
             events.append({"t": t, "type": "Turn", "by": by, "rotations": rotations,
-                           "hold": detect_hold(draw_frames, t, leader_pid),
-                           "spin": spin_hint(draw_frames, pid, t)})
+                           "hold": detect_hold(draw_frames, t, leader_pid), "spin": spin})
     events.sort(key=lambda e: e["t"])
     return events
 

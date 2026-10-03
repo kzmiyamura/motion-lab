@@ -521,5 +521,49 @@ class PassCheckTest(unittest.TestCase):
         self.assertEqual(res["routine"]["directionChecks"], 1)
 
 
+class InferHoldTest(unittest.TestCase):
+    """手が分からない女性のターンは、男が頭上に上げた手（CV）から普通のつなぎを推す（0:01.76「CBL＋女左回り?」）"""
+    GRID = {"beatGrid": {"beatIntervalSec": 0.5, "firstBeatSec": 0.0}}
+
+    def run_one(self, direction, hand, hold=None, cv_hold=None, timeline=None):
+        ev = [{"t": 2.0, "type": "CBL", "by": "pair", "hold": cv_hold, "handRaise": {"raised": True, "hand": hand}}]
+        summary = {**self.GRID, "events": ev, "holdTimeline": timeline or []}
+        move = "left_turn" if direction == "left" else "right_turn"
+        res = {"routine": {"timing": "on2", "moves": [
+            mv(0.0, move, name="ターン", holdStart=hold, holdEnd=hold,
+               turn={"by": "follower", "direction": direction, "rotations": 1})]}}
+        normalize(res, summary, duration=4.0)
+        return res["routine"]["moves"][0]
+
+    def test_left_hand_raised_means_her_right_hand(self):
+        m = self.run_one("left", "L")
+        self.assertEqual(m["inferredHold"], "LR")
+        self.assertEqual(m["holdSource"], "inferred")
+        self.assertEqual(m["turn"]["kind"], "inside")
+        self.assertEqual(m["name"], "インサイドターン")       # 推しただけでは「?」を付けない
+        self.assertIsNone(m["holdStart"])                    # 見えたつなぎの欄は書き換えない
+        self.assertEqual(m["leadHand"], "L")
+        self.assertEqual(self.run_one("right", "L")["turn"]["kind"], "outside")
+
+    def test_right_hand_raised_flips(self):
+        m = self.run_one("left", "R")
+        self.assertEqual(m["inferredHold"], "RL")
+        self.assertEqual(m["turn"]["kind"], "outside")
+        self.assertEqual(self.run_one("right", "R")["turn"]["kind"], "inside")
+
+    def test_no_inference_when_data_shows_cross_or_same_side_hold(self):
+        for kw in ({"hold": "cross"}, {"hold": "none"}, {"cv_hold": "リーダー右手×フォロワー右手"},
+                   {"timeline": [{"from": 1.0, "to": 1.5, "hold": "リーダー左手×フォロワー左手"}]}):
+            m = self.run_one("left", "L", **kw)
+            self.assertNotIn("inferredHold", m, kw)
+            self.assertNotIn("kind", m["turn"], kw)
+            self.assertTrue(m["name"].endswith("?"), kw)
+
+    def test_seen_hold_wins(self):
+        m = self.run_one("left", "L", hold="RL")   # 女の左手で左回り = アウトサイド（上げた手からは推さない）
+        self.assertNotIn("inferredHold", m)
+        self.assertEqual(m["turn"]["kind"], "outside")
+
+
 if __name__ == "__main__":
     unittest.main()

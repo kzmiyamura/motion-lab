@@ -33,7 +33,9 @@ Claude の routine は技イベントの時刻（CBL・ターンの瞬間）か�
    インサイドターンは CBL と組むのが普通なので、その場のインサイドターンで入れ替わりが無ければ、前後半分の
    8 カウント以内の持ち主の無い入れ替わりを取って CBL＋インサイドにし、それも無ければ「?」を付ける
 9. 回る向き: 右回り = 回る人自身の右へ = 上から見て時計回り。女性のターンは、つないだ手（女性の右手か左手か）と
-   向きからインサイド/アウトサイドを決め（turn.kind）、技名もそれを主にする（手が分からなければ「女 右回り?」）
+   向きからインサイド/アウトサイドを決め（turn.kind）、技名もそれを主にする（手が分からなければ「女 右回り?」）。
+   手がデータに無くても、CV が男の頭上の手を見ていれば普通のつなぎ（男の左手×女の右手 / 男の右手×女の左手）を
+   推して使う（inferredHold・holdSource="inferred"。同じ側の手どうし・クロスが見えていれば推さない）
 
 元の行は routine.rawMoves に残す（何度実行しても rawMoves から作り直すので結果は同じ）。
 
@@ -476,8 +478,9 @@ def leader_hand(hold):
 
 
 def turn_hold(mv):
-    """ターンのときのつなぎ。片手でつないでいる方（技の初め → 終わりの順）"""
-    for h in (mv.get("holdStart"), mv.get("holdEnd")):
+    """ターンのときのつなぎ。片手でつないでいる方（技の初め → 終わりの順）。
+    どちらも分からなければ、男が上げた手から推した普通のつなぎ（inferredHold。infer_hold を参照）"""
+    for h in (mv.get("holdStart"), mv.get("holdEnd"), mv.get("inferredHold")):
         if follower_hand(h):
             return h
     return None
@@ -654,6 +657,14 @@ SIDE_START_BEATS = 1.0    # 行の始まりの立ち位置: 頭からこの拍�
 SIDE_END_BEATS = -0.5     # 行の終わりの立ち位置: 次の行の頭からこの拍数（負 = 手前）以降に最初に確かめた側
 # 正解表（1230b3d5・ジョブ 581ef6a2）で開始 -0.5〜2 拍・終了 -1.5〜2.5 拍を振り、1.0 / -0.5 が CBL 再現率 0.9・
 # 行の一致 0.879 で最良（終了を -1.5 にすると、CV の入れ替わりが遅れて 8 拍目に出た行を「入れ替わり無し」と読む）
+# 行ごとの局所位相（swapAt を 5 拍目に寄せてカウントを付け直す）は試して入れていない（1230b3d5・581ef6a2）:
+# swapAt（CV の入れ替わりの 0.6 秒以内）の元の CV 時刻は正解の通過から -1.0〜+1.7 秒（最大 5 拍）ばらつき、
+# 遅れる側に寄るので、CBL 系の行の swapAt のカウントは 6〜8 に
+# 偏り（46 件中 27 件）、正解の通過（平均 5.2）とは合わない。両向きに寄せると正解の通過が 5±1 に入る割合が
+# 0.58→0.30 に落ちる。早すぎる（3 以下）ときだけ寄せると 4 行しか動かず 0.58→0.60 で、行の頭が 4 拍目になる。
+# 0:01.76 の行が 2〜4 拍遅れて見えるのは、全体の周期が正解より 0.6% 短い（正解だけで当てると 2.593 秒 / 今 2.577 秒）
+# ため冒頭の行の頭が遅れ（正解の通過が 0〜20 秒で平均 3.9 拍目、140 秒以降で 7.1 拍目）、さらに冒頭の
+# 入れ替わり 2 回（0.3・2.5 秒、間隔 6.8 拍）が 8 カウントに乗らないため
 CROSS_CV_SEC = 0.6        # 入れ替わりは、CV の CBL イベントがこの秒数以内にあるものだけ数える（下の説明）
 # tracks.json の左右だけで数えると、密着（ラップ・ハグ）中の腰の重なりで入れ替わりが出る（1230b3d5 の 1:28〜1:32 で
 # 4 回。正解表には無い）。CV の CBL 検出は前後の離れ具合も見ているので、それと重なるものだけを入れ替わりとする
@@ -698,6 +709,51 @@ def cv_lead_hand(summary, t0, t1):
             if hr.get("raised") and hr.get("hand") in ("L", "R"):
                 return hr["hand"]
     return None
+
+
+CV_HOLD = {   # analyze_pair の hold（日本語）→ routine の語彙（男の手が先）
+    "リーダー左手×フォロワー右手": "LR", "リーダー右手×フォロワー右手": "RR",
+    "リーダー右手×フォロワー左手": "RL", "リーダー左手×フォロワー左手": "LL",
+}
+STANDARD_HOLD = {"L": "LR", "R": "RL"}   # 男が上げた手 → 普通のつなぎ（男の左手×女の右手 / 男の右手×女の左手）
+NON_STANDARD_HOLDS = {"RR", "LL", "cross"}   # 同じ側の手どうし（右手×右手・左手×左手）とクロス
+
+
+def cv_holds(summary, t0, t1):
+    """行の中で CV が見たつなぎ（events の hold と holdTimeline。routine の語彙）の集合"""
+    s = summary or {}
+    out = set()
+    for e in s.get("events") or []:
+        if isinstance(e, dict) and _num(e.get("t")) and t0 - 0.5 <= e["t"] < t1 and e.get("hold") in CV_HOLD:
+            out.add(CV_HOLD[e["hold"]])
+    for h in s.get("holdTimeline") or []:
+        if isinstance(h, dict) and _num(h.get("from")) and _num(h.get("to")) and h["to"] > t0 and h["from"] < t1 \
+                and h.get("hold") in CV_HOLD:
+            out.add(CV_HOLD[h["hold"]])
+    return out
+
+
+def infer_hold(mv, summary, t0, t1):
+    """女性のターンで、つないだ手がデータに無いとき、男が頭上に上げた手（CV）から普通のつなぎを推す（決定的）:
+    男の左手が上がっていれば女の右手（LR）、右手なら女の左手（RL）。行の欄・CV のどちらかに同じ側の手どうし
+    （RR・LL）やクロスが見えていれば推さない。離している（none）と書かれた行も推さない。
+    推したら inferredHold と holdSource="inferred" を付ける。holdStart/holdEnd（見えたつなぎ）は書き換えない
+    （振付シートの「つなぎ」欄に推したものを見えたように出さない。インサイド/アウトサイドは turn.kind で出る）。
+    推しただけでは「?」を付けない。
+    戻り値は推したつなぎ（推さなければ None）。
+    581ef6a2 の 0:01.76: 手は両方不明・CV の CBL で男の左手が上がり、CV の回転は左 → 女の右手で左回り = インサイド"""
+    turn = mv.get("turn")
+    if not isinstance(turn, dict) or turn.get("by") not in ("follower", "both") or turn_hold(mv):
+        return None
+    holds = {mv.get("holdStart"), mv.get("holdEnd")}
+    if "none" in holds or holds & NON_STANDARD_HOLDS or cv_holds(summary, t0, t1) & NON_STANDARD_HOLDS:
+        return None
+    h = STANDARD_HOLD.get(cv_lead_hand(summary, t0, t1))
+    if h is None:
+        return None
+    mv["inferredHold"] = h
+    mv["holdSource"] = "inferred"
+    return h
 
 
 def cv_spin(summary, t0, t1, by="follower"):
@@ -940,6 +996,8 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None):
         if flip:
             mv["directionCheck"] = flip
             mark_uncertain(mv)
+        # 手が分からない女性のターンは、男が上げた手から普通のつなぎを推す（「?」は付けない）
+        infer_hold(mv, summary, t0, t1)
         fix = check_pass(mv, cv_pass_side(summary, t0, t1))
         if fix:
             mv["passCheck"] = fix

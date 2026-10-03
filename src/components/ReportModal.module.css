@@ -90,6 +90,19 @@
   color: var(--color-accent);
 }
 
+.figure {
+  display: block;
+  margin: 0.15rem 0 0.1rem;
+  overflow-x: auto;
+}
+
+.figureImg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
 .list {
   margin: 0;
   padding-left: 1.1rem;

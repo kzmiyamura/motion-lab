@@ -227,7 +227,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
   if (preset.useClaude) {
     try {
       const r = await runClaude(jobDir, job.spec_snapshot, signal);
-      const reportMd = r.reportMd + debugVideoSection(job.id);
+      const reportMd = (await withSceneFrames(job.id, ctx, r.reportMd, signal)) + debugVideoSection(job.id);
       const resultJson = r.resultJson
         ?? JSON.stringify({ pipeline: 'p2-claude', preset: job.preset, note: 'result.json 未生成（report.md のみ）' });
       markJobDone(job.id, resultJson, reportMd);
@@ -282,6 +282,28 @@ function handleClaudeFailure(job: AnalysisJobRow, e: unknown, signal: AbortSigna
   }
   requeueJobForRetry(job.id, new Date(Date.now() + 60_000).toISOString());
   console.log(`[jobWorker] job ${job.id} claude failed, retry once: ${msg.slice(0, 200)}`);
+}
+
+/**
+ * 技のタイムラインの各場面（**0:16 …** の見出し）の直後に、2人の周りを切り取った連続コマ画像を差し込む。
+ * 文章だけでは「ここで何をしているか」が掴みにくいため。失敗してもレポート本文はそのまま使う
+ */
+async function withSceneFrames(jobId: string, ctx: JobContext, reportMd: string, signal: AbortSignal): Promise<string> {
+  const reportPath = path.join(jobDirOf(jobId), 'out', 'report.md');
+  try {
+    await runPython([
+      path.resolve(__dirname, '../analysis/make_report_frames.py'),
+      ctx.videoPath,
+      ctx.measurementsPath.replace(/\.json$/, '.tracks.json'),
+      reportPath,
+      path.join(jobDirOf(jobId), 'out', 'report_frames'),
+      `/analysis-output/${jobId}/out/report_frames`,
+    ], signal);
+    return readFileSync(reportPath, 'utf-8');
+  } catch (e) {
+    console.warn(`[jobWorker] scene frames skipped: ${e instanceof Error ? e.message : e}`);
+    return reportMd;
+  }
 }
 
 /** デバッグ動画・骨格人形動画が生成されていればレポート末尾に案内を付ける（CV/Claude 両パス共通） */

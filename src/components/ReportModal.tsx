@@ -112,6 +112,17 @@ function renderMarkdown(md: string, baseUrl: string): ReactNode[] {
       return;
     }
     if (line.trim() === '') return;
+    // 1行まるごとの画像（技のタイムラインの各場面の連続コマ）。タップで原寸を開く
+    const img = line.trim().match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (img) {
+      const src = img[2].startsWith('/') ? resolveHomeServerUrl(baseUrl, img[2]) ?? img[2] : img[2];
+      out.push(
+        <a key={key} href={src} target="_blank" rel="noreferrer" className={styles.figure}>
+          <img src={src} alt={img[1]} loading="lazy" className={styles.figureImg} />
+        </a>,
+      );
+      return;
+    }
     out.push(<p key={key} className={styles.para}>{renderInline(line, baseUrl, key)}</p>);
   });
   flushList('tail-ul');

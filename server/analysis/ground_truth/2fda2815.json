@@ -1,35 +1,40 @@
 {
   "video": "2fda2815（Instagram リール画面録画: スタジオでのサルサ On2 ペアワーク、約31秒。0:30.5〜 iPhone コントロールセンター）",
   "job": "87003970-09bc-4030-8a6e-156f140d296a",
-  "source": "storage/gt-sheets/2fda2815 コマ一覧（0.5秒刻み）を目視で読み取り（2026-10-03）",
+  "source": "storage/gt-sheets/2fda2815 コマ一覧（0.5秒刻み）を目視で読み取り（2026-10-03）。2026-10-04 に全編 0.2 秒刻み＋ターン区間 0.1 秒刻み（上半身の切り出し）で読み直し、ターンの向き・回転数・男のターンを足した",
   "leaderAtStart": "right",
   "evalRange": [0, 30.5],
   "notes": [
-    "男性=グレーのシャツ、女性=白トップス・黒パンツ。固定カメラに近い（パンは小さい）",
+    "男性=グレーのシャツ、女性=白トップス（背中に鍵穴の開き）・黒パンツ。固定カメラに近い（パンは小さい）",
     "背景の鏡に撮影者（黒服でスマホを構える人）が映る。0:08〜0:12 ごろ奥にピンクのシャツの人物も映る。ペアと誤認しやすい",
     "0:21〜0:27 は男性がカメラに背を向けて女性をほぼ隠している。この間の入れ替わりは脚・腕の位置から推定（depth は far）",
-    "女性のターンは向きの順番（左向き→背中→右向き）から右回りと読んだ。0.5秒刻みで途中が飛ぶものは optional",
+    "向きの読み方: 0.1 秒刻みで 正面(S)・背中の鍵穴(N)・顔の横向き(左=W / 右=E) の並びを追い、上から見た回転方向を決めた。S→E→N→W が本人の左回り（反時計回り）",
+    "2026-10-03 版では女性のターンを全て右回りと書いていたが、0.1 秒刻みで見直すと 5.9 / 9.2 / 13.8 / 19.2 / 28.5 は左回りだった（0.5 秒刻みでは 180° ずつ飛んで向きが決まらない）",
+    "CBL に続けて回るものは、通過の½回転も回転数に含めた（例: CBL＋インサイド = 左 1½）",
     "0:30.5〜 録画停止時の iPhone コントロールセンター。評価対象外"
   ],
   "cbl": [
-    {"t": 3.3, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": false, "memo": "0:03 CBL（手は胸の高さ）"},
-    {"t": 5.0, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:05 女性が手前を通って左へ、腕を上げて回る"},
-    {"t": 9.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:09 女性が手前を通って右へ"},
-    {"t": 13.0, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": true, "memo": "0:13 頭上で手をつないだまま手前を通って左へ"},
-    {"t": 20.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:20 ターン直後に手前を通って右へ"},
+    {"t": 3.6, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": false, "memo": "0:03 CBL（手は胸の高さ）"},
+    {"t": 5.2, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:05 女性が手前を通って左へ、続けて左回り"},
+    {"t": 9.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:09 女性が手前を通って右へ（左回りしながら）"},
+    {"t": 13.2, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": true, "memo": "0:13 頭上で手をつないだまま手前を通って左へ"},
+    {"t": 20.1, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:20 ターン直後に手前を通って右へ"},
     {"t": 21.3, "kind": "swap", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:21 男性の背中の陰で女性が左へ"},
     {"t": 23.8, "kind": "swap", "from": "left", "depth": "far", "leaderHandRaised": null, "memo": "0:23 男性の陰から右へ"},
-    {"t": 27.5, "kind": "swap", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:27 男性の陰を通って左へ"}
+    {"t": 27.6, "kind": "swap", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:27 男性の陰を通って左へ"}
   ],
   "turns": [
-    {"t": 6.0, "by": "follower", "runs": [{"dir": "right", "turns": null}], "optional": true, "memo": "0:05〜0:06 CBL 後に右回り?（回数不明）"},
-    {"t": 9.4, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:09.4 回っているように見えるが 10.8 と別物か未確定"},
-    {"t": 10.8, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:10 頭上で手をつないで右ターン"},
-    {"t": 13.0, "by": "follower", "runs": [{"dir": "right", "turns": null}], "optional": true, "memo": "0:13 CBL からのアウトサイドターン?"},
-    {"t": 19.2, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:19 頭上で右ターン（右向き→正面→左向き→右向き）"},
-    {"t": 28.3, "by": "follower", "runs": [{"dir": "right", "turns": null}], "optional": true, "memo": "0:28 両腕を頭上で回る（男性の陰から出た直後）"}
+    {"t": 5.9, "by": "follower", "runs": [{"dir": "left", "turns": 1.5}], "memo": "0:05.7〜0:06.7 CBL 直後、片腕を上げて左回り（背中→左向き→正面→右向き→背中→正面）"},
+    {"t": 7.0, "by": "leader", "runs": [{"dir": "right", "turns": 2}], "memo": "0:06.2〜0:07.9 男のライトターン（ゆっくり2回。1回ずつ2回かもしれない）"},
+    {"t": 9.2, "by": "follower", "runs": [{"dir": "left", "turns": 1.5}], "memo": "0:08.9〜0:09.8 CBL＋インサイドターン（通過の½込み）"},
+    {"t": 11.2, "by": "follower", "runs": [{"dir": "right", "turns": 2}], "memo": "0:10.7〜0:11.8 頭上で手をつないで右ターン2回"},
+    {"t": 13.8, "by": "follower", "runs": [{"dir": "left", "turns": 2.5}], "memo": "0:13.1〜0:14.7 CBL から頭上の手の下で左回り（通過込みで 2½〜2¾）"},
+    {"t": 15.8, "by": "leader", "runs": [{"dir": "left", "turns": null}], "optional": true, "memo": "0:15〜0:16.6 男が背中を向けてから正面に戻る。回ったかは途中が見えず未確定"},
+    {"t": 17.4, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:17.1〜0:17.7 手を低く持ったまま右回り1回"},
+    {"t": 19.2, "by": "follower", "runs": [{"dir": "left", "turns": 1.5}], "memo": "0:18.6〜0:19.9 頭上で左回り（1½〜2。19.1〜19.3 に正面で一瞬止まる）"},
+    {"t": 28.5, "by": "follower", "runs": [{"dir": "left", "turns": 2}], "memo": "0:28.1〜0:29.0 手を離し両腕を頭上で左回り（1¾〜2）"}
   ],
   "holds": [
-    {"t": 4.2, "leader": "L", "follower": "R"}
+    {"t": 4.0, "leader": "L", "follower": "R", "memo": "CBL 直後の片手つなぎ"}
   ]
 }

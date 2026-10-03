@@ -1,7 +1,7 @@
 {
   "video": "bb0efcb9（Instagram リール画面録画: Yamulee スタジオでのペアワーク、約43秒。0:00〜0:37.5 ダンス、0:38〜 リールが頭からループ再生、0:41〜 ホーム画面・コントロールセンター）",
   "job": "659353c4-ba3f-44d2-ab1f-9781f88c4103",
-  "source": "storage/gt-sheets/bb0efcb9 コマ一覧（0.5秒刻み）を目視で読み取り（2026-10-03）",
+  "source": "storage/gt-sheets/bb0efcb9 コマ一覧（0.5秒刻み）を目視で読み取り（2026-10-03）。2026-10-04 に全編 0.2 秒刻み＋ターン区間 0.1 秒刻み（上半身の切り出し）で読み直し、ターンの向き・回転数・男のターンを足した",
   "leaderAtStart": "right",
   "evalRange": [0, 37.8],
   "turnsComplete": false,
@@ -11,28 +11,42 @@
     "背景の鏡に他の練習者が多数映る",
     "0:37.5→0:38.0 で女性が右から左に移るのはリールのループ（頭に戻った）であって入れ替わりではない。0:38 以降は評価対象外",
     "0:41〜 iPhone ホーム画面・コントロールセンター",
-    "男性がカメラに背を向ける場面（0:03.5、0:12、0:21〜0:22.5、0:28、0:31、0:33.5）は女性を回す・振り返る動きと区別できず、男性のターンは入れていない",
-    "女性のターンは0.5秒刻みで向きが読めないため optional"
+    "向きの読み方: 背中の開き=背中(N)、SEAGER の文字=男の背中(N)、顔の横向き=W/E。0.1 秒刻みで並びを追った。S→E→N→W が本人の左回り",
+    "男のターン: 0.1 秒刻みで 正面→横→背中→反対の横→正面 と一続きに回ったものだけ入れた（4.1 / 15.4 / 16.6 / 31.2 / 33.9 / 34.9 は左右とも確定）。背中を向けたまま歩くだけのもの（21〜23.5、28〜29.6）は入れていない",
+    "18.9 は男女とも 正面→背中→正面 と同じ側から戻っており（往復）、ターンではないかもしれない（optional）",
+    "CBL に続けて回るものは、通過の½回転も回転数に含めた"
   ],
   "cbl": [
-    {"t": 8.5, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": true, "memo": "0:08 頭上で手をつなぎ、女性が背中を見せて手前を通り右へ"},
-    {"t": 14.0, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:14 女性が手前を通って左へ"},
-    {"t": 17.6, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:17 女性が背中を見せて手前を通り右へ"},
-    {"t": 22.5, "kind": "swap", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:22 男性が背中を向けている奥で女性が左へ"},
+    {"t": 8.6, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": true, "memo": "0:08 頭上で手をつなぎ、女性が右回りしながら手前を通り右へ"},
+    {"t": 14.4, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:14 女性が手前を通って左へ"},
+    {"t": 17.7, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:17 女性が背中を見せて手前を通り右へ"},
+    {"t": 22.6, "kind": "swap", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:22 男性が背中を向けている奥で女性が左へ"},
     {"t": 24.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:24 女性が手前を通って右へ"},
-    {"t": 26.5, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": true, "memo": "0:26 頭上で手を回して左へ"},
+    {"t": 26.5, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": true, "memo": "0:26 頭上で手を回して左へ（続けて右回り）"},
     {"t": 28.2, "kind": "swap", "from": "left", "depth": "far", "leaderHandRaised": null, "memo": "0:28 男性の背中の陰で女性が右へ"},
-    {"t": 29.7, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:29 女性が手前を通って左へ"},
-    {"t": 37.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:37 女性が背中を見せて手前を通り右へ"}
+    {"t": 29.8, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:29 女性が手前を通って左へ（続けて右回り）"},
+    {"t": 37.2, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:37 女性が背中を見せて手前を通り右へ"}
   ],
   "turns": [
-    {"t": 8.2, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:08 CBL 中に頭上の手の下で回る?"},
-    {"t": 11.5, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:11〜0:12 頭上で手をつないでターン"},
-    {"t": 15.0, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:15 頭上で手をつないでターン?"},
-    {"t": 18.8, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:18〜0:19 頭上で手をつないでターン"},
-    {"t": 20.5, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:20 頭上で手をつないでターン"},
-    {"t": 27.3, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:27 CBL 後にターン?"},
-    {"t": 35.3, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:35 両腕を上げて回る?"}
+    {"t": 4.1, "by": "leader", "runs": [{"dir": "right", "turns": 1}], "memo": "0:03.3〜0:04.9 シャイン中の男のゆっくりした右回り"},
+    {"t": 8.5, "by": "follower", "runs": [{"dir": "right", "turns": 2.5}], "memo": "0:07.8〜0:09.4 CBL＋頭上の手の下で右回り（通過の½込み）"},
+    {"t": 11.4, "by": "follower", "runs": [{"dir": "right", "turns": 1.5}], "memo": "0:10.9〜0:11.9 頭上で手をつないで右ターン（1½〜1¾）"},
+    {"t": 12.3, "by": "follower", "runs": [{"dir": "left", "turns": 1}], "optional": true, "memo": "0:12.0〜0:12.6 続けて左回りで男に向き直る（¾〜1）"},
+    {"t": 12.5, "by": "leader", "runs": [{"dir": "left", "turns": 1}], "optional": true, "memo": "0:12.1〜0:13.0 男も背中を向けて左回りで戻る（回り込みかもしれない）"},
+    {"t": 15.3, "by": "follower", "runs": [{"dir": "right", "turns": null}], "optional": true, "memo": "0:15.0〜0:15.7 CBL 後に右回り¾で男に向き直る（ターンか向き直りか未確定）"},
+    {"t": 15.4, "by": "leader", "runs": [{"dir": "left", "turns": 1}], "memo": "0:15.0〜0:15.8 男のレフトターン"},
+    {"t": 16.6, "by": "leader", "runs": [{"dir": "left", "turns": 1}], "memo": "0:16.2〜0:16.9 頭上で手をつないだまま男のレフトターン"},
+    {"t": 18.9, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:18.6〜0:19.4 頭上で手をつないで背中を見せるが、同じ側から戻る（往復）"},
+    {"t": 20.1, "by": "follower", "runs": [{"dir": "left", "turns": 1}], "memo": "0:19.8〜0:20.5 頭上で手をつないで左回り"},
+    {"t": 23.3, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:23.0〜0:23.8 頭上で手をつないで右ターン（直後に CBL）"},
+    {"t": 26.9, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:26.6〜0:27.2 CBL 直後に右ターン"},
+    {"t": 30.3, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:30.0〜0:30.7 CBL 直後に右ターン"},
+    {"t": 31.2, "by": "leader", "runs": [{"dir": "left", "turns": 1}], "memo": "0:31.0〜0:31.5 男のレフトターン"},
+    {"t": 32.0, "by": "leader", "runs": [{"dir": "left", "turns": 1}], "optional": true, "memo": "0:31.7〜0:32.3 続けてもう1回?（31.2 と合わせてダブルかもしれない）"},
+    {"t": 32.8, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:32.0〜0:33.6 回っているが向きが途中で食い違って読めない"},
+    {"t": 33.9, "by": "leader", "runs": [{"dir": "left", "turns": 1}], "memo": "0:33.4〜0:34.2 男のレフトターン"},
+    {"t": 34.9, "by": "leader", "runs": [{"dir": "left", "turns": 1}], "memo": "0:34.5〜0:35.3 男のレフトターン（もう1回）"},
+    {"t": 35.4, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:35.1〜0:35.8 両腕を上げて右回り（手は離している）"}
   ],
   "holds": [
     {"t": 6.8, "leader": "both", "follower": "both", "optional": true, "memo": "0:06〜0:07 シャインから両手を取る"}

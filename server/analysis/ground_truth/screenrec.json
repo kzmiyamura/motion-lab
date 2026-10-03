@@ -1,0 +1,38 @@
+{
+  "video": "ScreenRecording（入場→CBL連続→ターン、約33秒）",
+  "job": "a458dd49-7a7f-409f-9794-46cfaa6bc718",
+  "source": "out/report.before_frames.md（2026-09-23 連続フレームで人手校正）",
+  "leaderAtStart": "right",
+  "notes": [
+    "CBL は「2人の左右が入れ替わる瞬間」。技としての CBL に加えて位置交換（kind: swap）も含む",
+    "from = 入れ替わる前に女性がいた画面の側。depth = すれ違うとき女性がカメラ側(near)か奥(far)か。読み取れないものは null",
+    "turn の runs は女性（または男性）から見た回る向きと回転数。dir/turns が null は読み取れなかったもの",
+    "optional: true は有無が確定しないもの（検出されても誤検出に数えず、見逃しても取りこぼしに数えない）"
+  ],
+  "cbl": [
+    {"t": 8.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": true, "memo": "0:07 CBLからのアウトサイドターン"},
+    {"t": 9.3, "kind": "cbl", "from": "right", "depth": "far", "leaderHandRaised": null, "memo": "0:09 女性が奥側を通って戻る"},
+    {"t": 10.6, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:10"},
+    {"t": 12.1, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:12 女性が両腕を頭上に"},
+    {"t": 20.4, "kind": "swap", "from": "left", "depth": "far", "leaderHandRaised": null, "memo": "0:20 男性がカメラ側を通る位置交換"},
+    {"t": 21.8, "kind": "cbl", "from": "right", "depth": "near", "leaderHandRaised": null, "memo": "0:21 CBLからのアウトサイドターン"},
+    {"t": 27.8, "kind": "cbl", "from": "left", "depth": null, "leaderHandRaised": true, "memo": "0:27 頭上で腕を絡めたまま"},
+    {"t": 29.2, "kind": "cbl", "from": "right", "depth": null, "leaderHandRaised": null, "memo": "0:29 CBLからのターン2回?"},
+    {"t": 31.5, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:31 開いてフィニッシュ"}
+  ],
+  "turns": [
+    {"t": 7.5, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:07 アウトサイドターン"},
+    {"t": 11.8, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:12 回ったかどうか読み取れない"},
+    {"t": 13.3, "by": "leader", "runs": [{"dir": "left", "turns": 2}], "memo": "0:13 男性のレフトターン2回"},
+    {"t": 16.4, "by": "follower", "runs": [{"dir": "left", "turns": 1}, {"dir": "right", "turns": 3}], "memo": "0:16 レフト1→ライト3"},
+    {"t": 21.7, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:21 アウトサイドターン"},
+    {"t": 23.0, "by": "leader", "runs": [{"dir": "right", "turns": 1}], "memo": "0:23 男性のライトターン"},
+    {"t": 24.4, "by": "follower", "runs": [{"dir": "right", "turns": 4}], "memo": "0:24 ライト3→もう1回"},
+    {"t": 29.0, "by": "follower", "runs": [{"dir": null, "turns": 2}], "memo": "0:29 ターン2回?（向き不明）"}
+  ],
+  "holds": [
+    {"t": 7.1, "leader": "L", "follower": "R"},
+    {"t": 16.7, "leader": "R", "follower": null},
+    {"t": 31.8, "leader": "L", "follower": "R"}
+  ]
+}

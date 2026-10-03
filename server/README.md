@@ -50,6 +50,39 @@ npm run dev
 - `storage/thumbnails/` — サムネイル JPEG
 - `data/motionlab.db` — SQLite（動画メタデータ）
 
+## 運用ツール（`server/tools/`）
+
+どちらも `server/` をカレントにして `node` で直接実行する（tsx 不要）。
+
+### `backfill-report-frames.mjs` — 過去レポートへの場面コマ画像の付け直し
+
+```
+node tools/backfill-report-frames.mjs [--dry-run] [<jobId> ...]
+```
+
+- status=done のジョブ（jobId 指定時はそれだけ）について、`analysis/make_report_frames.py` を
+  jobWorker の `withSceneFrames` と同じ引数で走らせ、`out/report.md` と DB の `report_md` を更新する
+- DB の `report_md` 末尾の「## 動画」節（`debugVideoSection` が付けたもの）はそのまま残す。
+  保存済み本文が `report.md` 由来でないジョブ・元動画や tracks.json が無いジョブは飛ばす
+- Claude は呼ばない。1件ずつ直列（メモリの少ない実機向け）。何度実行しても同じ結果になる
+- `make_report_frames.py` の見出し解析のテスト: `python -m unittest discover -s server/analysis/tests`
+
+### `auto-reanalyze.mjs` — パイプライン変更時の最新動画の自動再解析（pm2: `motion-lab-autoreanalyze`）
+
+- 5分ごとに、解析結果に効くファイル（`analysis/**`（`eval_*` `measure_*` `prototype_*` `ground_truth/` `tests/` を除く）・
+  `prompts/**`・`src/jobWorker.ts`・`src/claudeRunner.ts`・`src/presets.ts`）に触れた最新コミットを
+  ローカルの `git log` で調べる
+- 前回解析したコミットから変わっていて、コミットから20分以上・前回の自動再解析から2時間以上経ち、
+  解析ジョブ（queued/running）が無く、空きメモリが 1.5GB 以上なら、指示書（salsa-pair）付きフォルダに入った
+  最新の ready 動画を `POST /api/videos/:id/reanalyze` で再解析する（`API_WRITE_TOKEN` は `.env` から読む）
+- `jobWorker.ts` / `claudeRunner.ts` / `presets.ts` がサーバー起動より後にコミットされていたら、
+  先に `pm2 restart motion-lab-server` して health が戻るのを待つ
+- 状態は `storage/auto-reanalyze.json`（`lastAnalyzedCommit` / `lastRunAt` / `lastJobId` / `lastSkipReason`）。
+  初回は現在のコミットを記録するだけ。見送った理由は `lastSkipReason` と `pm2 logs motion-lab-autoreanalyze` に出る
+- 常駐化:
+  `pm2 start tools/auto-reanalyze.mjs --name motion-lab-autoreanalyze --cwd <server のフルパス>` → `pm2 save`
+- 1回だけ判定を回す: `node tools/auto-reanalyze.mjs --once`
+
 ## 既知の制約（Phase 1）
 
 - 認証なし。Tunnel URL を知っていれば誰でもアップロード・閲覧・API利用が可能

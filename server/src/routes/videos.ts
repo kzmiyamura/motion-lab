@@ -13,7 +13,7 @@ import {
 import { isAnalysisRunning, startRotationAnalysis } from '../analysisJob.js';
 import { requireWriteToken } from '../auth.js';
 import { readSpec } from '../specStore.js';
-import { isJobWorkerBusy, jobDirOf } from '../jobWorker.js';
+import { jobDirOf } from '../jobWorker.js';
 import { toPublicJob } from './jobs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,23 +50,16 @@ function toPublicVideo(row: VideoRow) {
   };
 }
 
-/** 回転解析・フォルダ解析ジョブのどちらかが走っているか */
-function isAnalysisBusy(): boolean {
-  return isAnalysisRunning() || isJobWorkerBusy();
-}
-
-const CONVERT_WAIT_POLL_MS = 10_000;
 /** HLS 変換を1本ずつ直列に流すためのチェーン */
 let conversionChain: Promise<void> = Promise.resolve();
 
 /**
  * HLS 変換を順番待ちに積む。
- * 解析中でもアップロード（受信・保存）は受け付け、CPU を食う変換だけ解析が終わるまで待たせる。
+ * 解析ジョブが走っていても待たない。外出先から見られるようにするのが先（解析はフォルダに移してから）。
+ * 解析の python は優先度「通常以下」・スレッド半分で動く（spawnPython.ts）ので、変換と並んでも変換が先に進む
  */
 function enqueueConversion(id: string, filePath: string): void {
   conversionChain = conversionChain.then(async () => {
-    if (isAnalysisBusy()) console.log(`[convert] ${id}: 解析中のため変換を待機`);
-    while (isAnalysisBusy()) await new Promise(r => setTimeout(r, CONVERT_WAIT_POLL_MS));
     if (!getVideo(id)) return; // 待っている間に削除された
 
     try {

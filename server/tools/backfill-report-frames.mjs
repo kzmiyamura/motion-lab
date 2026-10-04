@@ -24,6 +24,7 @@
  *   node tools/backfill-report-frames.mjs --move-frames --update-events --normalize [<jobId> ...]
  *     … 先に update_events.py で技イベントを tracks.json から今の analyze_pair で作り直す（ターンの区間は全フレームで
  *       YOLO をかけ直す = ジョブと同じ。measurements.json / tracks.json の events を書き換え、元は summary.eventsPrev に残す）。
+ *       --retime を足すと先にコマの時刻を動画のタイムスタンプ（PTS）に付け直す（以前の解析はコマ番号 / fps。README 26）。
  *       --retrack を足すと先に人物 ID を今の外見追跡（assign_appearance_ids）で付け直す（動画を読み直して色ヒストグラムを作る。YOLO なし）
  *       --beats を足すとその後に音声のビート格子とカウント 1（beatGrid.downbeat、analyze_beats.py）を作り直す
  *       （ジョブの audio.wav は消えているので ffmpeg で取り直す。イベントの後に回すのはカウント 1 が踊りの手がかりも使うため）
@@ -55,6 +56,7 @@ const NORMALIZE_SCRIPT = path.join(SERVER_DIR, 'analysis/normalize_routine.py');
 const refine = args.includes('--refine');
 const updateEvents = args.includes('--update-events');
 const retrackIds = args.includes('--retrack');   // --update-events と一緒に: 人物 ID を今の外見追跡で付け直す
+const retime = args.includes('--retime');        // --update-events と一緒に: コマの時刻を動画の PTS に付け直す（README 26）
 const UPDATE_EVENTS_SCRIPT = path.join(SERVER_DIR, 'analysis/update_events.py');
 const redoBeats = args.includes('--beats');      // 音声のビート格子とカウント 1（beatGrid.downbeat）を今の analyze_beats で作り直す
 const BEATS_SCRIPT = path.join(SERVER_DIR, 'analysis/analyze_beats.py');
@@ -134,7 +136,7 @@ function backfillMoveFrames(targets) {
     if (updateEvents) {
       // 技イベントを tracks.json から今の analyze_pair で作り直す（ターンの区間は全フレームで取り直す = ジョブと同じ）
       const u = spawnSync(PYTHON_BIN, [UPDATE_EVENTS_SCRIPT, path.join(outDir, 'measurements.json'),
-        `--video=${videoPath}`, `--model=${MODEL_PATH}`, ...(retrackIds ? ['--retrack'] : [])], { encoding: 'utf-8' });
+        `--video=${videoPath}`, `--model=${MODEL_PATH}`, ...(retime ? ['--retime'] : []), ...(retrackIds ? ['--retrack'] : [])], { encoding: 'utf-8' });
       const last = (u.stderr || u.error?.message || '').trim().split('\n').pop();
       if (u.status !== 0) {
         console.log(`${tag} update events failed: ${last}`);

@@ -11,11 +11,12 @@
 1 回目だけ残す）と、tracks.json の events・holdTimeline。summary.eventsUpdate に作り直した印を付ける。
 refine_events.py で取り直したもの（summary.eventRefine）は消える（取り直しは既定で無効）。
 
+--retime（--video が要る）: コマの時刻を動画のタイムスタンプ（PTS）に付け直してから作り直す（README 26。YOLO は回さない）。
 --retrack（--video が要る）: 人物 ID（pid）を今の assign_appearance_ids で付け直してから作り直す。tracks.json は外見の
 ヒストグラムを持たないので、各コマを動画から読み直して付け直す（YOLO は回さない。動画を 1 回読むだけ）。
 男の pid は元の tracks に合わせる。付け直す前の tracks.json は measurements.tracks.prev.json に 1 回目だけ残す。
 
-Usage: python update_events.py <measurements.json> [--tracks=<tracks.json>] [--video=<path> [--model=<yolo.pt>] [--retrack]]
+Usage: python update_events.py <measurements.json> [--tracks=<tracks.json>] [--video=<path> [--model=<yolo.pt>] [--retime] [--retrack]]
        [--out=<別の measurements.json に書く> [--tracks-out=<別の tracks.json に書く>]]
 """
 import json
@@ -63,6 +64,24 @@ def retrack(tracks, video_path):
     return same, swapped
 
 
+def retime(tracks, video_path):
+    """tracks.json のコマの時刻 t を、今の analyze_pair と同じ動画のタイムスタンプ（frame_time_map、PTS をならしたもの）に
+    付け直す。以前の解析は「コマ番号 / fps」で、可変フレームレートの動画では再生の時刻と最大 1 秒ずれていた（README 26）。
+    戻り値は (付け直したコマ数, いちばん大きく動いた秒数)。PTS が取れなければ None"""
+    tmap = ap.frame_time_map(video_path, tracks.get("fps") or 30.0)
+    if not tmap:
+        return None
+    n, shift = 0, 0.0
+    for f in tracks["frames"]:
+        i = f.get("frameIdx")
+        if isinstance(i, int) and 0 <= i < len(tmap):
+            shift = max(shift, abs(tmap[i] - f["t"]))
+            f["t"] = tmap[i]
+            n += 1
+    tracks["frameTime"] = "pts"
+    return n, shift
+
+
 def main():
     pos = [a for a in sys.argv[1:] if not a.startswith("--")]
     opts = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
@@ -78,6 +97,11 @@ def main():
         meas = json.load(f)
     with open(tracks_path, encoding="utf-8") as f:
         tracks = json.load(f)
+    retimed = None
+    if "retime" in flags and opts.get("video"):
+        retimed = retime(tracks, opts["video"])
+        print(f"retimed frames: {retimed[0]} (max shift {retimed[1]:.2f}s)" if retimed else "retime skipped (no PTS / frameIdx)",
+              file=sys.stderr)
     retracked = None
     if "retrack" in flags and opts.get("video"):
         retracked = retrack(tracks, opts["video"])
@@ -97,14 +121,14 @@ def main():
     summary["holdTimeline"] = holds
     summary.pop("eventRefine", None)
     summary["eventsUpdate"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "dense": dense, "count": len(events),
-                               "retracked": retracked is not None}
+                               "retracked": retracked is not None, "retimed": retimed is not None}
     tmp = out_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(meas, f)  # ASCII のまま（analyze_beats.py などは既定のエンコーディングで読む）
     os.replace(tmp, out_path)
     tracks_out = opts.get("tracks-out") or (tracks_path if out_path == meas_path else None)
     if tracks_out:
-        if retracked is not None and tracks_out == tracks_path:
+        if (retracked is not None or retimed is not None) and tracks_out == tracks_path:
             prev = re.sub(r"\.json$", ".prev.json", tracks_path)
             if not os.path.exists(prev):
                 os.replace(tracks_path, prev)   # 付け直す前の原盤を 1 回目だけ残す

@@ -158,14 +158,23 @@ def merge_intervals(wins):
     return out
 
 
-def pick_indices(fps, target_fps, t0, t1):
-    """[t0, t1] の中で使うフレーム番号（target_fps 相当。元が target 以下なら全部）"""
-    i0, i1 = max(0, int(math.ceil(t0 * fps))), int(math.floor(t1 * fps))
+def pick_indices(fps, target_fps, t0, t1, clock=None):
+    """[t0, t1] の中で使うフレーム番号（target_fps 相当。元が target 以下なら全部）。
+    clock（frame_time.FrameClock）があればコマの時刻は PTS（analyze_pair の tracks と同じ時計。README 27）、
+    無ければ コマ番号 / fps"""
+    if clock is not None:
+        idx = clock.indices_between(t0, t1)
+        tof = clock.time
+    else:
+        idx = list(range(max(0, int(math.ceil(t0 * fps))), int(math.floor(t1 * fps)) + 1))
+
+        def tof(i):
+            return i / fps
     if fps <= target_fps + 0.5:
-        return list(range(i0, i1 + 1))
+        return idx
     out, last = [], None
-    for i in range(i0, i1 + 1):
-        k = int(math.floor(i * target_fps / fps))
+    for i in idx:
+        k = int(math.floor(tof(i) * target_fps + 1e-9))
         if k != last:
             out.append(i)
             last = k
@@ -407,8 +416,14 @@ def run(video_path, model_path, meas_path, tracks_path, target_fps, budget, only
         info["skipped"].append("video")
         return meas, tracks, info
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     cap.release()
+    # tracks（analyze_pair）と同じ時計: tracks の 4 コマおきの (frameIdx, t) を線形に埋める（README 27）。
+    # 動画をなめ直さないので予算を食わない。26 より前の tracks（コマ番号 / fps）ならそのまま コマ番号 / fps になる
+    from frame_time import FrameClock
+    clock = FrameClock.from_tracks(tracks.get("frames") or [], fps, n_frames)
     info["fps"] = round(min(fps, target_fps), 2)
+    info["clock"] = tracks.get("frameClock") or "index"
     from ultralytics import YOLO
     model = YOLO(model_path)
 
@@ -421,7 +436,7 @@ def run(video_path, model_path, meas_path, tracks_path, target_fps, budget, only
         """推論するフレーム（窓の和集合を target_fps で + 10fps のコマと同じ番号）と、錨の色だけ取るコマ"""
         need = {}
         for a, b in merge_intervals(group):
-            for i in pick_indices(fps, target_fps, a, b):
+            for i in pick_indices(fps, target_fps, a, b, clock):
                 need[i] = "detect"
         for w in group:
             # 10fps のコマと同じ番号のフレームは必ず推論する（pid の一致を確かめる）
@@ -451,7 +466,7 @@ def run(video_path, model_path, meas_path, tracks_path, target_fps, budget, only
             ok, frame = cap.read()
             if not ok:
                 break
-            t = idx / fps
+            t = clock.time(idx)
             if kind == "detect":
                 if time.time() - t_start > budget:
                     cap.release()

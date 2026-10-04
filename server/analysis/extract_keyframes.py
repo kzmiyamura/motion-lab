@@ -13,6 +13,9 @@ import os
 import sys
 import cv2
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frame_time import grab_at  # noqa: E402
+
 MAX_LONG_EDGE = 960
 
 
@@ -35,9 +38,8 @@ def main():
 
     written = 0
     for t in sorted(times):
-        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
-        ret, frame = cap.read()
-        if not ret:
+        frame, _ = grab_at(cap, t)  # PTS の時刻 t に出ているコマ（POS_MSEC のシークだけだと最大 0.3 秒遅れる。README 27）
+        if frame is None:
             print(f"warn: no frame at t={t}", file=sys.stderr)
             continue
         h, w = frame.shape[:2]

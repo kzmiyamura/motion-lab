@@ -275,16 +275,18 @@ def _crop_box(frames, pid, lo, hi, w, h):
 
 def _read_frames(cap, fps, times):
     import cv2
-    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, times[0] - 0.05) * 1000)
+    from frame_time import seek_read
+    # POS_MSEC のシークは可変フレームレートで最大 0.3 秒遅れて着くので、手前に着いたことを確かめてから読む（README 27）
+    frame, cur = seek_read(cap, times[0] - 0.05)
     out, k = [], 0
-    while k < len(times):
+    while frame is not None and k < len(times):
+        while k < len(times) and cur >= times[k] - 0.5 / fps:
+            out.append(frame)
+            k += 1
         ret, frame = cap.read()
         if not ret:
             break
         cur = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
-        while k < len(times) and cur >= times[k] - 0.5 / fps:
-            out.append(frame)
-            k += 1
     return out
 
 

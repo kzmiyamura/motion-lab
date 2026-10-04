@@ -43,6 +43,10 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import frame_time  # noqa: E402
+from frame_time import seek_read  # noqa: E402
+
 # COCO 17 keypoints
 LEFT_SHOULDER = 5
 RIGHT_SHOULDER = 6
@@ -1325,7 +1329,7 @@ def _spin_runs(seq):
     return [{"dir": "right" if ch == "R" else "left", "turns": n / 2} for ch, n in runs]
 
 
-def refine_turns_dense(video_path, model, draw_frames, events, leader_pid):
+def refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock=None):
     """ターン候補の区間だけ全フレームで YOLO をかけ直し、spin（回る向きと回転数）を置き換える。
 
     10fps 間引きでは速いターンの真横を取りこぼし、向きが消えたり回転数が半分になったりする
@@ -1333,6 +1337,8 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid):
     正解の分かっている5区間すべてで向きが合い、回転数も ±半回転に収まった。
     回転が続く限り区間を延ばし（最大 DENSE_MAX_POST_SEC）、同じ人の区間内に入った後続の
     ターン候補は同じ回転の一部として吸収する（absorbed に時刻を残す）。
+    clock（frame_time.FrameClock）: 10fps の tracks と同じ時計。シークは clock.to_pts、読んだコマの PTS は
+    clock.from_pts で解析の時刻に直す（無ければ動画から作る。README 27）。
     """
     if leader_pid is None:
         return events
@@ -1352,6 +1358,8 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return events
+    if clock is None:
+        clock = frame_clock(video_path, cap.get(cv2.CAP_PROP_FPS) or 30.0)
     covered = {0: [], 1: []}  # pid → [(from, to, event)]
     out = []
     for e in events:
@@ -1365,13 +1373,20 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid):
             continue
 
         t = e["t"]
-        cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t - DENSE_PRE_SEC) * 1000)
+        # POS_MSEC のシークは可変フレームレートで最大 0.3 秒遅れて着くので、手前に着いたことを確かめてから読む（README 27）
+        t_begin = t - DENSE_PRE_SEC
+        frame, p = seek_read(cap, clock.to_pts(t_begin))
         series, prev_c, last_flip_t, t_cur = [], None, None, t
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            t_cur = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        while frame is not None:
+            if p is None:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                p = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+            t_cur = clock.from_pts(p)
+            p = None  # 次の周回で次のコマを読む
+            if t_cur < t_begin - 1e-6:
+                continue
             if t_cur > t + DENSE_MAX_POST_SEC:
                 break
             if t_cur > t + DENSE_MIN_POST_SEC and (last_flip_t is None or t_cur - last_flip_t > DENSE_QUIET_SEC):
@@ -1919,45 +1934,29 @@ def extract_contested(frames, effective_fps):
 # 8c312c6d で +0.2 → −0.7、bb0efcb9 で +0.34 → −0.8、screenrec で +0.35 → +0.1（img1884 の .mov だけ等間隔）。
 # 正解表（再生した時刻）・音声の拍・キーフレームの切り出し・refine_turns_dense（どれも PTS）と食い違い、1230b3d5 の
 # 「CV の入れ替わりが正解より約 1 秒遅れる」の正体がこれだった。README 26
-FRAME_TIME_PTS = True
+# 時刻の取り方は frame_time.py にまとめた（analyze_rotation・refine_events・refine_turns_dense と共通。README 27）。
+# 下の 2 つはこのモジュールの値（評価のスクリプトが ap.FRAME_TIME_* を書き換える）を frame_time に渡す
+FRAME_TIME_PTS = frame_time.FRAME_TIME_PTS
 # 画面録画は 60fps の時間軸にコマが 1〜3 枠おきに不規則に並ぶので、4 コマおきに間引いたコマの PTS の間隔は 0.067〜0.2 秒と
 # ばらつく。検出の秒の閾値（反転の連なりの間隔・冷却など）は等間隔の時刻で合わせてあるので、PTS そのものではなく
 # 「コマ番号 / fps」に、前後 FRAME_TIME_SMOOTH_SEC 秒の（PTS − コマ番号 / fps）の中央値を足した時刻を使う
 # （ゆっくり溜まるずれだけ直し、コマごとの揺れは入れない）。0 = PTS そのもの
-FRAME_TIME_SMOOTH_SEC = 1.0
+FRAME_TIME_SMOOTH_SEC = frame_time.FRAME_TIME_SMOOTH_SEC
 
 
 def pts_offsets(pts, fps, smooth_sec=None):
-    """コマごとの PTS（秒）の並び → コマごとの時刻（秒）。smooth_sec > 0 なら「コマ番号 / fps + 前後 smooth_sec 秒の
-    (PTS − コマ番号 / fps) の中央値」、0 なら PTS そのもの。PTS が使えない（空・単調でない）なら None"""
-    smooth_sec = FRAME_TIME_SMOOTH_SEC if smooth_sec is None else smooth_sec
-    if not pts or any(not math.isfinite(p) for p in pts) or any(b < a for a, b in zip(pts, pts[1:])):
-        return None
-    if smooth_sec <= 0:
-        return list(pts)
-    off = [p - i / fps for i, p in enumerate(pts)]
-    half = max(1, int(round(smooth_sec * fps)))
-    out = []
-    for i in range(len(pts)):
-        w = sorted(off[max(0, i - half):i + half + 1])
-        out.append(i / fps + w[len(w) // 2])
-    return out
+    """コマごとの PTS（秒）の並び → コマごとの時刻（秒）。frame_time.pts_offsets（smooth_sec の既定はこのモジュールの値）"""
+    return frame_time.pts_offsets(pts, fps, FRAME_TIME_SMOOTH_SEC if smooth_sec is None else smooth_sec)
+
+
+def frame_clock(video_path, fps):
+    """動画を 1 回なめてコマ番号 ↔ 時刻の時計（frame_time.FrameClock）を作る。無効・PTS が取れなければ コマ番号 / fps"""
+    return frame_time.FrameClock.from_video(video_path, fps, enabled=FRAME_TIME_PTS, smooth_sec=FRAME_TIME_SMOOTH_SEC)
 
 
 def frame_time_map(video_path, fps):
-    """動画を 1 回なめてコマごとの時刻（pts_offsets）を返す。FRAME_TIME_PTS が無効・PTS が取れなければ None"""
-    if not FRAME_TIME_PTS:
-        return None
-    cap = cv2.VideoCapture(video_path)
-    pts = []
-    while cap.grab():
-        p = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
-        if not math.isfinite(p) or (pts and p <= 0):
-            cap.release()
-            return None
-        pts.append(p)
-    cap.release()
-    return pts_offsets(pts, fps)
+    """コマごとの時刻の並び（frame_clock の times）。FRAME_TIME_PTS が無効・PTS が取れなければ None"""
+    return frame_clock(video_path, fps).times
 
 
 def main():
@@ -1984,7 +1983,7 @@ def main():
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_interval = max(1, round(fps / TARGET_FPS))
     effective_fps = fps / frame_interval
-    tmap = frame_time_map(video_path, fps)  # コマごとの時刻（PTS。可変フレームレート対策）
+    clock = frame_clock(video_path, fps)  # コマごとの時刻（PTS。可変フレームレート対策。README 26・27）
 
     frame_idx = 0
     sampled = 0
@@ -2016,7 +2015,7 @@ def main():
             frame_idx += 1
             continue
 
-        t_sec = tmap[frame_idx] if tmap and frame_idx < len(tmap) else frame_idx / fps
+        t_sec = clock.time(frame_idx)
 
         # ROIマスク: 前フレームのペア位置の外側を塗りつぶして背景人物を視野から排除
         mask_roi = roi  # デバッグ動画の2パス目で同じマスクを再現するために控える
@@ -2156,7 +2155,7 @@ def main():
 
     events = detect_events(draw_frames, leader_pid) if draw_frames else []
     if events:
-        events = refine_turns_dense(video_path, model, draw_frames, events, leader_pid)
+        events = refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock=clock)
     hold_timeline = build_hold_timeline(draw_frames, leader_pid) if draw_frames else []
 
     # デバッグ動画（2パス目）: 全編の計測を踏まえたロールで色を塗り、イベントラベルを焼き込む
@@ -2240,11 +2239,13 @@ def main():
     # 出力名は measurements パスから派生（measurements.json → measurements.tracks.json）→
     # 複数動画を同一ディレクトリで解析しても衝突しない
     tracks_path = os.path.splitext(os.path.abspath(output_path))[0] + ".tracks.json"
+    frame_clock_name = "pts" if clock.is_pts else "index"
     with open(tracks_path, "w") as f:
         json.dump({
             "version": 1,
             "video": os.path.basename(video_path),
             "fps": fps,
+            "frameClock": frame_clock_name,
             "sampledFps": round(effective_fps, 2),
             "leaderPid": leader_pid,
             # events/holdTimeline も原盤に同梱（コメントの「骨格+人物ID+イベント」を満たす）。
@@ -2268,7 +2269,11 @@ def main():
             "totalFrames": frame_idx,
             "sampledFrames": sampled,
             "persons": person_frames,
+            "frameClock": frame_clock_name,
             "summary": {
+                # 時刻の時計: "pts" = 動画のタイムスタンプ（README 26）/ "index" = コマ番号 / fps（PTS が取れない動画・
+                # 2026-10-05 より前のジョブには無い）。normalize_routine の偶然の門（SWAP_MIN_Z2）は "pts" のときだけ（README 27）
+                "frameClock": frame_clock_name,
                 "slot0": sum0,
                 "slot1": sum1,
                 "verdictByRule": verdict,

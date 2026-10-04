@@ -21,6 +21,9 @@ import sys
 import cv2
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frame_time import seek_read  # noqa: E402
+
 PRE_SEC = 0.4
 POST_SEC = 1.6
 STEP_SEC = 0.1
@@ -55,19 +58,20 @@ def read_window(cap, fps, t_from, t_to):
     while t <= t_to + 1e-6:
         targets.append(round(t, 2))
         t += STEP_SEC
-    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t_from - 0.05) * 1000)
+    # POS_MSEC のシークは可変フレームレートで最大 0.3 秒遅れて着くので、手前に着いたことを確かめてから読む（README 27）
+    frame, cur = seek_read(cap, t_from - 0.05)
     frames, times = [], []
     k = 0
-    while k < len(targets):
-        ret, frame = cap.read()
-        if not ret:
-            break
-        cur = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+    while frame is not None and k < len(targets):
         # このフレームが目標時刻を越えたら採用（半フレーム手前から許容）
         while k < len(targets) and cur >= targets[k] - 0.5 / fps:
             frames.append(frame)
             times.append(targets[k])
             k += 1
+        ret, frame = cap.read()
+        if not ret:
+            break
+        cur = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
     return frames, times
 
 

@@ -45,7 +45,8 @@ def load_events(gt):
 
 def extract_wav(ffmpeg, video, out):
     if not os.path.exists(out):
-        subprocess.run([ffmpeg, "-v", "error", "-y", "-i", video, "-ac", "1", "-ar", "22050", out], check=True)
+        subprocess.run([ffmpeg, "-v", "error", "-y", "-i", video, "-ac", "1", "-ar", "22050",
+                        "-af", "aresample=async=1:first_pts=0", out]  # jobWorker と同じ（WAV の 0 = 動画の 0 秒）, check=True)
     return out
 
 
@@ -119,12 +120,12 @@ def routine_metrics(job, grid, downbeat, gt):
 
 def frames_at(video, times, height=220):
     import cv2
+    from frame_time import grab_at
     cap = cv2.VideoCapture(video)
     out = []
     for t in times:
-        cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t) * 1000)
-        ok, fr = cap.read()
-        if not ok:
+        fr, _ = grab_at(cap, t)  # PTS の t に出ているコマ（README 27）
+        if fr is None:
             fr = np.zeros((height, int(height * 0.56), 3), np.uint8)
         h, w = fr.shape[:2]
         fr = cv2.resize(fr, (int(w * height / h), height))

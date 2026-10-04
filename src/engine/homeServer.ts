@@ -369,6 +369,38 @@ export async function listVideoJobs(baseUrl: string, videoId: string): Promise<A
   return data.jobs ?? [];
 }
 
+/** ライブラリのカード1枚分のジョブ状況。latest は最新ジョブ、lastDone は最新の成功ジョブ（無ければ undefined） */
+export interface VideoJobSummary {
+  latest: AnalysisJob;
+  lastDone: AnalysisJob | undefined;
+}
+
+/** listVideoJobs の結果（新しい順）から、最新ジョブと最新の成功ジョブを取り出す。ジョブが無ければ undefined */
+export function summarizeVideoJobs(jobs: AnalysisJob[]): VideoJobSummary | undefined {
+  if (jobs.length === 0) return undefined;
+  return { latest: jobs[0], lastDone: jobs.find(j => j.status === 'done') };
+}
+
+/** Claude のレート制限・使用量上限（429 / session limit 等）による失敗か */
+export function isRateLimitError(message: string | null): boolean {
+  return message != null && /レート制限|上限|rate.?limit|usage limit|session limit|\b429\b/i.test(message);
+}
+
+/**
+ * 最新ジョブが成功していないが前回の成功結果を表示しているときの注記。
+ * 最新ジョブ自体が成功なら null
+ */
+export function staleReportNote(latest: AnalysisJob): string | null {
+  if (latest.status === 'queued') return '再解析待ち（前回の結果を表示中）';
+  if (latest.status === 'running') return '再解析中…（前回の結果を表示中）';
+  if (latest.status === 'error') {
+    return isRateLimitError(latest.errorMessage)
+      ? '再解析は上限で失敗（前回の結果を表示中）'
+      : '再解析は失敗（前回の結果を表示中）';
+  }
+  return null;
+}
+
 export async function getJobDetail(baseUrl: string, jobId: string): Promise<AnalysisJobDetail> {
   const res = await fetch(`${baseUrl}/api/jobs/${jobId}`);
   if (!res.ok) throw new HomeServerApiError(`ジョブの取得に失敗しました: HTTP ${res.status}`);

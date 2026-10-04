@@ -4,7 +4,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   authHeaders, getFolderSpec, putFolderSpec, listVideoJobs, reanalyzeVideo,
-  HomeServerApiError,
+  HomeServerApiError, summarizeVideoJobs, staleReportNote, isRateLimitError,
+  type AnalysisJob,
 } from '../engine/homeServer';
 
 const BASE = 'https://example.test';
@@ -64,6 +65,59 @@ describe('listVideoJobs', () => {
     const jobs = await listVideoJobs(BASE, 'v1');
     expect(jobs).toHaveLength(1);
     expect(jobs[0].status).toBe('done');
+  });
+});
+
+function job(id: string, status: AnalysisJob['status'], errorMessage: string | null = null): AnalysisJob {
+  return { id, videoId: 'v1', status, preset: 'salsa-pair', retryCount: 0, errorMessage, createdAt: '', finishedAt: null };
+}
+
+describe('summarizeVideoJobs', () => {
+  it('ジョブが無ければ undefined', () => {
+    expect(summarizeVideoJobs([])).toBeUndefined();
+  });
+
+  it('最新が成功ならそれを lastDone にする', () => {
+    const s = summarizeVideoJobs([job('j3', 'done'), job('j2', 'done')]);
+    expect(s?.latest.id).toBe('j3');
+    expect(s?.lastDone?.id).toBe('j3');
+  });
+
+  it('最新が失敗でも、前回の成功ジョブを lastDone にする（新しい順で最初の done）', () => {
+    const s = summarizeVideoJobs([job('03dfd15b', 'error', '429'), job('581ef6a2', 'done'), job('3e58a27a', 'done')]);
+    expect(s?.latest.id).toBe('03dfd15b');
+    expect(s?.lastDone?.id).toBe('581ef6a2');
+  });
+
+  it('成功ジョブが1つも無ければ lastDone は undefined', () => {
+    const s = summarizeVideoJobs([job('j2', 'error'), job('j1', 'error')]);
+    expect(s?.lastDone).toBeUndefined();
+  });
+});
+
+describe('staleReportNote', () => {
+  it('最新が成功なら注記なし', () => {
+    expect(staleReportNote(job('j', 'done'))).toBeNull();
+  });
+
+  it('レート制限での失敗は理由付きの注記', () => {
+    expect(staleReportNote(job('j', 'error', '[CLAUDE] レート制限リトライ上限（3回）に達しました。')))
+      .toBe('再解析は上限で失敗（前回の結果を表示中）');
+    expect(staleReportNote(job('j', 'error', 'API Error: 429 session limit reached')))
+      .toBe('再解析は上限で失敗（前回の結果を表示中）');
+  });
+
+  it('その他の失敗・実行中・待ち', () => {
+    expect(staleReportNote(job('j', 'error', '[TIMEOUT] Claude 実行が2回タイムアウトしました'))).toBe('再解析は失敗（前回の結果を表示中）');
+    expect(staleReportNote(job('j', 'running'))).toBe('再解析中…（前回の結果を表示中）');
+    expect(staleReportNote(job('j', 'queued'))).toBe('再解析待ち（前回の結果を表示中）');
+  });
+});
+
+describe('isRateLimitError', () => {
+  it('null や無関係なメッセージは false', () => {
+    expect(isRateLimitError(null)).toBe(false);
+    expect(isRateLimitError('[CV] analyze_pair.py exit 1')).toBe(false);
   });
 });
 

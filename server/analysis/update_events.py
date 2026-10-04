@@ -29,11 +29,39 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import analyze_pair as ap  # noqa: E402
 
 
+RETRACK_LEADER_SEC = 8.0   # 男の pid を元の tracks に合わせるとき、一致を数える冒頭の秒数（anchor_refs と同じ長さ）
+
+
+def match_leader(frames, saved, old_leader):
+    """付け直した pid（frames の kept[].pid）のうち、元の tracks（saved: コマごと・人ごとの元の pid）の男はどちらか。
+    冒頭 RETRACK_LEADER_SEC 秒（2 人がそろった最初のコマから）で元の pid と一致が多いか入れ替わりが多いかを見る。
+    戻り値は (全編で同じ pid, 全編で入れ替わった, 付け直し後の男の pid)"""
+    same = swapped = early_same = early_swapped = 0
+    t_first = next((f["t"] for f, s in zip(frames, saved) if sum(x is not None for x in s) == 2), None)
+    for f, s in zip(frames, saved):
+        early = t_first is not None and f["t"] <= t_first + RETRACK_LEADER_SEC
+        for p, a in zip(f["kept"], s):
+            b = p.get("pid")
+            if a is None or b is None:
+                continue
+            same += a == b
+            swapped += a != b
+            if early:
+                early_same += a == b
+                early_swapped += a != b
+    leader = old_leader
+    if old_leader in (0, 1):
+        leader = old_leader if early_same >= early_swapped else 1 - old_leader
+    return same, swapped, leader
+
+
 def retrack(tracks, video_path):
     """tracks.json の人物 ID（pid）を、今の assign_appearance_ids で付け直す（YOLO は回さない）。
     tracks.json は外見ヒストグラム（hist）を持たないので、各コマ（frameIdx）を動画から読み直して torso_hist を付け直す。
-    男の pid は元の tracks の男（コマごとの一致が多い方）に合わせる（Claude のアンカーで決めた男女を保つ）。
-    戻り値は (同じ pid のまま, 入れ替わった) のコマ×人の数"""
+    男の pid は元の tracks の男に合わせる（Claude のアンカーで決めた男女を保つ）。合わせるのは冒頭 RETRACK_LEADER_SEC 秒の
+    一致が多い方で、全編の多数決にはしない（古い追跡が途中で入れ替わったまま戻らなかった動画では、全編の多数決は
+    入れ替わった後の人を男にしてしまう。1230b3d5 は 16 秒で入れ替わり、全編の一致は 10%、男の pid が全編逆になっていた）。
+    戻り値は (同じ pid のまま, 入れ替わった) のコマ×人の数（全編）"""
     import cv2
     want = {f["frameIdx"]: f for f in tracks["frames"] if "frameIdx" in f}
     if not want:
@@ -46,21 +74,23 @@ def retrack(tracks, video_path):
             break
         f = want.get(idx)
         if f is not None:
+            asp = frame.shape[1] / frame.shape[0]
             for p in f["kept"]:
                 p["hist"] = ap.torso_hist(frame, p["bbox"])
+                try:
+                    # resolve_identity_joint が使う部位ごとの色。本計測と同じ入力にそろえる
+                    p["app"] = ap.appearance_regions(frame, p, asp) if ap.IDENTITY_JOINT else None
+                except (KeyError, IndexError, TypeError, ValueError):
+                    p["app"] = None
         idx += 1
     cap.release()
-    saved = [p.get("pid") for f in tracks["frames"] for p in f["kept"]]
+    saved = [[p.get("pid") for p in f["kept"]] for f in tracks["frames"]]
     ap.assign_appearance_ids(tracks["frames"])
-    new = [p.get("pid") for f in tracks["frames"] for p in f["kept"]]
-    same = sum(1 for a, b in zip(saved, new) if a is not None and a == b)
-    swapped = sum(1 for a, b in zip(saved, new) if a is not None and b is not None and a != b)
-    old = tracks["leaderPid"]
-    if old in (0, 1):
-        tracks["leaderPid"] = old if same >= swapped else 1 - old
+    same, swapped, tracks["leaderPid"] = match_leader(tracks["frames"], saved, tracks["leaderPid"])
     for f in tracks["frames"]:
         for p in f["kept"]:
             p.pop("hist", None)
+            p.pop("app", None)
     return same, swapped
 
 

@@ -11,8 +11,9 @@ docs/folder-analysis-design.md ロードマップ③（ビート格子）の第�
 - オンセット検出: STFT のスペクトラルフラックス
 - テンポ推定: フラックス包絡の自己相関（サルサの実用域 140〜230 BPM を探索）
 - 拍位相: コムフィルタ（拍間隔で並べた櫛とフラックスの内積が最大になるオフセット）
-- 「どの拍がカウント1か」は音声からは決まらない。beatGrid は等間隔の格子のみを出し、
-  カウントの位相合わせは P2 の Claude がサルサ知識（On1/On2・技の慣例）で行う
+- 「どの拍がカウント1か」は beat_phase.py が楽器の打点（コンガのスラップ 2・ベース 2&/4・オープントーン 4/4&）と
+  踊りの手がかり（CBL の通過・女性のターン）で決め、beatGrid.downbeat に書く（自信つき）。
+  自信が低いときは従来どおり P2 の Claude がサルサ知識（On1/On2・技の慣例）で位相を合わせる
 
 Usage: python analyze_beats.py <audio_wav_path> <measurements_json_path>
 """
@@ -21,6 +22,9 @@ import json
 import wave
 import numpy as np
 
+import beat_phase as downbeat_mod  # 下の beat_phase() 関数と名前がぶつかるので別名
+
+DOWNBEAT_MIN_CONF = 0.6   # これ以上ならイベントに合わせたカウント（count）を付ける。normalize_routine も同じ値で使う
 FRAME = 1024
 HOP = 512
 BPM_MIN = 140.0
@@ -185,6 +189,22 @@ def main():
             # 拍からのずれ（拍の上に乗っているか）
             e["beatOffsetSec"] = round(e["t"] - (first + beat_idx * interval), 3)
         print(f"beats: bpm={bpm:.1f} conf={conf:.2f} first={first:.2f}s interval={interval:.3f}s", file=sys.stderr)
+        # カウント 1 の位置（音の楽器の打点 + 踊りの手がかり。beat_phase.py）。失敗しても格子はそのまま出す
+        try:
+            db = downbeat_mod.estimate_downbeat(x, sr, {"firstBeatSec": first, "beatIntervalSec": interval},
+                                              meas["summary"])
+            g = meas["summary"]["beatGrid"]
+            g["downbeat"] = db
+            if db["confidence"] >= DOWNBEAT_MIN_CONF:
+                g["note"] = ("等間隔格子。downbeat.sec がカウント 1（On2 の 2 はその 1 拍後）。"
+                             "各イベントの count が合わせたカウント、count8 は位相未合わせの仮カウント")
+                for e in meas["summary"].get("events", []):
+                    e["count"] = round(downbeat_mod.count_of(e["t"], db["sec"], interval), 2)
+            print(f"beats: downbeat={db['sec']:.3f}s src={db['source']} conf={db['confidence']:.2f} "
+                  f"(bar={db['barConfidence']:.2f} phrase={db['phraseConfidence']:.2f} offbeatGrid={db['offbeatGrid']})",
+                  file=sys.stderr)
+        except Exception as ex:  # noqa: BLE001
+            print(f"beats: downbeat skipped: {ex}", file=sys.stderr)
 
     with open(meas_path, "w") as f:
         json.dump(meas, f)

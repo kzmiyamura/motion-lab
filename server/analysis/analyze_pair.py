@@ -334,6 +334,85 @@ def anchor_refs(draw_frames):
     return [np.mean(a, axis=0) for a in acc]
 
 
+SEGMENT_REID = True
+SEGMENT_IOU = 0.4         # 2人の bbox がこれ以上重なったコマは区間の切れ目（ここで ID が入れ替わり得る）
+SEGMENT_MOVE = 0.15       # 隣のコマとの腰の X の差がこれを超えたら切れ目（取り違え・別人）
+SEGMENT_MIN_FRAMES = 8    # これより短い区間は判定しない
+SEGMENT_MARGIN = 0.02     # 錨との距離の差（入れ替えた方 − そのまま）の区間平均がこの値だけ負なら入れ替える
+SEGMENT_DEBUG = False
+
+
+def fix_identity_segments(draw_frames, anchor):
+    """密着の交差で入れ替わったまま戻らない ID を、交差と交差の間の区間ごとに錨で見直す。
+
+    track_appearance はコマごとに EMA の参照（重み 0.7）で割り当てるので、2人の服が似ている動画では交差で一度
+    入れ替わると参照も入れ替わり、以後戻らない（8c312c6d の 31.4 秒の CBL から最後まで入れ替わり、CBL・女性の
+    ダブルターンが 1 件も出なかった）。1コマの錨の差は小さく揺れるが、2人が離れている区間（位置で同一人物と
+    言える）でまとめて足すと向きがはっきりする。区間 = 2人がそろい、bbox が重ならず、腰の X が飛ばないコマの連なり。
+    区間の外のコマ（重なり・1人だけ）は、前後の区間がどちらも入れ替えなら入れ替える。片方だけなら近い方に従う"""
+    segs, cur = [], []
+
+    def two(df):
+        ks = [p for p in df["kept"] if p.get("pid") in (0, 1) and p.get("hist") is not None]
+        if len(ks) != 2 or ks[0]["pid"] == ks[1]["pid"] or bbox_iou(ks[0]["bbox"], ks[1]["bbox"]) >= SEGMENT_IOU:
+            return None
+        return {p["pid"]: p for p in ks}
+
+    prev = None
+    for i, df in enumerate(draw_frames):
+        by = two(df)
+        if by is None:
+            if cur:
+                segs.append(cur)
+            cur, prev = [], None
+            continue
+        if prev is not None and any(abs(by[k]["hipX"] - prev[k]["hipX"]) > SEGMENT_MOVE for k in (0, 1)):
+            segs.append(cur)
+            cur = []
+        cur.append(i)
+        prev = by
+    if cur:
+        segs.append(cur)
+
+    decisions = []  # (最初のコマ, 最後のコマ, 入れ替えるか)
+    for seg in segs:
+        if len(seg) < SEGMENT_MIN_FRAMES:
+            decisions.append((seg[0], seg[-1], False))  # 短い区間は見直さないが、前後のコマの拠り所にはする
+            continue
+        ms = []
+        for i in seg:
+            by = two(draw_frames[i])
+            direct = hist_dist(by[0]["hist"], anchor[0]) + hist_dist(by[1]["hist"], anchor[1])
+            swapped = hist_dist(by[0]["hist"], anchor[1]) + hist_dist(by[1]["hist"], anchor[0])
+            ms.append(swapped - direct)
+        mean = sum(ms) / len(ms)
+        if SEGMENT_DEBUG:
+            sd = (sum((m - mean) ** 2 for m in ms) / len(ms)) ** 0.5
+            print(f"  seg {draw_frames[seg[0]]['t']:.1f}-{draw_frames[seg[-1]]['t']:.1f} n={len(ms)} mean={mean:+.3f} "
+                  f"sd={sd:.3f} neg={sum(m < 0 for m in ms) / len(ms):.2f}", file=sys.stderr)
+        decisions.append((seg[0], seg[-1], mean < -SEGMENT_MARGIN))
+    if not any(s for _, _, s in decisions):
+        return
+    print("identity segments swapped: " + ", ".join(
+        f"{draw_frames[a]['t']:.1f}-{draw_frames[b]['t']:.1f}" for a, b, s in decisions if s), file=sys.stderr)
+    for i, df in enumerate(draw_frames):
+        inside = next((d for d in decisions if d[0] <= i <= d[1]), None)
+        if inside is not None:
+            flip = inside[2]
+        else:
+            before = next((d for d in reversed(decisions) if d[1] < i), None)
+            after = next((d for d in decisions if d[0] > i), None)
+            if before and after:
+                flip = before[2] if before[2] == after[2] else \
+                    (before[2] if i - before[1] <= after[0] - i else after[2])
+            else:
+                flip = (before or after or (0, 0, False))[2]
+        if flip:
+            for p in df["kept"]:
+                if p.get("pid") in (0, 1):
+                    p["pid"] = 1 - p["pid"]
+
+
 def assign_appearance_ids(draw_frames):
     """外見（色ヒストグラム）で全検出を2人分のクラスタに分け、Leader クラスタを決める。
 
@@ -347,6 +426,8 @@ def assign_appearance_ids(draw_frames):
     anchor = anchor_refs(draw_frames)
     if anchor is not None:
         track_appearance(draw_frames, anchor, ANCHOR_WEIGHT)
+        if SEGMENT_REID:
+            fix_identity_segments(draw_frames, anchor)
 
     # Leader クラスタの選択: フレーム毎のペア比較（pid0 - pid1）の中央値による多数決。
     # SHR差（重み2）+ 身長差 + 肩幅差。かつて「SHR平均が高い方」で選んでいたが、
@@ -407,6 +488,14 @@ CBL_PIVOT_SUPPRESS_SEC = 0.8  # CBL・女性のターンの±この秒数内の�
 # 10/4、正解表 5 本（tracks モード）: 男のターン P/R/F1 .333/.222/.267 → .462/.667/.545（tp 2→6、fp 4→7）、
 # CBL・女性のターンは不変。向きは対応した男のターン 7 件中 6 件（外れは向きを決めきれない bb0efcb9 16.6）
 LEADER_TURN_COOLDOWN_SEC = 1.5   # 男のターン同士の最小間隔（1.0〜2.5 秒で結果は同じ。冷却なしは fp +1）
+# 男の振り返りの誤検出（img1884 の背中側から撮った男が正面を見せて戻る等）: 肩の左右（shDx の符号）の反転は、
+# YOLO が背中向きの人の左右の肩を付け違えたときにも起きる。本当に回ったなら反転のたびに正面 ↔ 背中が入れ替わり、
+# 顔（鼻）の見え方も変わる。そこで反転ペアの2つ目の反転の前後で、それぞれいちばん正対したコマ（|shDx| 最大）の
+# 鼻の信頼度が LEADER_FACE_SEEN をまたいで変わらないもの（正面のまま・背中のまま）は回転ではないとして捨てる。
+# 1つ目の反転にも同じ条件をかけると screenrec 13.3 の本物（前の回転の続きで1つ目の前後が正面のまま）を落とす
+LEADER_FACE_FLIP_CHECK = True
+LEADER_FACE_SEEN = 0.4
+LEADER_FACE_FLIP_BOTH = False
 EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
 # 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
@@ -552,13 +641,33 @@ def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times):
     def near(t, ts):
         return any(abs(t - s) <= CBL_PIVOT_SUPPRESS_SEC for s in ts)
 
+    def face_seen(t_from, t_to, sign):
+        """区間内で sign 側の向きにいちばん正対したコマで顔（鼻）が見えたか。コマが無ければ None"""
+        ph = [(abs(d), p["kps"][0][2]) for t, d, p in series
+              if t_from <= t < t_to and d * sign > 0 and p.get("kps")]
+        return None if not ph else max(ph)[1] >= LEADER_FACE_SEEN
+
+    def second_flip_turns(i):
+        """2つ目の反転で顔の見え方（正面 ↔ 背中）が変わったか。変わらなければ肩の左右の付け違いとみなす"""
+        (t1, s, _), (t2, _, _) = flips[i], flips[i + 1]
+        t_next = flips[i + 2][0] if i + 2 < len(flips) else float("inf")
+        mid = face_seen(t1, t2, -s)
+        post = face_seen(t2, min(t2 + TURN_PRE_SEC, t_next), s)
+        if LEADER_FACE_FLIP_BOTH:
+            t_prev = flips[i - 1][0] if i >= 1 else float("-inf")
+            pre = face_seen(max(t1 - TURN_PRE_SEC, t_prev), t1, s)
+            if pre is not None and mid is not None and pre == mid:
+                return False
+        return mid is None or post is None or mid != post
+
     pairs = []  # (反転1の番号, 中点, 向き)
     i = 0
     while i + 1 < len(flips):
         (t1, s, r1), (t2, _, r2) = flips[i], flips[i + 1]
         tm = (t1 + t2) / 2
         if (t2 - t1 <= TURN_FLIP_WINDOW and sweep_ok(t1 - TURN_PRE_SEC, t1, s) and sweep_ok(t1, t2, -s)
-                and r1 == r2 and r1 != "?" and not near(tm, cbl_times) and not near(tm, follower_turn_times)):
+                and r1 == r2 and r1 != "?" and not near(tm, cbl_times) and not near(tm, follower_turn_times)
+                and (not LEADER_FACE_FLIP_CHECK or second_flip_turns(i))):
             pairs.append((i, tm, r1))
             i += 2
         else:

@@ -103,7 +103,9 @@ REFINED_MIN_SHARE = 0.5    # CV の入れ替わりのうちこの割合以上が
 BPM_MIN = 150.0            # サルサとして数えるテンポの範囲（踊られるのは大半が 160〜220。video-analysis-cues.md §2.6）
 BPM_MAX = 250.0
 HALF_TEMPO = (75.0, 125.0)  # この範囲のテンポは 2 拍を 1 拍と数えた値（半分のテンポ）なので 2 倍にする
-DEFAULT_TIMING = "on2"     # Claude が on1/on2 を書かなかった（unclear）ときの数え方。ユーザーの動画は基本 On2
+DOWNBEAT_MIN_CONF = 0.6    # beatGrid.downbeat（beat_phase.py）の自信がこれ以上なら、その位置を 8 カウントの頭にする
+                           # （analyze_beats.DOWNBEAT_MIN_CONF と同じ値。未満なら従来どおり技の頭に合う拍を選ぶ）
+DEFAULT_TIMING = "on2"    # Claude が on1/on2 を書かなかった（unclear）ときの数え方。ユーザーの動画は基本 On2
 SWAP_ALIGN_WEIGHT = 1.0    # 行を入れ替わりに合わせ直すとき、CBL 系の行と入れ替わりの有無が食い違う罰
 SWAP_SHIFT_WEIGHT = 0.5    # 同じく、行を元の時刻から 1 行ぶん動かす罰（1 行ずらして食い違いが 1 つ減るなら動かす）
 SWAP_MERGE_WEIGHT = 1.0    # 同じく、2 行を同じ 8 カウントにまとめる罰（Claude の行が 1 つ消える）
@@ -143,6 +145,14 @@ def grid_from_beats(summary):
         return None
     first = g.get("firstBeatSec")
     return 8 * beat, beat, float(first) if _num(first) else 0.0
+
+
+def downbeat_from_beats(summary):
+    """音声のビート格子に付いたカウント 1 の位置（beat_phase.py）。自信が DOWNBEAT_MIN_CONF 未満・無ければ None"""
+    db = ((summary or {}).get("beatGrid") or {}).get("downbeat")
+    if not isinstance(db, dict) or not _num(db.get("sec")) or not _num(db.get("confidence")):
+        return None
+    return db if db["confidence"] >= DOWNBEAT_MIN_CONF else None
 
 
 def salsa_unit8(u):
@@ -1189,9 +1199,14 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
         duration = None
     swap_fit = None
     sb = swap_beat if _num(swap_beat) else swap_beat_for(summary)
+    downbeat = downbeat_from_beats(summary) if beats else None
     if beats:
         period, beat, first = beats
-        phase = best_phase(starts, period, [first + beat * k for k in range(8)])
+        if downbeat:
+            # 音（楽器の打点）と踊り（CBL の通過・ターン）で決めたカウント 1 を 8 カウントの頭にする
+            phase = float(downbeat["sec"]) % period
+        else:
+            phase = best_phase(starts, period, [first + beat * k for k in range(8)])
         tempo_src = "audio"
     else:
         guess = salsa_unit8(unit8_from_routine(moves)) or DEFAULT_UNIT8
@@ -1332,6 +1347,10 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
         "unitSec": round(period, 3), "beatSec": round(beat, 4), "phaseSec": round(phase % period, 3),
         "source": tempo_src,
     }
+    if downbeat:
+        routine["grid"]["phaseSource"] = "downbeat"
+        routine["grid"]["downbeatSource"] = downbeat.get("source")
+        routine["grid"]["downbeatConfidence"] = downbeat["confidence"]
     if swap_fit:
         routine["grid"]["swapR"] = round(swap_fit["R"], 3)
         routine["grid"]["swaps"] = len(swaps)

@@ -216,6 +216,25 @@ class EvalTurnPrecTest(unittest.TestCase):
         self.assertEqual(tp2["n"], 0)
 
 
+class EvalSideRuleTest(unittest.TestCase):
+    def test_two_swaps_in_one_row_check_side_after_each_swap(self):
+        # 1 行（0〜4 秒）に正解の入れ替わりが 2 回。行の始まりは女性が左 → 1 回目は left から、2 回目は right から
+        from eval_routine_set import extra_checks
+        moves = [mv(0.0, "cbl", sides={"followerStart": "left"}), mv(4.0, "basic")]
+        gt = {"turns": [], "cbl": [{"t": 1.0, "from": "left"}, {"t": 3.0, "from": "right"}]}
+        out = extra_checks(moves, gt, 0.5, False)
+        self.assertEqual((out["side"]["hit"], out["side"]["n"]), (2, 2))
+        # 旧規則（どの入れ替わりも行の始まりの側と比べる）では 2 回目を外す
+        self.assertEqual((out["sideStart"]["hit"], out["sideStart"]["n"]), (1, 2))
+
+    def test_optional_earlier_swap_still_flips_side(self):
+        from eval_routine_set import extra_checks
+        moves = [mv(0.0, "cbl", sides={"followerStart": "left"})]
+        gt = {"turns": [], "cbl": [{"t": 1.0, "from": "left", "optional": True}, {"t": 3.0, "from": "right"}]}
+        out = extra_checks(moves, gt, 0.5, False)
+        self.assertEqual((out["side"]["hit"], out["side"]["n"]), (1, 1))
+
+
 class DenseKeepsCoarseTest(unittest.TestCase):
     """refine_turns_dense が全フレームで取り直す前の 10fps の spin を spinCoarse に残す"""
 

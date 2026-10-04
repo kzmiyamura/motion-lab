@@ -132,9 +132,17 @@ class SwapGridTest(unittest.TestCase):
     def test_too_few_or_scattered_swaps_give_none(self):
         self.assertIsNone(fit_grid_to_swaps([1.0, 3.6, 6.2], 2.4, 10.0))
         # でたらめな時刻の（周期の無い）入れ替わり
+        # 入れ替わりだけの z の門（既定 4.5）はでたらめな時刻も通しうる（README 26: 偶然でも z の 90% 点 5.8）。
+        # 門そのものが効くことは厳しい値で確かめる
+        import normalize_routine as nr
         rng = random.Random(7)
         scattered = sorted(round(rng.uniform(0, 150), 2) for _ in range(40))
-        self.assertIsNone(fit_grid_to_swaps(scattered, 2.4, 150.0))
+        old = nr.SWAP_MIN_Z
+        try:
+            nr.SWAP_MIN_Z = 7.5
+            self.assertIsNone(fit_grid_to_swaps(scattered, 2.4, 150.0))
+        finally:
+            nr.SWAP_MIN_Z = old
 
     def test_slow_tempo_drift(self):
         # 終わりまでに等速の格子から 1½ 個ぶん先へ進む（テンポがゆっくり上がる）
@@ -148,6 +156,41 @@ class SwapGridTest(unittest.TestCase):
             h = max(x for x in heads if x <= s - 2 * 2.6 / 8)
             beat = (s - h) / (2.6 / 8)
             self.assertAlmostEqual(beat, SWAP_BEAT, delta=1.0)
+
+    def test_turns_do_not_move_the_fit_by_default(self):
+        # 既定（SWAP_FIT_TURNS = False）では女性のターンを足しても引いても当てはめは変わらない（README 26）
+        sw = swaps_on_grid(2.6, 0.5, 50, jitter=self.JIT, skip={3, 9, 10, 22, 31, 40})
+        rng = random.Random(3)
+        turns = sorted(round(rng.uniform(0, 130), 2) for _ in range(30))
+        a = fit_grid_to_swaps(sw, 2.4, 130.0)
+        b = fit_grid_to_swaps(sw, 2.4, 130.0, turns=turns)
+        self.assertEqual((a["period"], a["drift"], a["head0"]), (b["period"], b["drift"], b["head0"]))
+
+    def test_dropping_one_swap_keeps_the_grid(self):
+        # 入れ替わりを 1 つ抜いても格子を捨てない・頭が 1 拍以上動かない
+        sw = swaps_on_grid(2.6, 0.5, 50, jitter=self.JIT, skip={3, 9, 10, 22, 31, 40})
+        base = swap_heads(fit_grid_to_swaps(sw, 2.4, 130.0), 130.0)
+        for k in range(0, len(sw), 5):
+            fit = fit_grid_to_swaps(sw[:k] + sw[k + 1:], 2.4, 130.0)
+            self.assertIsNotNone(fit, k)
+            heads = swap_heads(fit, 130.0)
+            for h in heads:
+                if 5 <= h <= 125:
+                    self.assertLess(min(abs(h - x) for x in base) / (2.6 / 8), 1.0, (k, h))
+
+    def test_outlier_rejection_drops_off_phase_swaps(self):
+        import normalize_routine as nr
+        sw = swaps_on_grid(2.6, 0.5, 50, jitter=self.JIT)
+        bad = [round(s + 4 * 2.6 / 8, 2) for s in sw[5:45:8]]   # 4 拍ずれた入れ替わり（1 行の 2 回目の通過など）
+        old = nr.SWAP_OUTLIER_BEATS
+        try:
+            nr.SWAP_OUTLIER_BEATS = 2.5
+            fit = fit_grid_to_swaps(sorted(sw + bad), 2.4, 130.0)
+        finally:
+            nr.SWAP_OUTLIER_BEATS = old
+        self.assertEqual(fit["inliers"], len(sw))
+        self.assertAlmostEqual(fit["period"], 2.6, delta=0.01)
+        self.assertNotIn("inliers", fit_grid_to_swaps(sorted(sw + bad), 2.4, 130.0))
 
     def test_no_drift_when_not_needed(self):
         sw = swaps_on_grid(2.6, 0.5, 50, jitter=self.JIT)

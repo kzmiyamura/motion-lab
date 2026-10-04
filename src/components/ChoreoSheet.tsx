@@ -185,6 +185,7 @@ export function ChoreoSheet({
                 {playable && <span className={styles.playMark} aria-hidden="true">{playing ? '■' : '▶'}</span>}
               </div>
               <p className={styles.name}>
+                {row.startPos && <span className={styles.pos} data-testid="start-pos">{row.startPos} →</span>}{row.startPos && " "}
                 {row.name}
                 {row.uncertain && (
                   <span className={styles.q} title="推定を含む（自信が低い）" aria-label="推定">?</span>

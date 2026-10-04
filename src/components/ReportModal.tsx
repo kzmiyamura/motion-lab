@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getJobDetail, resolveHomeServerUrl, type AnalysisJobDetail } from '../engine/homeServer';
 import { routineFromResult } from '../engine/routineClip';
 import { sendRoutineTo3D } from '../engine/routineBus';
@@ -12,6 +12,10 @@ import { MoveClipPlayer } from './MoveClipPlayer';
 import { PracticeToolbar } from './PracticeBar';
 import { usePracticeSession } from '../hooks/usePracticeSession';
 import styles from './ReportModal.module.css';
+// めくり表示（上 = パラパラ漫画・下 = 1 技 1 ページを左右にめくる）。中身は FlipView.tsx / engine/flipView.ts
+import { createPortal } from 'react-dom';
+import { FlipView, ReportViewToggle } from './FlipView';
+import { useCardTap, useReportView } from '../hooks/useReportView';
 
 type Props = {
   jobId: string;
@@ -184,6 +188,7 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
         .then(json => {
           if (cancelled) return;
           if (json) {
+            setFramesIndex(json); // めくり表示が flip[]（密なコマ）を読む
             const raw = parseMoveFrames(json, sheet.rows);
             const resolved = new Map<number, MoveFrameSet>();
             const abs = (p: string) => (p.startsWith('/') ? resolveHomeServerUrl(baseUrl, p) ?? p : p);
@@ -203,6 +208,22 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
   // 練習モード: カード = その技をスローで繰り返し（元動画があるとき）、長押し/範囲ループ = #3〜#6 を繰り返し、
   // 通し練習 = 全部をカウント付きで。動画が無い・再生できないときはカウントとカードの光だけで進む
   const practice = usePracticeSession(sheet, job?.resultJson ?? null);
+
+  // ─── めくり / 一覧 ───
+  // 一覧のカードを押したら: 動画があればカードは今までどおり再生（その技を覚えておき、めくりに切り替えたらそこから）、
+  // 動画が無ければその技のめくりを開く
+  const [framesIndex, setFramesIndex] = useState<unknown>(null);
+  const reportView = useReportView();
+  const { setAt: setFlipAt, openAt: openFlipAt } = reportView;
+  const onCardTap = useCallback((i: number) => (videoUrl ? setFlipAt(i) : openFlipAt(i)), [videoUrl, setFlipAt, openFlipAt]);
+  useCardTap(!!sheet && reportView.view === 'list', onCardTap);
+  const resolveFrameUrl = useCallback((p: string) => (p.startsWith('/') ? resolveHomeServerUrl(baseUrl, p) ?? p : p), [baseUrl]);
+  const switchView = (v: 'flip' | 'list') => {
+    if (v === 'flip') {
+      if (practice.session) { setFlipAt(practice.current); practice.close(); }
+    }
+    reportView.setView(v);
+  };
 
   // 解析結果をクリップボードへコピーし、ジェネレーターを新しいタブで開く。
   // ユーザーはジェネレーターの「📥」に貼り付けて、動画のルーティンを骨格で再現できる。
@@ -255,6 +276,7 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
                   onCurrent={practice.setCurrent}
                 />
               )}
+              <ReportViewToggle view="list" onChange={switchView} />
               <ChoreoSheet
                 sheet={sheet}
                 states={sheetStates}
@@ -314,6 +336,20 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
         )}
         {job?.finishedAt && (
           <p className={styles.meta}>解析完了: {new Date(job.finishedAt).toLocaleString()} / preset: {job.preset}</p>
+        )}
+        {sheet && reportView.view === 'flip' && createPortal(
+          <FlipView
+            sheet={sheet}
+            frames={moveFrames}
+            framesIndex={framesIndex}
+            resolveUrl={resolveFrameUrl}
+            initialIndex={reportView.at}
+            onIndexChange={setFlipAt}
+            onList={() => switchView('list')}
+            onClose={onClose}
+            title={videoTitle}
+          />,
+          document.body,
         )}
       </div>
     </div>

@@ -9,6 +9,7 @@
  * - P0: preset の cvSteps が空 & useClaude:false のためダミー完了する（配管の疎通確認用）
  */
 import { spawn } from 'node:child_process';
+import { spawnPython } from './spawnPython.js';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,7 +99,7 @@ async function transcodeDebugVideo(rawPath: string, outPath: string, signal: Abo
 /** Pythonスクリプトを実行して終了を待つ。exit≠0 / タイムアウトで reject */
 function runPython(args: string[], signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(PYTHON_BIN, args, { signal });
+    const proc = spawnPython(PYTHON_BIN, args, { signal });
     let stderr = '';
     proc.stderr.on('data', d => { stderr += d.toString(); });
     proc.on('error', err => reject(new Error(`python起動失敗: ${err.message}`)));

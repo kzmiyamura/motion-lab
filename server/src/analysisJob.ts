@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawnPython } from './spawnPython.js';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,7 +44,7 @@ export function startRotationAnalysis(videoId: string, videoPath: string): void 
   if (!existsSync(TMP_DIR)) mkdirSync(TMP_DIR, { recursive: true });
   const outPath = path.join(TMP_DIR, `${videoId}.json`);
 
-  const proc = spawn(PYTHON_BIN, [SCRIPT_PATH, videoPath, MODEL_PATH, outPath]);
+  const proc = spawnPython(PYTHON_BIN, [SCRIPT_PATH, videoPath, MODEL_PATH, outPath]);
 
   let stderr = '';
   proc.stderr.on('data', d => { stderr += d.toString(); });

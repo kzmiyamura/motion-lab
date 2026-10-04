@@ -6,7 +6,7 @@
  *      それ以外は CV のまま dirSource: "cv?"
  * jobWorker（analyze_pair の直後）と tools/judge-turns.ts（評価・既存ジョブへの適用）が使う
  */
-import { spawn } from 'node:child_process';
+import { spawnPython } from './spawnPython.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,7 +36,7 @@ export interface TurnJudgeSummary {
 
 function runPy(pythonBin: string, args: string[], signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(pythonBin, args, { signal });
+    const proc = spawnPython(pythonBin, args, { signal });
     let stdout = '';
     let stderr = '';
     proc.stdout.on('data', d => { stdout += d.toString(); });

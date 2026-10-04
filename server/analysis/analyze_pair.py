@@ -70,27 +70,82 @@ EDGE_MARGIN = 0.01         # bbox がこの距離以内で画面左右端に接�
 SPECTATOR_AREA_RATIO = 0.45  # ペアの典型bbox面積のこの割合未満は観客とみなし候補から除外
 SPECTATOR_AREA_EMA = 0.05    # 典型面積の更新率
 
+# 腰から上の寄りの動画（腰が画面の下に切れている人）は、肩だけで計測する（README 29）。
+# 以前は肩・腰の 4 点がそろわない人を全員落としていたので、腰から上の寄りの cap1790 ではペアのコマが 0、出来事も 0 件だった
+# （落とした箱 806 のうち 741 が「肩は可・腰が低信頼」）。使うのは「腰が画面の外にある」と言えるときだけ:
+#   1. 両肩は KP_CONF 以上、腰のどちらかが KP_CONF 未満
+#   2. bbox の下端が画面の下端から WAIST_UP_BOTTOM_MARGIN 以内（体が画面の下で切れている）
+#   3. 肩から推した腰の高さが、画面の下端から推定の誤差（胴 × WAIST_UP_HIP_SLACK）以内か、それより下
+# 全身が映る動画で腰が隠れた人（重なり・背景の人）は 2・3 を満たさないので、今までどおり落とす。
+# 肩だけの人は hipX = 肩の中点の X（CBL の左右の入れ替わり）、hipY = 推した腰の高さ、shr2d = None（腰幅が無い）、
+# "torso": "shoulders" と推した胴の長さ "torsoN"（画面の高さで正規化）を持つ。ターン（肩の左右の並び shDx）は元から肩だけ。
+# 胴の向きは画面の真下、長さは max(肩幅 × SHOULDER_TORSO_RATIO, 鼻〜肩の中点 × NECK_TORSO_RATIO)。
+# 正解表 6 本の全身のコマ（4 点とも KP_CONF 以上の 7334 人・コマ）で測った値（scratchpad の calib.py、2026-10-05）:
+#   - 本当の胴（肩の中点 → 腰の中点）と画面の真下の角度は中央値 3.0°（90% 点 7.7°）。肩の線の法線は 7.6°（33°）、
+#     鼻 → 肩の中点の向きは 36.5° で、どちらも真下より悪い（ダンサーは立っている。横向きの肩の線は短く向きが不安定）
+#   - 胴 / 肩幅（正面向き = 肩の X 差が胴の 0.5 以上の 2750 コマ）は中央値 1.61（動画ごと 1.55〜1.71）。横向きでは肩幅が縮むので
+#     肩幅だけだと 10% 点で胴の 0.19 倍まで短く出る。胴 / 鼻〜肩の中点は 2.36（2.24〜2.49）で向きに依らない
+#   - 腰の中点の推定誤差（胴の長さ単位）: 肩幅だけ 中央値 .32 / 90% 点 .81、鼻だけ .15 / .48、両方の max .13 / .27
+WAIST_UP_FALLBACK = True
+WAIST_UP_BOTTOM_MARGIN = 0.02
+WAIST_UP_HIP_SLACK = 0.3      # 推した腰の高さの誤差（90% 点 .27 胴）
+SHOULDER_TORSO_RATIO = 1.61
+NECK_TORSO_RATIO = 2.36
+NOSE = 0
+
+
+def shoulder_torso_px(kps_xy, kps_conf):
+    """肩（と鼻）から推した胴の長さ（px）。肩幅 × SHOULDER_TORSO_RATIO と 鼻〜肩の中点 × NECK_TORSO_RATIO の大きい方"""
+    sl, sr = kps_xy[LEFT_SHOULDER], kps_xy[RIGHT_SHOULDER]
+    est = float(np.linalg.norm(sl - sr)) * SHOULDER_TORSO_RATIO
+    if kps_conf[NOSE] >= KP_CONF:
+        est = max(est, float(np.linalg.norm((sl + sr) / 2 - kps_xy[NOSE])) * NECK_TORSO_RATIO)
+    return est
+
+
+def hips_out_of_frame(box_xyxyn, kps_xy, kps_conf, frame_h):
+    """腰が画面の下に切れているか（肩だけで計測してよいか）。両肩は呼び出し側で確かめてある"""
+    if box_xyxyn[3] < 1.0 - WAIST_UP_BOTTOM_MARGIN:
+        return False
+    torso = shoulder_torso_px(kps_xy, kps_conf)
+    sy = float(kps_xy[LEFT_SHOULDER][1] + kps_xy[RIGHT_SHOULDER][1]) / 2
+    return sy + torso * (1.0 - WAIST_UP_HIP_SLACK) >= frame_h * (1.0 - WAIST_UP_BOTTOM_MARGIN)
+
 
 def measure_person(box_xyxyn, kps_xy, kps_conf, det_conf, frame_w, frame_h):
-    """1人分の検出結果から計測値を返す。肩・腰が低信頼なら None
+    """1人分の検出結果から計測値を返す。肩が低信頼なら None。腰が低信頼なら、腰が画面の下に切れているときだけ
+    肩だけで計測し（WAIST_UP_FALLBACK）、それ以外は None
 
     位置系（hipX/hipY/bbox）は正規化座標（既存の閾値・ROIロジックと互換）、
     幅系（肩幅・腰幅）はピクセル座標（比を取るので単位は相殺される）
     """
-    need = (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
-    if any(kps_conf[i] < KP_CONF for i in need):
+    if any(kps_conf[i] < KP_CONF for i in (LEFT_SHOULDER, RIGHT_SHOULDER)):
         return None
     sl, sr = kps_xy[LEFT_SHOULDER], kps_xy[RIGHT_SHOULDER]
-    hl, hr = kps_xy[LEFT_HIP], kps_xy[RIGHT_HIP]
     shoulder_w = float(np.linalg.norm(sl - sr))
-    hip_w = float(np.linalg.norm(hl - hr))
-    if hip_w < 1.0:  # 1px 未満は計測不能
-        return None
     x0, y0, x1, y1 = (float(v) for v in box_xyxyn)
+    if any(kps_conf[i] < KP_CONF for i in (LEFT_HIP, RIGHT_HIP)):
+        if not (WAIST_UP_FALLBACK and hips_out_of_frame(box_xyxyn, kps_xy, kps_conf, frame_h)):
+            return None
+        torso = shoulder_torso_px(kps_xy, kps_conf)
+        if shoulder_w < 1.0 or torso < 1.0:
+            return None
+        hip_x = float(sl[0] + sr[0]) / 2
+        hip_y = float(sl[1] + sr[1]) / 2 + torso  # 胴は画面の真下へ
+        shr = None
+        extra = {"torso": "shoulders", "torsoN": round(torso / frame_h, 4)}
+    else:
+        hl, hr = kps_xy[LEFT_HIP], kps_xy[RIGHT_HIP]
+        hip_w = float(np.linalg.norm(hl - hr))
+        if hip_w < 1.0:  # 1px 未満は計測不能
+            return None
+        hip_x, hip_y = float(hl[0] + hr[0]) / 2, float(hl[1] + hr[1]) / 2
+        shr = round(shoulder_w / hip_w, 4)
+        extra = {}
     return {
-        "hipX": round(float(hl[0] + hr[0]) / 2 / frame_w, 4),
-        "hipY": round(float(hl[1] + hr[1]) / 2 / frame_h, 4),
-        "shr2d": round(shoulder_w / hip_w, 4),
+        "hipX": round(hip_x / frame_w, 4),
+        "hipY": round(hip_y / frame_h, 4),
+        "shr2d": shr,
         "shoulderW": round(shoulder_w, 1),
         # 左肩と右肩の画面X差（正規化・符号付き）。符号 = 体の向き（正面/背面）の指標。
         # ターン検出は「この符号の反転回数」で行う（幅の収縮より直接的）
@@ -110,7 +165,13 @@ def measure_person(box_xyxyn, kps_xy, kps_conf, det_conf, frame_w, frame_h):
         # 男性が右端に見切れて SHR 0.73 に潰れ、leaderAtStart を誤らせた実績あり）。
         # 追跡・ROI には使うが verdict 母集団からは除外する
         "edgeClipped": x0 <= EDGE_MARGIN or x1 >= 1.0 - EDGE_MARGIN,
+        **extra,
     }
+
+
+def shoulders_only(p):
+    """肩だけで計測した人（腰が画面の下に切れている。measure_person の WAIST_UP_FALLBACK）か"""
+    return bool(p) and p.get("torso") == "shoulders"
 
 
 def detect_persons(model, frame):
@@ -222,17 +283,23 @@ TORSO_KPS = (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
 
 def torso_distance(p, q, aspect=1.0):
     """2 つの検出の肩・腰 4 点のずれの平均を、長い方の胴（肩の中点〜腰の中点）で割った値。
-    kps は正規化座標なので、x に aspect（幅 / 高さ）を掛けて縦横の縮尺をそろえる"""
-    def pts(k):
-        return [(k[i][0] * aspect, k[i][1]) for i in TORSO_KPS]
+    kps は正規化座標なので、x に aspect（幅 / 高さ）を掛けて縦横の縮尺をそろえる。
+    どちらかが肩だけの人（腰が画面の外）なら肩の 2 点だけで比べ、胴はその人の推した長さ（torsoN）を使う"""
+    kps_idx = TORSO_KPS[:2] if shoulders_only(p) or shoulders_only(q) else TORSO_KPS
 
-    def torso_len(ps):
+    def pts(k):
+        return [(k[i][0] * aspect, k[i][1]) for i in kps_idx]
+
+    def torso_len(person):
+        if shoulders_only(person):
+            return person["torsoN"]
+        ps = [(person["kps"][i][0] * aspect, person["kps"][i][1]) for i in TORSO_KPS]
         sx, sy = (ps[0][0] + ps[1][0]) / 2, (ps[0][1] + ps[1][1]) / 2
         hx, hy = (ps[2][0] + ps[3][0]) / 2, (ps[2][1] + ps[3][1]) / 2
         return math.hypot(sx - hx, sy - hy)
 
     a, b = pts(p["kps"]), pts(q["kps"])
-    size = max(torso_len(a), torso_len(b), 1e-6)
+    size = max(torso_len(p), torso_len(q), 1e-6)
     return sum(math.hypot(u[0] - v[0], u[1] - v[1]) for u, v in zip(a, b)) / len(a) / size
 
 
@@ -504,26 +571,25 @@ def _region_hist(frame, x0, y0, x1, y1):
 def appearance_regions(frame, p, aspect):
     """骨格に合わせた部位ごとの色（胴・腿・脛・頭・腕）と体の寸法。resolve_identity_joint 用。
     2 人とも黒白の服でも、脚（素足 / 黒いズボン）・腕（袖 / 素肌）・髪のように部位で分けると違いが出る。
-    肩・腰の 4 点は measure_person が信頼度を保証している。戻り値: {部位: hist or None, "torsoLen", "shW"}"""
+    肩・腰の 4 点は measure_person が信頼度を保証している。戻り値: {部位: hist or None, "torsoLen", "shW"}
+    肩だけの人（腰が画面の下に切れている）は、胴を肩から真下へ推した長さ（torsoN）で取り、腿・脛は読まない（None）。
+    胴の長さも推した値なので寸法には入れない（torsoLen = None。肩幅と同じ情報になる）"""
     def kp(i):
         k = p["kps"][i]
         return (k[0], k[1]) if k[2] >= KP_CONF else None
-    sl, sr, hl, hr = (p["kps"][i][:2] for i in (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP))
-    sy, hy = (sl[1] + sr[1]) / 2, (hl[1] + hr[1]) / 2
-    torso = max(hy - sy, 1e-3)
-    xs = [sl[0], sr[0], hl[0], hr[0]]
-    out = {"upper": _region_hist(frame, min(xs), sy, max(xs), hy), "torsoLen": torso, "shW": abs(sl[0] - sr[0]) * aspect}
-    kl, kr, al, ar = kp(13), kp(14), kp(15), kp(16)
-    ky = max([k[1] for k in (kl, kr) if k] or [hy + 0.9 * torso])
-    lx = [hl[0], hr[0]] + [k[0] for k in (kl, kr) if k]
-    pad = 0.15 * (max(lx) - min(lx) + 1e-3)
-    out["lower"] = _region_hist(frame, min(lx) - pad, hy, max(lx) + pad, ky)
-    out["shin"] = None
-    if (kl or kr) and (al or ar):
-        ay = max(a[1] for a in (al, ar) if a)
-        sx = [k[0] for k in (kl, kr, al, ar) if k]
-        pad = 0.2 * (max(sx) - min(sx) + 1e-3)
-        out["shin"] = _region_hist(frame, min(sx) - pad, ky, max(sx) + pad, ay)
+    if shoulders_only(p):
+        sl, sr = (p["kps"][i][:2] for i in (LEFT_SHOULDER, RIGHT_SHOULDER))
+        sy = (sl[1] + sr[1]) / 2
+        torso = max(p["torsoN"], 1e-3)
+        out = {"upper": _region_hist(frame, min(sl[0], sr[0]), sy, max(sl[0], sr[0]), sy + torso),
+               "torsoLen": None, "shW": abs(sl[0] - sr[0]) * aspect, "lower": None, "shin": None}
+    else:
+        sl, sr, hl, hr = (p["kps"][i][:2] for i in (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP))
+        sy, hy = (sl[1] + sr[1]) / 2, (hl[1] + hr[1]) / 2
+        torso = max(hy - sy, 1e-3)
+        xs = [sl[0], sr[0], hl[0], hr[0]]
+        out = {"upper": _region_hist(frame, min(xs), sy, max(xs), hy), "torsoLen": torso, "shW": abs(sl[0] - sr[0]) * aspect}
+        _lower_regions(frame, kp, hl, hr, hy, torso, out)
     heads = [k for k in (kp(i) for i in range(5)) if k]
     cx = float(np.mean([k[0] for k in heads])) if heads else (sl[0] + sr[0]) / 2
     half = max(0.5 * torso, out["shW"]) * 0.45 / aspect
@@ -541,11 +607,27 @@ def appearance_regions(frame, p, aspect):
     return out
 
 
+def _lower_regions(frame, kp, hl, hr, hy, torso, out):
+    """腿（腰〜膝）と脛（膝〜足首）の色を out に書く（全身が映る人だけ）"""
+    kl, kr, al, ar = kp(13), kp(14), kp(15), kp(16)
+    ky = max([k[1] for k in (kl, kr) if k] or [hy + 0.9 * torso])
+    lx = [hl[0], hr[0]] + [k[0] for k in (kl, kr) if k]
+    pad = 0.15 * (max(lx) - min(lx) + 1e-3)
+    out["lower"] = _region_hist(frame, min(lx) - pad, hy, max(lx) + pad, ky)
+    out["shin"] = None
+    if (kl or kr) and (al or ar):
+        ay = max(a[1] for a in (al, ar) if a)
+        sx = [k[0] for k in (kl, kr, al, ar) if k]
+        pad = 0.2 * (max(sx) - min(sx) + 1e-3)
+        out["shin"] = _region_hist(frame, min(sx) - pad, ky, max(sx) + pad, ay)
+
+
 def _identity_geom(p):
     app = p.get("app") or {}
     tl, sw = app.get("torsoLen"), app.get("shW")
+    shr = p.get("shr2d")
     return np.array([math.log(max(p["bboxHpx"], 1.0)), math.log(tl) if tl else np.nan,
-                     math.log(sw) if sw else np.nan, p["shr2d"]], dtype=float)
+                     math.log(sw) if sw else np.nan, np.nan if shr is None else shr], dtype=float)
 
 
 def _identity_vector(p, means, geo_mu, geo_sd):
@@ -714,21 +796,24 @@ def assign_appearance_ids(draw_frames):
     for df in draw_frames:
         ks = {p["pid"]: p for p in df["kept"] if p.get("pid") is not None}
         if 0 in ks and 1 in ks and not (ks[0]["edgeClipped"] or ks[1]["edgeClipped"]):
-            d_shr.append(ks[0]["shr2d"] - ks[1]["shr2d"])
+            # 肩だけの人（腰が画面の外）には SHR が無い。身長（bbox の高さ = 画面に見えている高さ）と肩幅は比べる
+            if ks[0].get("shr2d") is not None and ks[1].get("shr2d") is not None:
+                d_shr.append(ks[0]["shr2d"] - ks[1]["shr2d"])
             d_h.append(ks[0]["bboxHpx"] - ks[1]["bboxHpx"])
             d_sw.append(ks[0]["shoulderW"] - ks[1]["shoulderW"])
-    if not d_shr:
+    if not d_h:
         return None
 
     def med(v):
         s = sorted(v)
         return s[len(s) // 2]
 
-    score = 2 * (1 if med(d_shr) >= 0 else -1) \
+    score = (2 * (1 if med(d_shr) >= 0 else -1) if d_shr else 0) \
         + (1 if med(d_h) >= 0 else -1) \
         + (1 if med(d_sw) >= 0 else -1)
-    print(f"leader cluster vote: medSHRdiff={med(d_shr):.3f} medHdiff={med(d_h):.1f} "
-          f"medSWdiff={med(d_sw):.1f} score={score} pairs={len(d_shr)}", file=sys.stderr)
+    shr_txt = f"{med(d_shr):.3f}" if d_shr else "None"
+    print(f"leader cluster vote: medSHRdiff={shr_txt} medHdiff={med(d_h):.1f} "
+          f"medSWdiff={med(d_sw):.1f} score={score} pairs={len(d_h)} shrPairs={len(d_shr)}", file=sys.stderr)
     return 0 if score > 0 else 1
 
 
@@ -1471,12 +1556,13 @@ def _ankle_y(p):
     return max(ys) if ys else None
 
 
-def _kp_visibility(p):
-    """上半身の keypoint（鼻・肩・肘・手首・腰）の平均信頼度。重なって隠れると下がる"""
+def _kp_visibility(p, hips=True):
+    """上半身の keypoint（鼻・肩・肘・手首・腰）の平均信頼度。重なって隠れると下がる。
+    hips=False なら腰を除く（腰が画面の外の人と比べるとき。腰の低い信頼度は隠れたせいではない）"""
     k = p.get("kps")
     if not k:
         return None
-    idx = (0, 5, 6, 7, 8, 9, 10, 11, 12)
+    idx = (0, 5, 6, 7, 8, 9, 10, 11, 12) if hips else (0, 5, 6, 7, 8, 9, 10)
     return sum(k[i][2] for i in idx) / len(idx)
 
 
@@ -1524,7 +1610,8 @@ def detect_pass_side(draw_frames, t_cross, leader_pid):
         if fa is not None and la is not None and abs(fa - la) >= PASS_ANKLE_MIN_DIFF:
             votes += 1.0 if fa > la else -1.0
             continue
-        fv, lv = _kp_visibility(ps[follower_pid]), _kp_visibility(ps[leader_pid])
+        hips = not (shoulders_only(ps[follower_pid]) or shoulders_only(ps[leader_pid]))
+        fv, lv = _kp_visibility(ps[follower_pid], hips), _kp_visibility(ps[leader_pid], hips)
         if fv is not None and lv is not None and abs(fv - lv) >= 0.1:
             votes += 0.5 if fv > lv else -0.5
     follower_depth = "near" if votes > 0 else "far" if votes < 0 else "unknown"
@@ -1801,7 +1888,7 @@ def draw_debug(frame, mask_roi, roi, kept, rejected, leader_pid, event_labels=()
     for p, color, tag in persons + [(p, COLOR_REJECTED, "") for p in rejected]:
         b = p["bbox"]
         cv2.rectangle(vis, (int(b[0] * w), int(b[1] * h)), (int(b[2] * w), int(b[3] * h)), color, 2)
-        label = f"{tag} SHR {p['shr2d']:.2f}".strip()
+        label = (f"{tag} SHR {p['shr2d']:.2f}" if p.get("shr2d") is not None else f"{tag} shoulders").strip()
         cv2.putText(vis, label, (int(b[0] * w), max(12, int(b[1] * h) - 4)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 2)
     return vis
@@ -2104,6 +2191,8 @@ def main():
                       "shDx": p["shDx"], "wrists": p["wrists"], "edgeClipped": p["edgeClipped"],
                       "shoulderW": p["shoulderW"], "bboxHpx": p["bboxHpx"],  # リーダークラスタ判定用
                       "kps": p["kps"],  # 骨格人形レンダリング用
+                      # 肩だけで計測した人（腰が画面の下に切れている）の印と推した胴の長さ。全身の人には付けない
+                      **({k: p[k] for k in ("torso", "torsoN")} if shoulders_only(p) else {}),
                       "hist": torso_hist(frame, p["bbox"]),  # 外見ID用（マスク前の生フレームから）
                       # 部位ごとの色・体の寸法（resolve_identity_joint 用。tracks.json には書かない）
                       "app": appearance_regions(frame, p, frame.shape[1] / frame.shape[0]) if IDENTITY_JOINT else None}
@@ -2130,7 +2219,9 @@ def main():
             edge_clipped_frames += 1
 
         shr_diff = None
-        if both and not edge_clipped:
+        # 肩だけの人（腰が画面の外）は SHR が無いので verdict・拮抗の母集団に入れない
+        has_shr = both and slots[0]["shr2d"] is not None and slots[1]["shr2d"] is not None
+        if has_shr and not edge_clipped:
             shr_diff = abs(slots[0]["shr2d"] - slots[1]["shr2d"])
             hi, lo = (slots[0], slots[1]) if slots[0]["shr2d"] >= slots[1]["shr2d"] else (slots[1], slots[0])
             pair = {
@@ -2143,7 +2234,7 @@ def main():
             if not occluded:
                 pair_clean.append(pair)
         for i in range(2):
-            if slots[i] is not None:
+            if slots[i] is not None and slots[i]["shr2d"] is not None:
                 all_stats[i]["sum"] += slots[i]["shr2d"]
                 all_stats[i]["sumsq"] += slots[i]["shr2d"] ** 2
                 all_stats[i]["n"] += 1

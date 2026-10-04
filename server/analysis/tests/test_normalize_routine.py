@@ -469,9 +469,11 @@ class RotationPriorTest(unittest.TestCase):
 
     def test_card2_of_581ef6a2(self):
         # 581ef6a2 の 0:01.76: Claude「右回り2回」→ CV の向き（左）で直して CV の回数 1 → CBL＋インサイドなら 1½。
-        # CV の spin は「左 1 → 右 3」と向きが混ざっていて回数の証拠にならない
-        spin = {"t": 3.96, "type": "Turn", "by": "follower",
-                "spin": {"from": 3.57, "to": 6.3, "runs": [{"dir": "left", "turns": 1.0}, {"dir": "right", "turns": 3.0}]}}
+        # 全フレームの spin は「左 1 → 右 3」と向きが混ざっていて向き・回数の証拠にならない。向きは 10fps の
+        # 反転列（spinCoarse、ジョブ 0ea16b69 の実データは "LL" = 左 1）で決める
+        spin = {"t": 3.96, "type": "Turn", "by": "follower", "spinCoarse": {"seq": "LL", "netDeg": -360},
+                "spin": {"from": 3.57, "to": 6.3, "runs": [{"dir": "left", "turns": 1.0}, {"dir": "right", "turns": 3.0}],
+                         "source": "fullFrames"}}
         res = {"routine": {"timing": "on2", "moves": [
             mv(0.0, "cbl_inside_turn", name="CBL＋インサイド", passSide="left", confidence=0.4, evidence="seen",
                turn={"by": "follower", "direction": "right", "rotations": 2})]}}
@@ -619,9 +621,22 @@ class PassCheckTest(unittest.TestCase):
         normalize(res, self.summary([2.0]), duration=4.0)
         self.assertNotIn("sides", res["routine"]["moves"][0])
 
-    def test_direction_follows_cv_spin_when_claude_disagrees(self):
+    def test_mixed_dense_runs_alone_do_not_flip_claude(self):
+        # 全フレームの spin が「左 1 → 右 3」と混ざり、10fps の読みも無ければ向きは決めない（Claude のまま）
         spin = {"t": 1.5, "type": "Turn", "by": "follower",
-                "spin": {"from": 1.2, "to": 2.0, "runs": [{"dir": "left", "turns": 1.0}, {"dir": "right", "turns": 3.0}]}}
+                "spin": {"from": 1.2, "to": 2.0, "runs": [{"dir": "left", "turns": 1.0}, {"dir": "right", "turns": 3.0}],
+                         "source": "fullFrames"}}
+        res = {"routine": {"timing": "on2", "moves": [
+            mv(0.0, "right_turn", name="右ターン×2", holdStart="LR", turn={"by": "follower", "direction": "right", "rotations": 2})]}}
+        normalize(res, self.summary([], [spin]), duration=4.0)
+        m = res["routine"]["moves"][0]
+        self.assertEqual(m["turn"]["direction"], "right")
+        self.assertNotIn("directionCheck", m)
+
+    def test_direction_follows_cv_spin_when_claude_disagrees(self):
+        spin = {"t": 1.5, "type": "Turn", "by": "follower", "spinCoarse": {"seq": "LL", "netDeg": -360},
+                "spin": {"from": 1.2, "to": 2.0, "runs": [{"dir": "left", "turns": 1.0}, {"dir": "right", "turns": 3.0}],
+                         "source": "fullFrames"}}
         res = {"routine": {"timing": "on2", "moves": [
             mv(0.0, "right_turn", name="右ターン×2", holdStart="LR", turn={"by": "follower", "direction": "right", "rotations": 2})]}}
         normalize(res, self.summary([], [spin]), duration=4.0)

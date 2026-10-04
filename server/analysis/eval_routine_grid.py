@@ -135,7 +135,7 @@ def evaluate(moves, gt, beat, cv_swaps=None):
 
 def cv_swaps_from(meas):
     ev = ((meas or {}).get("summary") or {}).get("events") or []
-    return [e["t"] for e in ev if e.get("type") == "CBL" and _num(e.get("t"))]
+    return [e["tCross"] if _num(e.get("tCross")) else e["t"] for e in ev if e.get("type") == "CBL" and _num(e.get("t"))]
 
 
 def fmt(d):

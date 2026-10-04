@@ -124,7 +124,8 @@ def plan_windows(events, coarse_series):
     for i, e in enumerate(events):
         if not isinstance(e, dict) or not _num(e.get("t")):
             continue
-        t = e["tCoarse"] if _num(e.get("tCoarse")) else e["t"]
+        # 元の 10fps の腰の交差の時刻: 取り直し済みなら tCoarse、analyze_pair が通過に寄せた t なら tCross
+        t = e["tCoarse"] if _num(e.get("tCoarse")) else e["tCross"] if _num(e.get("tCross")) else e["t"]
         if e.get("type") == "CBL":
             sign = old_sign_at(coarse_series, t)
             a = last_old_before(coarse_series, t, sign) if sign else None
@@ -538,6 +539,8 @@ def run(video_path, model_path, meas_path, tracks_path, target_fps, budget, only
                 continue
             e["tCoarse"] = extra["t"]
             e["t"] = round(r["t"], 2)
+            if "tCross" in e:  # 取り直した通過の時刻を交差の時刻としても使う（normalize_routine は SWAP_BEAT_REFINED で読む）
+                e["tCross"] = e["t"]
             e["swapRefine"] = {**r, "idAgree": None if id_agree is None else round(id_agree, 2),
                                "fps": info["fps"], "window": [round(w0, 2), round(w1, 2)]}
             info["refinedCBL"] += 1

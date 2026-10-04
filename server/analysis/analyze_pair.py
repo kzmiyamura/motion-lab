@@ -385,7 +385,7 @@ TURN_SWEEP_MIN = 0.04      # 反転の前後で要求する肩分離の振り幅
 TURN_PRE_SEC = 1.0         # 1回目の反転前にこの秒数以内で旧向きの振り幅があること
 TURN_CHAIN_GAP_SEC = 0.6   # 連続回転（ダブルターン）とみなす反転ペア間の最大間隔
 TURN_MAX_ROTATIONS = 3     # 連続回転として連結する反転ペアの上限（それ以上はジッタの可能性が高い）
-# 回転数の数え方の上限。連結（上の上限）とは別に、反転の総数から数える（count_rotations）
+# 回転数の数え方の上限。連結（上の上限）とは別に、反転の総数から数える（detect_turns の最後）
 TURN_COUNT_MAX = 4
 CBL_MIN_SEP = 0.08         # 交差前後で必要な左右分離（正規化X。ジッタの往復を弾く）
 CBL_WINDOW_SEC = 2.0       # 交差の前後この秒数内に十分な分離があること
@@ -398,15 +398,27 @@ CBL_PIVOT_SUPPRESS_SEC = 0.8  # CBL・女性のターンの±この秒数内の�
 # 残り5件は CBL の −1.08〜+1.03秒に散らばっており、窓幅では本物だけを残せない。
 # もう1件の取りこぼし（screenrec 13.3）は、直前に棄却される候補（11.18）からの EVENT_COOLDOWN_SEC で
 # 塞がれ、1.5秒遅れて検出されたもの。冷却を 2.0秒に縮めても男性は戻らず、女性ターンの P が 0.70→0.60 に落ちる
-# リーダーのターンは向きの目安（spin）で正味この角度以上回ったものだけ残す。
-# 男性が振り返って戻る・相手を見て向き直る動きは「RL」「LR」（正味0°）になり、
-# 正解表2本で男性ターンの誤検出5件中3件がこれだった（eval_ground_truth.py）。
-# 女性には使わない: 10fps の spin は速い連続ターンで向きが取れず、本物でも正味0°〜180°になる
-LEADER_TURN_MIN_NET_DEG = 360
+# リーダーのターン（detect_leader_turns）: 向きの反転ペア（= 1 回転）を1つずつ見て、2つの反転の回る向きが
+# 揃ったもの（RR / LL）だけを残す。男性が振り返って戻る・相手を見て向き直る動きは RL / LR（正味0°）になる。
+# 旧版（detect_turns の候補に後からフィルタ）は、CBL・女性のターンの近くで捨てられる候補でも冷却（2.5 秒）を
+# 張っていたので、その後の本物のターンまで塞いでいた（bb0efcb9 の 31.2・33.9・34.9 は 3 件ともこれ）。
+# また連続回転の連結が男の左→右の別々のターンや CBL のピボットを1つにまとめ、時刻が始まりの反転に寄っていた
+# （29.45 の候補が 31.2 のターンを含んで CBL 29.99 の近くで捨てられる、2fda2815 7.0 が 5.91 になる等）。
+# 10/4、正解表 5 本（tracks モード）: 男のターン P/R/F1 .333/.222/.267 → .462/.667/.545（tp 2→6、fp 4→7）、
+# CBL・女性のターンは不変。向きは対応した男のターン 7 件中 6 件（外れは向きを決めきれない bb0efcb9 16.6）
+LEADER_TURN_COOLDOWN_SEC = 1.5   # 男のターン同士の最小間隔（1.0〜2.5 秒で結果は同じ。冷却なしは fp +1）
 EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
 # 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
 CBL_COOLDOWN_SEC = 0.6
+# CBL の時刻は腰の交差（10fps で新しい側に最初に読めたコマ）から一定の遅れを引いて、実際の通過の瞬間に寄せる。
+# 腰の交差は通過より遅れる（refine_events の計測で正解の通過→交差の遅れは 47 件の中央値 +0.41 秒）。
+# 元の交差の時刻は tCross に残し、通る側・手の高さ・ホールド・男のターンの随伴フィルタ、振付シートの格子
+# （normalize_routine の SWAP_BEAT は交差の時刻で合わせてある）、refine_events はそちらを使う。
+# 10/4、正解表 5 本（tracks モード）: CBL P/R/F1 .733/.821/.775 → .819/.881/.849（1230b3d5 .600/.774/.676 →
+# .757/.903/.824、ほかの 4 本は不変）。0.2 で .829、0.3 で .835、0.5 で .855（ただし 0.5 は 1230b3d5 の
+# 後半 120 秒以降のように遅れの小さい区間で前に行き過ぎる。中央値に合わせて 0.4）
+CBL_TIME_SHIFT_SEC = 0.4
 # CBL の判定から外す「背の縮んだ」コマ: 本人の前後 CBL_SIZE_WIN_SEC 秒の bbox 高さ中央値の
 # この割合未満。ペアが重なって片方が隠れたコマで、背景の小さいダンサー（ペアの 0.55〜0.67 倍）が
 # 2人目として拾われ、左右の偽の入れ替わりになる（1230b3d5 の CBL 誤検出の主因。57〜60秒のディップ等）。
@@ -420,21 +432,19 @@ SPIN_POST_SEC = 1.6
 SPIN_KP_MIN = 0.3
 
 
-def count_rotations(flips, i_start):
-    """ターンの回転数 = 最初の反転から TURN_CHAIN_GAP_SEC 以内の間隔で続く反転の数 / 2（切り捨て）。
-
-    10fps の骨格では速い連続回転は1周3〜4コマしかなく、反転ペアの連結（振り幅条件つき）では
-    途中のペアが条件を外して回転数を少なく数える（正解表で4回転→3、3回転→2）。
-    連結はターンの区切り（検出時刻）にだけ使い、回転数は反転の総数から数える
-    （正解表2本の回転数 MAE 0.43 → 0.29。eval_ground_truth.py）
-    """
-    n, last = 0, None
-    for t, _ in flips[i_start:]:
-        if last is not None and t - last > TURN_CHAIN_GAP_SEC:
-            break
-        n += 1
-        last = t
-    return max(1, min(TURN_COUNT_MAX, n // 2))
+# 速い連続回転: 反転が TURN_CHAIN_GAP_SEC 以内の間隔で MIN〜MAX 個続く連なり（2½〜3 回転）。
+# EVENT_COOLDOWN_SEC は「前のターンの始まり」から測るので、CBL の通過や前のターンの 1.3〜2.5 秒後に始まる
+# 頭上の連続回転を落としていた（2fda2815 の 11.2 / 13.8 / 19.2 を 3 件とも見逃し）。また冷却が明けた所、
+# つまり回転の終わり際から始まったターンは回転数を少なく数えていた（bb0efcb9 8.5: 右 2½ を 1）。
+# そこで冷却で落ちた連なりはターンとして足し、連なりの最後の TAIL 個の反転から始まっていたターンは
+# この連なりに置き換える（始まりを前へ、回転数を連なり全体で数え直す）。それ以外と重なるときは何もしない。
+# 10/4、正解表 5 本（tracks モード）: 女性のターン P/R .800/.828 → .844/.931、向き 23/24 → 26/27、
+# 回転数の誤差 .360 → .304、CBL・男のターンは不変。MIN=4 は向き 25/27（2fda2815 5.9 の CBL の通過の
+# 半回転から始めて逆向きを読む）、MIN=3 は往復・歩きの向き直りまで拾って P .771。MAX を 7 以上にすると
+# 入れ替わりの前後の揺れ（bb0efcb9 21〜23.5 の 8 反転など）まで1つにまとめる
+TURN_FAST_MIN_FLIPS = 5
+TURN_FAST_MAX_FLIPS = 6
+TURN_FAST_TAIL_FLIPS = 2
 
 
 def detect_turns(draw_frames, pid):
@@ -462,17 +472,24 @@ def detect_turns(draw_frames, pid):
         """区間内に sign 向きで TURN_SWEEP_MIN 以上の分離があるか"""
         return any(d * sign >= TURN_SWEEP_MIN for t, d in series if t_from <= t <= t_to)
 
-    events = []  # (開始時刻, 回転数)
+    def pair_ok(i):
+        (t1, sign_before), (t2, _) = flips[i], flips[i + 1]
+        return (t2 - t1 <= TURN_FLIP_WINDOW
+                and sweep_ok(t1 - TURN_PRE_SEC, t1, sign_before)   # 反転前: 旧向きでしっかり見えていた
+                and sweep_ok(t1, t2, -sign_before))                # 反転間: 背面までしっかり回った
+
+    def chain_end(i):
+        j = i
+        while j + 1 < len(flips) and flips[j + 1][0] - flips[j][0] <= TURN_CHAIN_GAP_SEC:
+            j += 1
+        return j
+
+    spans = []  # [最初の反転の番号, 最後の反転の番号, 時刻]（回転数を数える範囲）
     last_event = -1e9
     i = 0
     while i + 1 < len(flips):
         (t1, sign_before), (t2, _) = flips[i], flips[i + 1]
-        if (
-            t2 - t1 <= TURN_FLIP_WINDOW
-            and t1 - last_event > EVENT_COOLDOWN_SEC
-            and sweep_ok(t1 - TURN_PRE_SEC, t1, sign_before)   # 反転前: 旧向きでしっかり見えていた
-            and sweep_ok(t1, t2, -sign_before)                 # 反転間: 背面までしっかり回った
-        ):
+        if t1 - last_event > EVENT_COOLDOWN_SEC and pair_ok(i):
             # 連続回転（ダブルターン等）: 「直後（0.6秒以内）に始まり、振り幅条件も満たす」
             # 反転ペアのみ連結する。緩い連結は後続の別ターンやジッタを際限なく飲み込む（実測: rotations=10）
             rotations = 1
@@ -488,11 +505,80 @@ def detect_turns(draw_frames, pid):
                 rotations += 1
                 t2 = flips[i + 1][0]
                 i += 2
-            events.append((round(t1, 2), count_rotations(flips, i_start)))
+            spans.append([i_start, chain_end(i_start), t1])
             last_event = t1
         else:
             i += 1
-    return events
+
+    # 速い連続回転（反転 TURN_FAST_MIN_FLIPS〜TURN_FAST_MAX_FLIPS 個の連なり）: 冷却で落ちたものを足し、
+    # 回転の終わりの方（最後の TURN_FAST_TAIL_FLIPS 個の反転）から始まっていたターンはこの回転に置き換える
+    i = 0
+    while i + 1 < len(flips):
+        j = chain_end(i)
+        if TURN_FAST_MIN_FLIPS <= j - i + 1 <= TURN_FAST_MAX_FLIPS and pair_ok(i):
+            # 既存のターンの範囲は2つ目の反転までは含む（間隔が空いて連なりの直前で終わるものも重なりとみなす）
+            over = [s for s in spans if s[0] <= j and max(s[1], s[0] + 1) >= i]
+            if all(i < s[0] and s[0] > j - TURN_FAST_TAIL_FLIPS for s in over):
+                spans = [s for s in spans if s not in over] + [[i, max([j] + [s[1] for s in over]), flips[i][0]]]
+        i = j + 1
+    spans.sort()
+    # 回転数 = 範囲内の反転の数 / 2（切り捨て）。10fps の骨格では速い連続回転は1周3〜4コマしかなく、
+    # 反転ペアの連結（振り幅条件つき）では途中のペアが条件を外して少なく数えるので、連結はターンの区切りにだけ使い、
+    # 回転数は反転の総数から数える（正解表2本の回転数 MAE 0.43 → 0.29）。
+    # ½ 刻み（反転の数 / 2 をそのまま）は正解表 5 本で誤差 .36 → .38 と悪くなるので切り捨てのまま
+    return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2))) for a, b, t in spans]
+
+
+def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times):
+    """男のターン: 向きの反転ペア（= 1 回転）を1つずつ見て、2つの反転が同じ向き（RR / LL）に読めたものだけ残す。
+    戻り値: [(時刻, 回転数, spin)]"""
+    series = []
+    for df in draw_frames:
+        for p in df["kept"]:
+            if p.get("pid") == pid and abs(p["shDx"]) >= TURN_FLIP_MARGIN:
+                series.append((df["t"], p["shDx"], p))
+    flips = []  # (時刻, 反転前の符号, "R"/"L"/"?")
+    for (t0, d0, p0), (t1, d1, p1) in zip(series, series[1:]):
+        if (d0 > 0) == (d1 > 0):
+            continue
+        near, far = (p0, p1) if abs(d0) <= abs(d1) else (p1, p0)
+        side = face_side(near) or face_side(far)
+        r = "?" if side == 0 else ("R" if ((side < 0) if d0 > 0 else (side > 0)) else "L")
+        flips.append((t1, 1 if d0 > 0 else -1, r))
+
+    def sweep_ok(t_from, t_to, sign):
+        return any(d * sign >= TURN_SWEEP_MIN for t, d, _ in series if t_from <= t <= t_to)
+
+    def near(t, ts):
+        return any(abs(t - s) <= CBL_PIVOT_SUPPRESS_SEC for s in ts)
+
+    pairs = []  # (反転1の番号, 中点, 向き)
+    i = 0
+    while i + 1 < len(flips):
+        (t1, s, r1), (t2, _, r2) = flips[i], flips[i + 1]
+        tm = (t1 + t2) / 2
+        if (t2 - t1 <= TURN_FLIP_WINDOW and sweep_ok(t1 - TURN_PRE_SEC, t1, s) and sweep_ok(t1, t2, -s)
+                and r1 == r2 and r1 != "?" and not near(tm, cbl_times) and not near(tm, follower_turn_times)):
+            pairs.append((i, tm, r1))
+            i += 2
+        else:
+            i += 1
+    # 同じ向きで間を空けずに続く反転ペアは連続回転として1つにまとめる（向きが変わったら別のターン）。
+    # 時刻は最初の1回転の中点
+    out = []  # [時刻, 回転数, 向き, 最後の反転ペアの番号]
+    for i, tm, r in pairs:
+        if out and out[-1][2] == r and out[-1][3] + 2 == i and flips[i][0] - flips[i - 1][0] <= TURN_CHAIN_GAP_SEC:
+            out[-1][1] += 1
+            out[-1][3] = i
+        else:
+            out.append([tm, 1, r, i])
+    res, last = [], -1e9
+    for tm, n, r, _ in out:
+        if tm - last <= LEADER_TURN_COOLDOWN_SEC:
+            continue
+        last = tm
+        res.append((round(tm, 2), min(n, TURN_COUNT_MAX), {"seq": r * (2 * n), "netDeg": (180 if r == "R" else -180) * 2 * n}))
+    return res
 
 
 def detect_cbl(draw_frames):
@@ -980,6 +1066,7 @@ def detect_hold(draw_frames, t_center, leader_pid):
 def detect_events(draw_frames, leader_pid):
     """全イベントを時刻順で返す: [{t, type, by, rotations?, hold?}]
 
+    リーダーのターンは detect_leader_turns（反転ペアごと、向きの揃ったものだけ）で拾う。
     リーダーの「随伴回転」を棄却する2つのフィルタ（いずれも実測で誤検出を確認済み）:
     - CBL 近傍: リーダーは CBL のリード動作で体を半回転させて戻す（CBLの一部でありターンではない）
     - フォロワーのターン近傍: フォロワーを回すとき、リーダーの上体も連られて回る
@@ -987,14 +1074,19 @@ def detect_events(draw_frames, leader_pid):
     リーダーの単独ターン（フック ターン等）は近傍に何も無ければ検出される
     """
     cbl_times = detect_cbl(draw_frames)
-    events = [{"t": t, "type": "CBL", "by": "pair", "hold": detect_hold(draw_frames, t, leader_pid),
+    events = [{"t": round(t - CBL_TIME_SHIFT_SEC, 2), "tCross": t, "type": "CBL", "by": "pair",
+               "hold": detect_hold(draw_frames, t, leader_pid),
                "pass": detect_pass_side(draw_frames, t, leader_pid),
                "handRaise": detect_hand_raise(draw_frames, t, leader_pid)}
               for t in cbl_times]
 
     turns = {0: detect_turns(draw_frames, 0), 1: detect_turns(draw_frames, 1)}
-    follower_pid = None if leader_pid is None else 1 - leader_pid
-    follower_turn_times = [t for t, _ in turns.get(follower_pid, [])] if follower_pid is not None else []
+    leader_spins = {}
+    if leader_pid is not None:
+        follower_turn_times = [t for t, _ in turns[1 - leader_pid]]
+        lt = detect_leader_turns(draw_frames, leader_pid, cbl_times, follower_turn_times)
+        turns[leader_pid] = [(t, r) for t, r, _ in lt]
+        leader_spins = {t: s for t, _, s in lt}
 
     for pid in (0, 1):
         if leader_pid is None:
@@ -1002,13 +1094,7 @@ def detect_events(draw_frames, leader_pid):
         else:
             by = "leader" if pid == leader_pid else "follower"
         for t, rotations in turns[pid]:
-            if by == "leader" and any(abs(t - ct) <= CBL_PIVOT_SUPPRESS_SEC for ct in cbl_times):
-                continue
-            if by == "leader" and any(abs(t - ft) <= CBL_PIVOT_SUPPRESS_SEC for ft in follower_turn_times):
-                continue
-            spin = spin_hint(draw_frames, pid, t)
-            if by == "leader" and abs((spin or {}).get("netDeg", 0)) < LEADER_TURN_MIN_NET_DEG:
-                continue
+            spin = leader_spins[t] if by == "leader" else spin_hint(draw_frames, pid, t)
             events.append({"t": t, "type": "Turn", "by": by, "rotations": rotations,
                            "hold": detect_hold(draw_frames, t, leader_pid), "spin": spin})
     events.sort(key=lambda e: e["t"])

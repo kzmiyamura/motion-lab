@@ -7,6 +7,7 @@ import {
   type MoveFrameSet,
 } from '../engine/choreoSheet';
 import { ChoreoSheet } from './ChoreoSheet';
+import { parseSheetStates } from '../engine/sheetState';
 import { MoveClipPlayer } from './MoveClipPlayer';
 import { PracticeToolbar } from './PracticeBar';
 import { usePracticeSession } from '../hooks/usePracticeSession';
@@ -163,6 +164,7 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
   // 振付シート（result.json の routine.moves があれば既定の表示。無ければ従来の Markdown）
   const sheet = useMemo(() => parseChoreoSheet(job?.resultJson ?? null), [job]);
   const summary = useMemo(() => (sheet ? reportSummary(job?.reportMd ?? null) : []), [sheet, job]);
+  const sheetStates = useMemo(() => (sheet ? parseSheetStates(job?.resultJson ?? null) : null), [sheet, job]);
 
   // 技ごとの連続コマ画像（サーバーの out/move_frames/index.json）。
   // 画像はジョブ完了の直前（または後からの作り直し）で作られるので、開いた時点でまだ無い・作成途中のことがある。
@@ -255,6 +257,7 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
               )}
               <ChoreoSheet
                 sheet={sheet}
+                states={sheetStates}
                 frames={moveFrames}
                 onPlay={videoUrl ? practice.playRow : undefined}
                 playingIndex={practice.session ? practice.current : null}

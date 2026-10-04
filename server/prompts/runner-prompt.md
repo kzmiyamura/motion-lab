@@ -44,6 +44,11 @@
   - `persons[]` — フレーム毎の計測。スロット番号は空間追跡のIDであり人物の同一性は保証されない（交差で入れ替わり得る）
   - `summary.beatGrid` — 音声から推定したビート格子: `{bpm, firstBeatSec, beatIntervalSec, confidence}`（推定不能なら null。理由は `summary.beatGridReason`: `"silent"` = 動画に音が入っていない（画面収録など）、`"unclear"` = 音はあるがリズムが取れない。silent のときはレポートに「音声なしのためカウント無し」と書く）。
     各イベントには `count8`（8カウント内の仮位置。**位相は未合わせ**）と `beatOffsetSec`（拍からのずれ）が付く。
+    `beatGrid.downbeat` = `{sec, source, confidence, barConfidence, phraseConfidence, offbeatGrid, evidence}` は
+    カウント 1 の推定（`source`: `"audio+dance"` = コンガのスラップ 2・ベースの 2&/4 などの楽器の打点で小節の中の 1 を決め、
+    1 と 5 を CBL の通過・女性のターンで決めた / `"dance"` = 音で決まらず踊りの手がかりだけ）。
+    `confidence` が 0.6 以上ならイベントに合わせたカウント `count`（1.0〜8.99、2.5 = 2&）が付き、振付シートの 8 カウントの頭も
+    `downbeat.sec` に揃う。そのときは `count` をそのまま使ってよい（On2 の 2 = `count` 2）。無い・低いときは下のとおり:
     **あなたが位相を合わせてカウントを確定する**: On2 の慣例（このフォルダの動画は基本 On2。下記「On1/On2 の判断」。
     例: CBL は男性が 7-1 で左へ開き、女性が **2** で男性の左を通り 3 で ½ 回る。インサイドは 2 から回り始め 5 で回り切る。
     その場の右ターンは 5-6-7 で準備して 1 から回る — 下の「カウント（On2 で数える）」）に沿って、

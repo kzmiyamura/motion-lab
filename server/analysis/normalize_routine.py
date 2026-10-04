@@ -882,10 +882,15 @@ def infer_hold(mv, summary, t0, t1):
     return h
 
 
-def cv_spin(summary, t0, t1, by="follower"):
+def cv_spin(summary, t0, t1, by="follower", beat=None):
     """行の中で回り始めた CV のターンの、最初のはっきりした回転（1 回転以上続いた向き）: (direction, turns) か None。
     analyze_pair が全フレームで数え直した spin.runs（向きは上から見て時計回り = right。人手校正で女性のターンの
     向きは 8 件中 7 件正しい）"""
+    if TURN_PICK != "first":
+        info = cv_turn_pick(summary, t0, t1, beat, by)
+        if info and info["dir"] in DIR_SHORT and _num(info["turns"]) and info["turns"] >= 1:
+            return info["dir"], info["turns"]
+        return None
     for e in (summary or {}).get("events") or []:
         if not isinstance(e, dict) or e.get("type") != "Turn" or e.get("by") != by:
             continue
@@ -908,14 +913,138 @@ ROT_PRIOR = {
     "right_turn": (1.0, 2.0), "left_turn": (1.0, 2.0), "inside_turn": (1.0, 2.0), "outside_turn": (1.0, 2.0),
     "leader_turn": (1.0, 2.0),
 }
+
+# 行に CV のターンを当てる規則・行の境目の直し（docs/salsa-knowledge/README.md 反映済み 25。値は正解表 6 本の
+# eval_routine_set で決めた。既定値が採用値、もう一方の値は比べた従来の動き）
+TURN_PICK = "best"          # best = 向きがあって一番多く回ったターン / first = 行で最初に回り始めたターン（従来）
+TURN_SPILL_BEATS = 6.0      # 頭からこの拍数以降（カウント 7〜8）に回り始めたターンは次の行のもの。None = 行の中なら全部
+                            # （5.5〜6.5 で同じ。7.0 では 2fda2815 10.65 の右 2½ が前の CBL＋インサイドの向きを右に変える）
+TURN_DOMINANCE = 0.0        # 向きの混ざった spin.runs でも、一番多い向きが逆向きのこの倍以上ならその向き。0 = 混ざれば無し
+                            # （2.0 は spinCoarse の無い古いイベントで screenrec 16.3 の右 4 を拾うが、人手で確かめた
+                            # 581ef6a2 0:01.76「左 1 → 右 3」（正解は左）を右にする。比が 2.3 と 3.0 で分けられないので入れない）
+MIXED_FIRST_RUN = False     # 向きの混ざった spin.runs は最初のはっきりした回転の向き（従来の cv_spin）
+TURN_DIR_SOURCE = "coarse"  # coarse = 10fps の反転列（spinCoarse）で向きが決まればそちら / dense = 全フレームの spin だけ
+COARSE_TURNS_MAX = True     # 向きを 10fps で決め直したとき、数は全フレーム（その向きの合計）と 10fps の多い方
+TURN_ANCHOR = "from"        # ターンの始まり: from = spin.from（無ければ t）/ t = 検出の時刻 / min = 早い方
+FILL_CBL_TURN = True        # ターンの無い CBL の行に女性の CV のターンがあれば CBL＋ターンにする
+EARLY_SWAP_BEATS = 1.0      # 前の行が CBL 系のとき、行の頭からこの拍数以内（カウント 2 より前）の入れ替わりは前の行のもの。
+                            # CV の交差は女性の通過（2）より遅れて出るので、2 より前の交差はこの行の通過ではない（None = しない）
+GHOST_CBL_BACK = True       # 入れ替わりの無い CBL 系の行の直前の行に入れ替わりがあれば、CBL を前の行へ移す
+
 MIN_BEATS_PER_ROT = 1.0    # 多回転でも 1 回転に最低 1 拍（シングルは ≈ 2 拍）。これより多い回転は採らない
 TURN_WINDOW_BEATS = 4.0     # CV の回転区間が無いときに回転に使える拍（半分の 8 カウント。On2 の 2-3-(4)-5 等）
 
 
-def cv_spin_info(summary, t0, t1, by="follower"):
+def coarse_runs(seq):
+    """10fps の反転列（spinCoarse.seq、"LLRRR"）を向きの run にまとめる（analyze_pair._spin_runs と同じ規則:
+    長い run の隣の単発の逆向きはノイズとして消す）。[{"dir", "turns"}]"""
+    runs = []
+    for ch in seq or "":
+        if ch not in "LR":
+            continue
+        if runs and runs[-1][0] == ch:
+            runs[-1][1] += 1
+        else:
+            runs.append([ch, 1])
+    changed = True
+    while changed and len(runs) > 1:
+        changed = False
+        for i, (ch, n) in enumerate(runs):
+            if n != 1:
+                continue
+            if max(runs[j][1] for j in (i - 1, i + 1) if 0 <= j < len(runs)) >= 2:
+                del runs[i]
+                merged = []
+                for r in runs:
+                    if merged and merged[-1][0] == r[0]:
+                        merged[-1][1] += r[1]
+                    else:
+                        merged.append(list(r))
+                runs = merged
+                changed = True
+                break
+    return [{"dir": "right" if ch == "R" else "left", "turns": n / 2} for ch, n in runs]
+
+
+def spin_summary(e):
+    """CV のターン 1 件の向きと回転数: {"dir", "turns", "dur", "a"}。
+    向きは全フレームの spin.runs で一番多く回った向き（逆向きの合計の TURN_DOMINANCE 倍以上のときだけ。
+    0 なら全部の run が同じ向きのときだけ = 従来）。TURN_DIR_SOURCE="coarse" なら、10fps の反転列（spinCoarse）で
+    向きが決まるときはそちらを使う（全フレームの取り直しは 21〜23 で直した向きを上書きすることがある。README 25）"""
+    sp = e.get("spin") or {}
+    a, b = sp.get("from", e.get("t")), sp.get("to")
+    runs = [r for r in sp.get("runs") or [] if r.get("dir") in DIR_SHORT and _num(r.get("turns"))]
+    tot = {}
+    for r in runs:
+        tot[r["dir"]] = tot.get(r["dir"], 0.0) + r["turns"]
+    d, n = None, None
+    if len(tot) == 1:
+        d, n = next(iter(tot.items()))
+    elif len(tot) == 2 and TURN_DOMINANCE > 0:
+        (d1, n1), (d2, n2) = sorted(tot.items(), key=lambda x: -x[1])
+        if n1 >= TURN_DOMINANCE * n2:
+            d, n = d1, n1
+    elif len(tot) == 2 and MIXED_FIRST_RUN:
+        # 向きが混ざっていれば最初のはっきりした回転（1 回転以上続いた run）。従来の cv_spin と同じ
+        first = next((r for r in runs if r["turns"] >= 1), None)
+        if first:
+            d, n = first["dir"], first["turns"]
+    if TURN_DIR_SOURCE == "coarse":
+        # 10fps の反転列: 全フレームで取り直したジョブは spinCoarse、取り直していなければ spin そのもの
+        coarse = e.get("spinCoarse") or (sp if sp.get("source") != "fullFrames" else None) or {}
+        cr = coarse_runs(coarse.get("seq"))
+        ctot = {}
+        for r in cr:
+            ctot[r["dir"]] = ctot.get(r["dir"], 0.0) + r["turns"]
+        if ctot:
+            cd = max(ctot, key=lambda k: ctot[k])
+            if len(ctot) == 1 or ctot[cd] > min(ctot.values()):
+                if cd != d:
+                    # 向きは 10fps、数は全フレームのその向きの合計（無ければ 10fps の数）
+                    n = max(tot.get(cd) or 0.0, ctot[cd]) if COARSE_TURNS_MAX else (tot.get(cd) or ctot[cd])
+                d = cd
+    if TURN_ANCHOR == "t" or not _num(a):
+        anchor = e.get("t")
+    elif TURN_ANCHOR == "min":
+        anchor = min(a, e["t"]) if _num(e.get("t")) else a
+    else:
+        anchor = a
+    return {"dir": d, "turns": n, "dur": (b - sp["from"]) if _num(b) and _num(sp.get("from")) and b > sp["from"] else None,
+            "a": anchor}
+
+
+def turn_window(t0, t1, beat):
+    """行に属する CV のターンの、始まりの時刻の範囲。TURN_SPILL_BEATS 拍目以降に回り始めたターンは次の行のもの
+    （On2 のその場の右回りは 1（早ければ 8）から、左回り・CBL＋ターンは 2 から回る。7〜8 拍目の回り始めは次の
+    8 カウントのターンのプレップか早い回り始め）"""
+    if TURN_SPILL_BEATS is None or not (beat and beat > 0):
+        return t0 - 0.3, t1
+    s = max(0.0, (8 - TURN_SPILL_BEATS) * beat)
+    return t0 - max(0.3, s), t1 - s
+
+
+def cv_turn_pick(summary, t0, t1, beat=None, by="follower"):
+    """行の CV のターンのうち、向きがあって一番多く回ったもの（spin_summary）。無ければ向きの無いもの、それも無ければ None"""
+    lo, hi = turn_window(t0, t1, beat)
+    best = None
+    for e in (summary or {}).get("events") or []:
+        if not isinstance(e, dict) or e.get("type") != "Turn" or e.get("by") != by:
+            continue
+        s = spin_summary(e)
+        if not _num(s["a"]) or not (lo <= s["a"] < hi):
+            continue
+        key = (s["dir"] is not None, s["turns"] or 0)
+        if best is None or key > best[0]:
+            best = (key, s)
+    return best[1] if best else None
+
+
+def cv_spin_info(summary, t0, t1, by="follower", beat=None):
     """行の中で回り始めた CV のターン（全フレームで数え直した spin）: {"dir", "turns", "dur"}。
     dir/turns は全部の run が同じ向きのときだけ（左に回ってから右に回り直した等は数が当てにならないので None）。
     dur は回っていた区間の秒数（無ければ None）。ターンが無ければ None"""
+    if TURN_PICK != "first":
+        return cv_turn_pick(summary, t0, t1, beat, by)
     for e in (summary or {}).get("events") or []:
         if not isinstance(e, dict) or e.get("type") != "Turn" or e.get("by") != by:
             continue
@@ -989,13 +1118,19 @@ def prefer_follower_turn(mv, fspin):
             or fspin["turns"] < 1:
         return None
     move = mv.get("move")
-    if not (by == "leader" or move in FOLLOWER_FIRST_MOVES):
+    to_cbl = FILL_CBL_TURN and move == "cbl"
+    if not (by == "leader" or move in FOLLOWER_FIRST_MOVES or to_cbl):
         return None
     if by == "leader":
         mv["leaderTurn"] = {"direction": turn.get("direction"), "rotations": turn.get("rotations")}
     d = fspin["dir"]
     mv["turn"] = {"by": "follower", "direction": d, "rotations": max(0.5, min(MAX_ROT, round_half(fspin["turns"]))),
                   "directionSource": "cv", "rotationSource": "cv"}
+    if move in CBL_MOVES:
+        # CBL の行の女性のターン = CBL＋ターン（通過の半回転は analyze_pair が女性のターンに出さない。README 23）
+        mv["move"] = "cbl_inside_turn" if d == "left" else "cbl_outside_turn"
+        mv["name"] = DEFAULT_NAME[mv["move"]]
+        return f"followerTurn:{move}->{mv['move']}"
     mv["move"] = f"{d}_turn"
     mv["name"] = DEFAULT_NAME[mv["move"]]
     return f"followerTurn:{move}->{mv['move']}"
@@ -1125,7 +1260,7 @@ def check_inside_turns(out, beat, timing, summary=None):
             fix = f"turnNearSwap:{mv['move']}->{target}@{near[1]}"
             mv["move"] = target
             mv["passSide"] = mv.get("passSide") if mv.get("passSide") in ("left", "right") else None
-            rot = apply_rotation_prior(mv, cv_spin_info(summary, t0, t1), beat)
+            rot = apply_rotation_prior(mv, cv_spin_info(summary, t0, t1, beat=beat), beat)
             if rot:
                 mv["rotationCheck"] = rot
             mv["name"] = turn_name(mv) or DEFAULT_NAME[target]
@@ -1134,6 +1269,64 @@ def check_inside_turns(out, beat, timing, summary=None):
             mv["passCheck"] = mv.get("passCheck") or fix
             mark_uncertain(mv)
             fixes.append(fix)
+    return fixes
+
+
+def refresh_row(mv, timing):
+    """技の種類を付け替えた行の名前・ターンの kind・steps を作り直す"""
+    turn = mv.get("turn")
+    if isinstance(turn, dict):
+        turn.pop("kind", None)
+        kind = turn_kind(turn)
+        if kind:
+            turn["kind"] = kind
+    mv["name"] = turn_name(mv) or DEFAULT_NAME.get(mv.get("move"), mv.get("name"))
+    mv["steps"] = template_steps(mv, timing)
+    mv["stepsSource"] = "template"
+
+
+def move_ghost_cbl_back(out, summary, timing, beat):
+    """入れ替わりの無い CBL 系の行（幽霊の CBL）の直前の行に、持ち主の無い入れ替わり（CBL 系でない行の swapAt）が
+    あるとき、CBL を前の行に移す（Claude の CBL の行が 1 行遅れた形。2fda2815 11.1〜13.8: 13.2 の CBL が
+    「右回りターン」の行の 7 拍目に入り、次の行が入れ替わりの無い「リバース CBL」になる）。
+    前の行は CBL 系（女性のターンがあれば CBL＋ターン、男のターンは leaderTurn へ）、幽霊の行は女性のターンが
+    あればその場のターン、無ければベーシック。両方に「?」を付ける。戻り値は直した印のリスト"""
+    fixes = []
+    for k in range(1, len(out)):
+        mv, prev = out[k], out[k - 1]
+        s, ps = mv.get("sides"), prev.get("sides")
+        if mv.get("move") not in CBL_MOVES or not s or s.get("swapAt") or not ps or not ps.get("swapAt") \
+                or prev.get("move") in CBL_MOVES:
+            continue
+        t0 = mv["start"]
+        t1 = out[k + 1]["start"] if k + 1 < len(out) else t0 + mv["counts"] * beat
+        if cv_swaps_in(summary, t0, t1):
+            continue
+        # 前の行を CBL 系に
+        pturn = prev.get("turn") if isinstance(prev.get("turn"), dict) else None
+        old_prev, old_mv = prev.get("move"), mv.get("move")
+        if pturn and pturn.get("by") == "leader":
+            prev["leaderTurn"] = {"direction": pturn.get("direction"), "rotations": pturn.get("rotations")}
+            prev["turn"] = pturn = None
+        d = (pturn or {}).get("direction") if (pturn or {}).get("by") in ("follower", "both") else None
+        prev["move"] = "cbl_inside_turn" if d == "left" else "cbl_outside_turn" if d == "right" else "cbl"
+        if prev.get("passSide") not in ("left", "right"):
+            prev["passSide"] = mv.get("passSide") if mv.get("passSide") in ("left", "right") else None
+        # 幽霊の行をターン（無ければベーシック）に
+        turn = mv.get("turn") if isinstance(mv.get("turn"), dict) else None
+        if turn and turn.get("by") in ("follower", "both") and turn.get("direction") in DIR_SHORT:
+            mv["move"] = f"{turn['direction']}_turn"
+        elif turn and turn.get("by") == "leader":
+            mv["move"] = "leader_turn"
+        else:
+            mv["move"] = "basic"
+        mv["passSide"] = None
+        for row, old in ((prev, old_prev), (mv, old_mv)):
+            row.setdefault("claudeName", row.get("name"))
+            row["passCheck"] = f"ghostCblBack:{old}->{row['move']}"
+            refresh_row(row, timing)
+            mark_uncertain(row)
+        fixes.append(f"ghostCblBack@{t0}")
     return fixes
 
 
@@ -1278,13 +1471,22 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
     fixes = []
     for k, mv in enumerate(out):
         t0 = mv["start"]
+        if EARLY_SWAP_BEATS and k > 0 and out[k - 1].get("move") in CBL_MOVES \
+                and (out[k - 1].get("sides") or {}).get("swapAt") and (mv.get("sides") or {}).get("swapAt"):
+            # 行の頭の EARLY_SWAP_BEATS 拍以内の入れ替わりだけなら、前の CBL の行の 2 回目の通過の遅れた検出
+            s = mv["sides"]
+            early = [x for x in s["swapAt"] if x < t0 + EARLY_SWAP_BEATS * beat]
+            if early and len(early) == len(s["swapAt"]):
+                s["swapAt"] = []
+                out[k - 1]["sides"]["swapAt"] = out[k - 1]["sides"]["swapAt"] + early
+                mv["swapEarly"] = early
         t1 = out[k + 1]["start"] if k + 1 < len(out) else t0 + mv["counts"] * beat
-        ft = prefer_follower_turn(mv, cv_spin_info(summary, t0, t1))
+        ft = prefer_follower_turn(mv, cv_spin_info(summary, t0, t1, beat=beat))
         if ft:
             mv["turnCheck"] = ft
             mark_uncertain(mv)
         before = mv.get("move")
-        flip = check_direction(mv, cv_spin(summary, t0, t1))
+        flip = check_direction(mv, cv_spin(summary, t0, t1, beat=beat))
         if flip:
             mv["directionCheck"] = flip
             mark_uncertain(mv)
@@ -1302,8 +1504,13 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
             mv["swapCheck"] = ms
             fixes.append(ms)
             mark_uncertain(mv)
+            if FILL_CBL_TURN and not mv.get("turnCheck"):
+                # other / wrap / copa から CBL にした行も、女性の CV のターンがあれば CBL＋ターン
+                ft = prefer_follower_turn(mv, cv_spin_info(summary, t0, t1, beat=beat))
+                if ft:
+                    mv["turnCheck"] = ft
         # 回転数を技の普通の回数へ（技の種類が決まった後で）
-        rot = apply_rotation_prior(mv, cv_spin_info(summary, t0, t1), beat)
+        rot = apply_rotation_prior(mv, cv_spin_info(summary, t0, t1, beat=beat), beat)
         if rot:
             mv["rotationCheck"] = rot
         # リードする手: 片手でつないでいれば男性のその手、無ければ CV が見た頭上に上がった手
@@ -1334,6 +1541,8 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
         mv["steps"] = steps or template_steps(mv, timing)
         mv["stepsSource"] = "claude" if steps else "template"
 
+    if GHOST_CBL_BACK:
+        fixes += move_ghost_cbl_back(out, summary, timing, beat)
     fixes += check_inside_turns(out, beat, timing, summary)
 
     routine["rawMoves"] = raw

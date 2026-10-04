@@ -1424,6 +1424,10 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid):
             seq += "R" if right else "L"
             net += 180 if right else -180
         if seq:
+            if isinstance(e.get("spin"), dict) and "spinCoarse" not in e:
+                # 10fps の向きの読み（spin_hint。反転ペアの向き・21〜23 の直し込み）を残す。全フレームの取り直しは
+                # 回転数には効くが向きを上書きして外すことがあり、振付シートは向きを 10fps から読む（README 25）
+                e["spinCoarse"] = e["spin"]
             e["spin"] = {
                 "seq": seq, "netDeg": net, "runs": _spin_runs(seq),
                 "from": round(flip_times[0], 2), "to": round(flip_times[-1], 2), "source": "fullFrames",

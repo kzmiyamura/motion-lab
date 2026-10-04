@@ -12,8 +12,9 @@
         （行にターンが無い・向きが無いものは外れ。ターンの行かどうかは turn で測っている）
   rot   上の行のうち回転数が分かるものの、回転数の誤差の平均（|行の rotations − 正解の合計回転数|）
   side  正解の入れ替わり（optional でない）を覆う CBL 系の行の sides.followerStart が正解の from と合うか
+  turnPrec  女性のターンのある行のうち、正解の女性のターン（optional 含む）が入っている行の割合（turnsComplete の動画だけ）
 
-Usage: python eval_routine_set.py [--job screenrec=<jobId> ...] [--jobs-dir <dir>] [--json out.json] [--verbose]
+Usage: python eval_routine_set.py [--job screenrec=<jobId> ...] [--jobs-dir <dir>] [--db <motionlab.db>] [--json out.json] [--verbose]
 """
 import argparse
 import glob
@@ -24,12 +25,13 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from eval_routine_grid import evaluate, cv_swaps_from, rows_with_end, covering, is_cbl, _num  # noqa: E402
+from eval_routine_grid import evaluate, cv_swaps_from, rows_with_end, covering, is_cbl, has_turn, _num  # noqa: E402
 
 SERVER = os.path.join(HERE, "..")
 JOBS_DIR = os.path.join(SERVER, "storage", "analysis-jobs")
 GT_DIR = os.path.join(HERE, "ground_truth")
-DB_PATH = os.path.join(SERVER, "data", "motionlab.db")
+# MOTION_LAB_DB: 別の場所の DB を読む（worktree から本体の DB を引く等。--db でも指定できる）
+DB_PATH = os.environ.get("MOTION_LAB_DB") or os.path.join(SERVER, "data", "motionlab.db")
 
 # 正解表の名前 → 動画 ID の先頭（名前が ID の先頭 8 桁でないもの）
 NAME_TO_VIDEO = {"img1884": "d5e96a5b", "screenrec": "cb822fe5"}
@@ -94,8 +96,21 @@ def extra_checks(moves, gt, beat, verbose):
         fs = (r[2].get("sides") or {}).get("followerStart")
         side["n"] += 1
         side["hit"] += fs == c["from"]
+    # turnPrec: 女性のターンのある行のうち、正解の女性のターン（optional 含む）が入っている行の割合。
+    # 正解表がターンを全部拾っている動画（turnsComplete が false でない）だけ数える
+    tp = {"hit": 0, "n": 0}
+    if gt.get("turnsComplete", True):
+        gturns = [tr["t"] for tr in gt.get("turns", []) if tr.get("by") == "follower"]
+        for s, e, m in rows:
+            if s >= hi or e <= lo or not has_turn(m):
+                continue
+            tp["n"] += 1
+            tp["hit"] += any(s <= t < e for t in gturns)
+            if verbose and not any(s <= t < e for t in gturns):
+                print(f"    turnFP row {s:6.2f} {m.get('move')} {m.get('name')}")
     acc = lambda x: round(x["hit"] / x["n"], 3) if x["n"] else None  # noqa: E731
     return {
+        "turnPrec": {**tp, "acc": acc(tp)},
         "dir": {**d, "acc": acc(d)},
         "rot": {"n": len(rot_err), "meanAbsErr": round(sum(rot_err) / len(rot_err), 3) if rot_err else None},
         "side": {**side, "acc": acc(side)},
@@ -107,19 +122,20 @@ def main():
     a.add_argument("--job", action="append", default=[], help="名前=ジョブID（既定は routine の入った最新のジョブ）")
     a.add_argument("--json", help="指標を JSON で書き出す")
     a.add_argument("--jobs-dir", help="result.json / measurements.json をこの下の <ジョブID>/out から読む（正規化し直した写しの採点用。ジョブの選び方は同じ）")
+    a.add_argument("--db", default=DB_PATH, help="ジョブを選ぶ DB（全部の動画を --job で指定すれば無くてよい）")
     a.add_argument("--verbose", "-v", action="store_true")
     args = a.parse_args()
     forced = dict(x.split("=", 1) for x in args.job)
-    db = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True) if os.path.exists(args.db) else None
     report = {}
     keys = ("cbl", "swap", "cblRows", "rowAgree", "turn")
-    tot = {k: [0, 0] for k in keys + ("dir", "side")}
+    tot = {k: [0, 0] for k in keys + ("dir", "side", "turnPrec")}
     rot_all = []
-    print(f"{'video':10s} {'job':8s} rows  " + "  ".join(f"{k:>9s}" for k in keys) + "      dir     side  rotErr")
+    print(f"{'video':10s} {'job':8s} rows  " + "  ".join(f"{k:>9s}" for k in keys) + "      dir     side  turnPrec  rotErr")
     for path in sorted(glob.glob(os.path.join(GT_DIR, "*.json"))):
         name = os.path.splitext(os.path.basename(path))[0]
         gt = json.load(open(path, encoding="utf-8"))
-        jid = forced.get(name) or latest_routine_job(db, NAME_TO_VIDEO.get(name, name))
+        jid = forced.get(name) or (latest_routine_job(db, NAME_TO_VIDEO.get(name, name)) if db else None)
         if not jid:
             print(f"{name:10s} （routine の入ったジョブが無い）")
             report[name] = None
@@ -137,14 +153,14 @@ def main():
         ev.update(extra_checks(routine["moves"], gt, beat, args.verbose))
         ev["job"] = jid
         report[name] = ev
-        for k in keys + ("dir", "side"):
+        for k in keys + ("dir", "side", "turnPrec"):
             tot[k][0] += ev[k]["hit"]
             tot[k][1] += ev[k]["n"]
         if ev["rot"]["meanAbsErr"] is not None:
             rot_all += [ev["rot"]["meanAbsErr"]] * ev["rot"]["n"]
         cell = lambda x: f"{x['hit']:>2}/{x['n']:<2}={x['acc'] if x['acc'] is not None else '-':<5}"  # noqa: E731
         print(f"{name:10s} {jid[:8]} {ev['rows']:4d}  " + " ".join(cell(ev[k]) for k in keys)
-              + f" {cell(ev['dir'])} {cell(ev['side'])} {ev['rot']['meanAbsErr']} (n={ev['rot']['n']})")
+              + f" {cell(ev['dir'])} {cell(ev['side'])} {cell(ev['turnPrec'])} {ev['rot']['meanAbsErr']} (n={ev['rot']['n']})")
     total = {k: {"hit": h, "n": n, "acc": round(h / n, 3) if n else None} for k, (h, n) in tot.items()}
     total["rot"] = {"n": len(rot_all), "meanAbsErr": round(sum(rot_all) / len(rot_all), 3) if rot_all else None}
     report["total"] = total

@@ -541,3 +541,74 @@ export async function getJobDetail(baseUrl: string, jobId: string): Promise<Anal
 - [ ] AnalysisReportModal
 - [ ] ThinkCentre: claude CLI インストール + Max ログイン（server/CLAUDE.md に手順追記）
 - [ ] 実動画E2E → エスカレーション要否の初回判断（基本設計 §1.4 のレベル0で開始）
+
+
+---
+
+## 13. 汎用 preset `general` と、新しい趣味のフォルダの作り方
+
+### 13.1 段階フラグ（`PresetDef.stages`）
+
+`jobWorker.runJob` の各段階は `PresetDef.stages` のフラグで使うかどうかを選ぶ。`salsa-pair` は全部 `true`（従来と同じ順番・同じ引数）。
+
+| フラグ | 段階 | salsa-pair | general |
+|---|---|---|---|
+| `leaderAnchor` | CV 前の Claude リーダーアンカー（`runClaudeAnchor`） | true | false |
+| `refineEvents` | `refine_events.py`（`REFINE_EVENTS=1` のときのみ） | true | false |
+| `turnJudge` | ターンの向き判定（`judgeTurns`、`TURN_JUDGE` のときのみ） | true | false |
+| `beats` | 音声 → `analyze_beats.py`（拍・BPM） | true | **true** |
+| `onBeat` | `analyze_onbeat.py`（On1/On2 材料） | true | false |
+| `contestedFrames` / `eventStrips` | contested・技イベントの画像 | true | false |
+| `debugVideos` | デバッグ動画・骨格人形動画の変換 | true | false |
+| `normalizeRoutine` / `moveFrames` / `sceneFrames` | Claude 後の振付シート化・場面画像 | true | false |
+
+ほかに `promptFile`（Claude に渡す固定プロンプト。省略時 `runner-prompt.md`）と `copySalsaKnowledge`（技辞典の写し）がある。
+新しい種目専用の処理が要るときは、まず `general` + 指示書で足りるか試し、足りなければ段階を足した新 preset を作る。
+
+### 13.2 general が行うこと
+
+1. `analysis/analyze_general.py`（YOLOv8s-pose、約 10fps）— 映っている人ごとの骨格の時系列（画面上の近さによる簡単な追跡）、
+   動きの大きさの時系列（胴の長さ/秒）、等間隔 + 動きのピークで最大 12 枚のキーフレーム JPEG（`out/keyframes/`）を書く。
+   結果は `out/measurements.json`（`summary` に人ごとの要約・動きのピーク・キーフレーム一覧）。サルサ専用の判定は入っていない
+2. 動画に音声があれば `analyze_beats.py` で `summary.beatGrid` を足す（無音・不明瞭なら `null`）
+3. Claude（`prompts/general-prompt.md`）— 指示書が何を見てどう書くかの唯一の指示。measurements.json とキーフレームを見て
+   `out/report.md` と `out/result.json`（`{summary, findings: [{t, title, detail}], limitations}`）を書く
+
+指示書の frontmatter は `preset: general`（`PUT /api/folders/:id/spec` の検証は `PRESETS` のキーで判定するので自動で通る）。
+
+### 13.3 新しい趣味のフォルダを作る手順
+
+1. フォルダを作り、下の雛形を指示書として保存する（`preset: general`）
+2. 動画をフォルダに移すと解析ジョブが積まれ、`report.md` が付く
+3. レポートを読み、「見てほしい観点が足りない」「根拠の書き方が曖昧」などを指示書に足して `reanalyze` で一括再解析する。これを繰り返して指示書を育てる
+
+指示書の雛形（目的 / 見る観点 / 判断のヒント / レポート形式 / 注意）:
+
+```markdown
+---
+preset: general
+version: 1
+---
+
+# <種目名> の動画解析
+
+## 目的
+<誰の何を良くするための解析か。1〜2 文>
+
+## 見る観点
+- <観点1>: <何を・どの瞬間に見るか>
+- <観点2>: ...
+
+## 判断のヒント
+- <計測値（動きのピーク・骨格の角度など）と、見た目で確かめる場面の対応>
+- <よくある見間違い>
+
+## レポートの形式
+<見出し・順番・時刻の書き方・指摘の粒度。例: 「概要」「良い点 3 つ」「直す点 3 つ（時刻つき）」>
+
+## 注意
+- 画像で確かめられないことは書かない
+- 映っていない・隠れている場面は「判断できない」と書く
+```
+
+具体例は `docs/examples/folder-spec-softball-batting.md`（ソフトボールのバッティング）。storage ではなく docs に置く雛形で、使うときは中身をフォルダの指示書にコピーする。

@@ -186,9 +186,17 @@ export function parseJudge(text: string): { events: unknown[] } | null {
   }
 }
 
-export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSignal): Promise<ClaudeRunResult> {
-  const promptText = `${readFileSync(PROMPT_PATH, 'utf-8')}\n\n---\n\n${specMarkdown}`;
-  copyKnowledge(jobDir);
+export interface RunClaudeOptions {
+  /** prompts/ 内のファイル名。省略時は runner-prompt.md（salsa-pair） */
+  promptFile?: string;
+  /** サルサ用の技辞典を knowledge/ に写すか（省略時 true = 従来どおり） */
+  copySalsaKnowledge?: boolean;
+}
+
+export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSignal, opts: RunClaudeOptions = {}): Promise<ClaudeRunResult> {
+  const promptPath = opts.promptFile ? path.resolve(__dirname, '../prompts', path.basename(opts.promptFile)) : PROMPT_PATH;
+  const promptText = `${readFileSync(promptPath, 'utf-8')}\n\n---\n\n${specMarkdown}`;
+  if (opts.copySalsaKnowledge ?? true) copyKnowledge(jobDir);
 
   return new Promise((resolve, reject) => {
     const proc = spawn(CLAUDE_BIN, [

@@ -208,6 +208,15 @@ class SwapGridTest(unittest.TestCase):
         self.assertEqual(res["routine"]["moves"], first)
 
 
+class SwapTimesTest(unittest.TestCase):
+    def test_swap_times_use_hip_crossing(self):
+        # analyze_pair は CBL の t を通過に寄せ、腰の交差の時刻を tCross に残す。格子（SWAP_BEAT）は交差で合わせる
+        from normalize_routine import swap_times
+        summary = {"events": [{"t": 4.6, "tCross": 5.0, "type": "CBL"}, {"t": 9.0, "type": "CBL"},
+                              {"t": 7.0, "type": "Turn", "by": "follower"}]}
+        self.assertEqual(swap_times(summary), [5.0, 9.0])
+
+
 class EvalRoutineGridTest(unittest.TestCase):
     def test_counts_cbl_rows_and_swap_phase(self):
         gt = {"evalRange": [0, 20], "cbl": [

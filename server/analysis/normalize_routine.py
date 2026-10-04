@@ -208,9 +208,15 @@ def fit_grid(starts, unit_guess):
 # ---------------------------------------------------------------- CV の入れ替わりから格子を当てる（無音のとき）
 
 def swap_times(summary):
-    """measurements.json の summary.events から CV の左右入れ替わり（CBL）の時刻"""
+    """measurements.json の summary.events から CV の左右入れ替わり（CBL）の時刻。
+    SWAP_BEAT は腰の交差の時刻で合わせてあるので、通過に寄せた t ではなく tCross（あれば）を使う"""
     ev = (summary or {}).get("events") or []
-    return sorted(e["t"] for e in ev if isinstance(e, dict) and e.get("type") == "CBL" and _num(e.get("t")))
+    return sorted(cross_t(e) for e in ev if isinstance(e, dict) and e.get("type") == "CBL" and _num(e.get("t")))
+
+
+def cross_t(e):
+    """CBL イベントの腰の交差の時刻（tCross が無い古い出力は t）"""
+    return e["tCross"] if _num(e.get("tCross")) else e["t"]
 
 
 def swap_beat_for(summary):
@@ -774,8 +780,8 @@ def cv_pass_side(summary, t0, t1):
     for e in (summary or {}).get("events") or []:
         if not isinstance(e, dict) or e.get("type") != "CBL" or not _num(e.get("t")):
             continue
-        if t0 - 0.5 <= e["t"] < t1:
-            side = (e.get("pass") or {}).get("side")
+        if t0 - 0.5 <= cross_t(e) < t1:
+            side =(e.get("pass") or {}).get("side")
             if side in ("left", "right"):
                 return side
     return None
@@ -786,8 +792,8 @@ def cv_lead_hand(summary, t0, t1):
     for e in (summary or {}).get("events") or []:
         if not isinstance(e, dict) or e.get("type") != "CBL" or not _num(e.get("t")):
             continue
-        if t0 - 0.5 <= e["t"] < t1:
-            hr = e.get("handRaise") or {}
+        if t0 - 0.5 <= cross_t(e) < t1:
+            hr =e.get("handRaise") or {}
             if hr.get("raised") and hr.get("hand") in ("L", "R"):
                 return hr["hand"]
     return None

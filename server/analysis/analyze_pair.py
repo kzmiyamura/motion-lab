@@ -411,6 +411,14 @@ EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
 # 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
 CBL_COOLDOWN_SEC = 0.6
+# CBL の時刻は腰の交差（10fps で新しい側に最初に読めたコマ）から一定の遅れを引いて、実際の通過の瞬間に寄せる。
+# 腰の交差は通過より遅れる（refine_events の計測で正解の通過→交差の遅れは 47 件の中央値 +0.41 秒）。
+# 元の交差の時刻は tCross に残し、通る側・手の高さ・ホールド・男のターンの随伴フィルタ、振付シートの格子
+# （normalize_routine の SWAP_BEAT は交差の時刻で合わせてある）、refine_events はそちらを使う。
+# 10/4、正解表 5 本（tracks モード）: CBL P/R/F1 .733/.821/.775 → .819/.881/.849（1230b3d5 .600/.774/.676 →
+# .757/.903/.824、ほかの 4 本は不変）。0.2 で .829、0.3 で .835、0.5 で .855（ただし 0.5 は 1230b3d5 の
+# 後半 120 秒以降のように遅れの小さい区間で前に行き過ぎる。中央値に合わせて 0.4）
+CBL_TIME_SHIFT_SEC = 0.4
 # CBL の判定から外す「背の縮んだ」コマ: 本人の前後 CBL_SIZE_WIN_SEC 秒の bbox 高さ中央値の
 # この割合未満。ペアが重なって片方が隠れたコマで、背景の小さいダンサー（ペアの 0.55〜0.67 倍）が
 # 2人目として拾われ、左右の偽の入れ替わりになる（1230b3d5 の CBL 誤検出の主因。57〜60秒のディップ等）。
@@ -1066,7 +1074,8 @@ def detect_events(draw_frames, leader_pid):
     リーダーの単独ターン（フック ターン等）は近傍に何も無ければ検出される
     """
     cbl_times = detect_cbl(draw_frames)
-    events = [{"t": t, "type": "CBL", "by": "pair", "hold": detect_hold(draw_frames, t, leader_pid),
+    events = [{"t": round(t - CBL_TIME_SHIFT_SEC, 2), "tCross": t, "type": "CBL", "by": "pair",
+               "hold": detect_hold(draw_frames, t, leader_pid),
                "pass": detect_pass_side(draw_frames, t, leader_pid),
                "handRaise": detect_hand_raise(draw_frames, t, leader_pid)}
               for t in cbl_times]

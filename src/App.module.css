@@ -4,7 +4,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 2rem 1rem 3rem;
+  /* ステータスバー（black-translucent でページの上に重なる）とホームバーの分を空ける */
+  padding: calc(2rem + env(safe-area-inset-top, 0px)) 1rem calc(3rem + env(safe-area-inset-bottom, 0px));
   background: var(--color-bg, #080814);
   color: var(--color-fg, #e0e0ff);
   font-family: system-ui, -apple-system, sans-serif;
@@ -388,7 +389,7 @@
 
 @media (max-width: 480px) {
   .main {
-    padding: 1.25rem 0.75rem 2rem;
+    padding: calc(1.25rem + env(safe-area-inset-top, 0px)) 0.75rem calc(2rem + env(safe-area-inset-bottom, 0px));
   }
 
   .header {

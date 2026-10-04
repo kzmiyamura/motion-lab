@@ -19,6 +19,11 @@
     grid-template-rows: minmax(0, 1fr);
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
+
+  /* 左の列も下端まで届くので、ホームバーの分を空ける */
+  .top {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
 }
 
 /* 広い画面（PC）: 中央に縦長の列 */

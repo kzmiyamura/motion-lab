@@ -10,7 +10,7 @@ const B = 0.4; // 1 拍 0.4 秒（150 BPM）、8 カウント = 3.2 秒
 function row(index: number, start: number | null, end: number | null, name = `技${index + 1}`): SheetRow {
   return {
     index, no: index + 1, start, end, time: '', counts: '1-8', name, steps: [],
-    hold: null, turn: null, pass: null, uncertain: false, diagram: null,
+    hold: null, turn: null, pass: null, uncertain: false, diagram: null, startPos: null,
   };
 }
 

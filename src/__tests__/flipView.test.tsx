@@ -13,6 +13,7 @@ import {
   clampPage, dragOffset, frameAt, frameBeats, frameCaption, frameDurationsMs, frameSpans, keyStep, loadReportView,
   loopTime, moveWindow, pageLabel, parseFlipIndex, preloadUrls, rowCounts, saveReportView, sourceFromFrameSet,
   splitStrip, stripTileCount, swipeStep, VIEW_STORAGE_KEY, type FlipFrame,
+  FLIP_SPEEDS, SPEED_STORAGE_KEY, loadFlipSpeed, saveFlipSpeed,
 } from '../engine/flipView';
 import { FlipView } from '../components/FlipView';
 
@@ -21,7 +22,7 @@ const BEAT = 0.32;
 function row(over: Partial<SheetRow> = {}): SheetRow {
   return {
     index: 0, no: 1, start: 10, end: 10 + 8 * BEAT, time: '0:10', counts: '1-8', name: 'CBL',
-    steps: [], hold: null, turn: null, leaderTurn: null, pass: null, uncertain: false, diagram: null, ...over,
+    steps: [], hold: null, turn: null, leaderTurn: null, pass: null, uncertain: false, diagram: null, startPos: null, ...over,
   };
 }
 
@@ -69,10 +70,41 @@ describe('めくり: コマの時間割', () => {
     expect(loopTime(10.5, win)).toBe(10.5);
   });
 
-  it('コマの大きな字は「2 通過」', () => {
+  it('コマの大きな字は「2 通過」。拍の間は「2&」、最初のコマは立ち位置', () => {
     expect(frameCaption({ count: 2, label: '通過' })).toBe('2 通過');
     expect(frameCaption({ count: 4 })).toBe('4');
     expect(frameCaption({})).toBe('');
+    expect(frameCaption({ count: 2, half: true })).toBe('2&');
+    expect(frameCaption({ half: true })).toBe('&');
+    expect(frameCaption({ count: 1, label: 'スタート（女は左）' }, 0, '男右・女左')).toBe('1 男右・女左');
+    expect(frameCaption({ count: 1, label: 'スタート（女は左）' }, 0, null)).toBe('1 スタート（女は左）');
+    expect(frameCaption({ count: 3, label: '通過' }, 4, '男右・女左')).toBe('3 通過');
+  });
+
+  it('半拍のコマ（新しい flip[]）も 1 拍のコマ（古い flip[]）も時刻どおりに並ぶ', () => {
+    const half: FlipFrame[] = Array.from({ length: 16 }, (_, k) => ({
+      url: `h${k}`, t: 10 + (k * BEAT) / 2, count: Math.floor(k / 2) + 1, ...(k % 2 ? { half: true } : {}),
+    }));
+    const spans = frameSpans(half, win, BEAT);
+    expect(frameBeats(spans, BEAT).every(b => Math.abs(b - 0.5) < 1e-6)).toBe(true);
+    // 0.25 倍: 半拍 = 0.16 秒 → 0.64 秒（壁時計）
+    expect(frameDurationsMs(spans, 0.25).map(Math.round)[0]).toBe(640);
+    expect(frameAt(spans, 10 + 1.6 * BEAT)).toBe(3);
+    const old: FlipFrame[] = Array.from({ length: 8 }, (_, k) => ({ url: `o${k}`, t: 10 + k * BEAT, count: k + 1 }));
+    expect(frameBeats(frameSpans(old, win, BEAT), BEAT).every(b => Math.abs(b - 1) < 1e-6)).toBe(true);
+  });
+
+  it('速さは 0.25 / 0.5 / 1 倍、既定は 0.25 倍。保存した速さを覚える', () => {
+    localStorage.clear();
+    expect(FLIP_SPEEDS).toEqual([0.25, 0.5, 1]);
+    expect(loadFlipSpeed()).toBe(0.25);
+    localStorage.setItem('motionlab.flipSpeed', '0.5'); // 前の既定で保存された値は引き継がない
+    expect(loadFlipSpeed()).toBe(0.25);
+    saveFlipSpeed(0.5);
+    expect(loadFlipSpeed()).toBe(0.5);
+    localStorage.setItem(SPEED_STORAGE_KEY, '3');
+    expect(loadFlipSpeed()).toBe(0.25);
+    localStorage.clear();
   });
 });
 
@@ -128,6 +160,20 @@ describe('めくり: index.json の読み取り（v1 / v2 / flip）', () => {
     expect(b.frames).toHaveLength(1);
     expect(b.frames[0].count).toBeUndefined(); // 1〜8 の外は捨てる
     expect(m.get(2)).toEqual({ kind: 'strip', frames: [], strip: 'https://h/s2.jpg' });
+  });
+
+  it('半拍の flip[]: half の「&」は印にし、説明には残さない', () => {
+    const json = { moves: [{ index: 0, start: 0.1, flip: [
+      { t: 0.1, url: '/f0.jpg', count: 1, label: '' },
+      { t: 0.26, url: '/f1.jpg', count: 1, label: '&', half: true },
+      { t: 0.42, url: '/f2.jpg', count: 2, label: '男が下がる' },
+    ] }] };
+    const fr = parseFlipIndex(json, rows).get(0)!.frames;
+    expect(fr[1]).toMatchObject({ count: 1, half: true });
+    expect(fr[1].label).toBeUndefined();
+    expect(frameCaption(fr[1])).toBe('1&');
+    expect(fr[2].half).toBeUndefined();
+    expect(frameCaption(fr[2])).toBe('2 男が下がる');
   });
 
   it('開始時刻が食い違う（routine が書き直された）行・知らない行は使わない', () => {
@@ -193,6 +239,7 @@ describe('めくり / 一覧 の選び方', () => {
 // ─── 画面 ───────────────────────────────────────────────────────────────────
 
 const RESULT = {
+  leader: { side: 'right' },
   routine: {
     timing: 'on2',
     grid: { beatSec: BEAT },
@@ -238,14 +285,34 @@ describe('FlipView', () => {
   it('1 技 1 ページ: 名前・カウントの行・男女・ページ番号・前後の技名', () => {
     render(<FlipView sheet={sheetData()} frames={new Map()} framesIndex={INDEX} />);
     const page = currentPage();
-    expect(within(page).getByRole('heading', { name: 'ベーシック' })).toBeInTheDocument();
+    expect(within(page).getByRole('heading', { name: '男右・女左 → ベーシック' })).toBeInTheDocument();
     expect(within(page).getByText('1-2-3')).toBeInTheDocument();
     expect(within(page).getAllByText('男')).toHaveLength(2);
     expect(screen.getByTestId('flip-page')).toHaveTextContent('1 / 3');
     expect(screen.getByRole('button', { name: /次の技: #2 CBL/ })).toBeInTheDocument();
     // パラパラ漫画: flip[] の 8 コマ、最初のコマの字は「1」
     expect(screen.getByTestId('flipbook').querySelectorAll('img')).toHaveLength(8);
-    expect(screen.getByTestId('flip-caption')).toHaveTextContent('1');
+    // 最初のコマの字は立ち位置（画面の左右）
+    expect(screen.getByTestId('flip-caption')).toHaveTextContent('1男右・女左');
+  });
+
+  it('ターンの技は「男左・女右 → 女性ライトターン」（CBL で入れ替わった後）', async () => {
+    render(<FlipView sheet={sheetData()} frames={new Map()} framesIndex={INDEX} initialIndex={2} />);
+    expect(within(currentPage()).getByRole('heading', { name: '男左・女右 → 女性ライトターン' })).toBeInTheDocument();
+  });
+
+  it('半拍のコマ: 「1」「1&」「2」… と出る', () => {
+    const idx = { moves: [{ index: 0, start: 0, flip: Array.from({ length: 16 }, (_, k) => ({
+      t: Math.round((k * BEAT) / 2 * 1000) / 1000, url: `/h${k}.jpg`, count: Math.floor(k / 2) + 1,
+      label: k % 2 ? '&' : '', ...(k % 2 ? { half: true } : {}),
+    })) }] };
+    render(<FlipView sheet={sheetData()} frames={new Map()} framesIndex={idx} />);
+    expect(screen.getByTestId('flipbook').querySelectorAll('img')).toHaveLength(16);
+    fireEvent.click(screen.getByTestId('flipbook'));
+    fireEvent.change(screen.getByTestId('flip-scrubber'), { target: { value: '1' } });
+    expect(screen.getByTestId('flip-caption')).toHaveTextContent(/^1&$/);
+    fireEvent.click(screen.getByRole('button', { name: '次のコマ' }));
+    expect(screen.getByTestId('flip-caption')).toHaveTextContent(/^2$/);
   });
 
   it('← → キーで前後の技へ。上のコマも替わる。端で止まる', async () => {
@@ -294,8 +361,9 @@ describe('FlipView', () => {
     expect(screen.getByTestId('flip-page')).toHaveTextContent('2 / 3');
   });
 
-  it('タップで止めるとスライダーで 1 コマずつ。速度は 0.5 / 1 倍', async () => {
+  it('タップで止めるとスライダーで 1 コマずつ。速度は 0.25（既定）/ 0.5 / 1 倍', async () => {
     render(<FlipView sheet={sheetData()} frames={new Map()} framesIndex={INDEX} />);
+    expect(screen.getByRole('button', { name: '0.25×' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByTestId('flip-scrubber')).toBeNull();
     fireEvent.click(screen.getByTestId('flipbook'));
     const scrub = screen.getByTestId('flip-scrubber') as HTMLInputElement;
@@ -305,7 +373,8 @@ describe('FlipView', () => {
     expect(screen.getByTestId('flip-caption')).toHaveTextContent('3');
     fireEvent.click(screen.getByRole('button', { name: '1×' }));
     expect(screen.getByRole('button', { name: '1×' })).toHaveAttribute('aria-pressed', 'true');
-    expect(localStorage.getItem('motionlab.flipSpeed')).toBe('1');
+    expect(screen.getByRole('button', { name: '0.25×' })).toHaveAttribute('aria-pressed', 'false');
+    expect(localStorage.getItem(SPEED_STORAGE_KEY)).toBe('1');
   });
 
   it('古いジョブ（帯だけ）でも出る', () => {

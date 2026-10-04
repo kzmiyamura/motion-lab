@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import type { ChoreoSheetData, MoveFrameSet, SheetRow } from '../engine/choreoSheet';
 import {
-  FLIP_SPEEDS, clampPage, dragOffset, frameAt, frameCaption, frameSpans, keyStep, loadFlipSpeed, loopTime,
+  FLIP_SPEEDS, clampPage, dragOffset, frameAt, frameCaption, frameCount, frameLabel, frameSpans, keyStep, loadFlipSpeed, loopTime,
   moveWindow, pageLabel, parseFlipIndex, preloadUrls, saveFlipSpeed, sourceFromFrameSet, splitStrip, swipeStep,
   type FlipFrame, type FlipSource, type FlipSpeed, type MoveWindow,
 } from '../engine/flipView';
@@ -16,7 +16,7 @@ import styles from './FlipView.module.css';
  * 下の解説を指やマウスで左右にめくっていく）。
  *
  * - 上（約 55%）: 技のコマをカウントどおりの速さで繰り返し流す。タップで一時停止/再開、止めている間は
- *   スライダーと ◀ ▶ で 1 コマずつ。速度 0.5 / 1 倍。🔊 で練習モードと同じカウントのクリックを重ねる
+ *   スライダーと ◀ ▶ で 1 コマずつ。速度 0.25（既定） / 0.5 / 1 倍。🔊 で練習モードと同じカウントのクリックを重ねる
  * - 下: 1 技 1 ページの解説。指・マウスで横に払う / ← → キーで前後の技へ。上のコマも一緒に替わる
  * 画面いっぱいに重ねて出す（ReportModal の上）。純粋な計算は engine/flipView.ts
  */
@@ -202,9 +202,10 @@ function Flipbook({ row, source, beatSec, speed, onSpeed, clicks, onClicks, time
   };
 
   const cur = frames[Math.min(idx, frames.length - 1)];
-  const caption = cur ? frameCaption(cur) : '';
-  const countWord = cur?.count ? String(cur.count) : '';
-  const labelWord = cur?.label ?? '';
+  const curIdx = Math.min(idx, frames.length - 1);
+  const caption = cur ? frameCaption(cur, curIdx, row.startPos) : '';
+  const countWord = cur ? frameCount(cur) : '';
+  const labelWord = cur ? frameLabel(cur, curIdx, row.startPos) : '';
 
   return (
     <div className={styles.flipbook}>
@@ -291,6 +292,7 @@ function MovePage({ row }: { row: SheetRow }) {
         <span className={styles.counts}>{row.counts}</span>
       </div>
       <h2 className={styles.name}>
+        {row.startPos && <span className={sheetStyles.pos} data-testid="start-pos">{row.startPos} →</span>}{row.startPos && " "}
         {row.name}
         {row.uncertain && <span className={sheetStyles.q} title="推定を含む（自信が低い）" aria-label="推定">?</span>}
       </h2>

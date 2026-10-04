@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import {
   countAt, fmtRotations, holdLabel, moveFramesPending, parseChoreoSheet, parseMoveFrames, passLabel,
-  diagramFor, leaderTurnLabel, reportSummary, turnKind, turnLabel, TURN_LEGEND,
+  dancerTurnName, diagramFor, leaderTurnLabel, reportSummary, startPosLabel, turnKind, turnLabel, TURN_LEGEND,
 } from '../engine/choreoSheet';
 
 vi.mock('../engine/homeServer', async (importOriginal) => {
@@ -124,7 +124,7 @@ describe('choreoSheet（純関数）', () => {
     expect(s.beatSec).toBeCloseTo(0.625);
     expect(s.rows).toHaveLength(4);
     expect(s.rows[2]).toMatchObject({
-      no: 3, time: '0:14', counts: '1-8', name: 'CBL＋インサイドターン', start: 14.2, end: 19.4,
+      no: 3, time: '0:14', counts: '1-8', name: 'CBL＋女性レフトターン×1½（インサイド）', start: 14.2, end: 19.4,
       hold: '男の左手と女の右手 → 右手同士（握手）に持ち替え', turn: '女: 左回り（反時計回り）1½回転・インサイドターン', pass: '女が男の左側を通る', uncertain: true,
     });
     // steps は最大2行
@@ -135,8 +135,35 @@ describe('choreoSheet（純関数）', () => {
     expect(s.rows[1].steps).toEqual([]);
     expect(s.rows[0].uncertain).toBe(false);
     // name 省略時は技の語彙から。confidence が低い行は「?」。最後の行の終わりは counts × 拍
-    expect(s.rows[3]).toMatchObject({ name: '右ターン', counts: '1-16', turn: '女: 右回り（時計回り）1回転・アウトサイドターン', uncertain: true, hold: null });
+    expect(s.rows[3]).toMatchObject({ name: '女性ライトターン', counts: '1-16', turn: '女: 右回り（時計回り）1回転・アウトサイドターン', uncertain: true, hold: null });
     expect(s.rows[3].end).toBeCloseTo(19.4 + 16 * 0.625);
+  });
+
+  it('立ち位置（画面の左右）: 見えた側 > 前の終わり（通過で反対へ）> 男の側の反対', () => {
+    const s = parseChoreoSheet(JSON.stringify(RESULT))!;
+    expect(s.rows.map(r => r.startPos)).toEqual(['男右・女左', '男右・女左', '男左・女右', '男右・女左']);
+    const seen = parseChoreoSheet(JSON.stringify({ routine: { moves: [
+      { start: 0, move: 'basic', sides: { followerStart: 'right', followerEnd: 'right' } },
+      { start: 3, move: 'right_turn', turn: { by: 'follower', direction: 'right', rotations: 2 } },
+      { start: 6, move: 'basic', sides: { followerStart: 'left', followerEnd: 'left' } },
+    ] } }))!;
+    expect(seen.rows.map(r => r.startPos)).toEqual(['男左・女右', '男左・女右', '男右・女左']);
+    // 何も分からなければ出さない
+    expect(parseChoreoSheet(JSON.stringify({ routine: { moves: [{ start: 0, move: 'basic' }] } }))!.rows[0].startPos).toBeNull();
+    expect(startPosLabel('left')).toBe('男右・女左');
+  });
+
+  it('回る技の名前はダンサーの言い方（ライト = 回る人自身の右 = 時計回り）', () => {
+    const f = (dir: string, n: number) => ({ by: 'follower' as const, direction: dir as 'left' | 'right', rotations: n });
+    expect(dancerTurnName({ move: 'right_turn', turn: f('right', 2) })).toBe('女性ライトターン×2');
+    expect(dancerTurnName({ move: 'left_turn', turn: f('left', 1) })).toBe('女性レフトターン');
+    expect(dancerTurnName({ move: 'inside_turn', turn: f('left', 1.5) })).toBe('女性レフトターン×1½');
+    expect(dancerTurnName({ move: 'leader_turn', turn: { by: 'leader', direction: 'right', rotations: 1 } })).toBe('男性ライトターン');
+    expect(dancerTurnName({ move: 'cbl_outside_turn', turn: f('right', 1.5) })).toBe('CBL＋女性ライトターン×1½（アウトサイド）');
+    // 向きが分からない・回らない技は元の名前のまま
+    expect(dancerTurnName({ move: 'right_turn', turn: { by: 'follower', direction: null, rotations: 1 } })).toBeNull();
+    expect(dancerTurnName({ move: 'cbl', turn: f('left', 0.5) })).toBeNull();
+    expect(dancerTurnName({ move: 'basic', turn: null })).toBeNull();
   });
 
   it('動きから推定したテンポは「推定」と書き、格子の拍を使う', () => {
@@ -278,7 +305,10 @@ describe('ReportModal の振付シート表示', () => {
     const third = within(rows[2]);
     expect(third.getByText('#3')).toBeInTheDocument();
     expect(third.getByText('0:14')).toBeInTheDocument();
-    expect(third.getByText('CBL＋インサイドターン')).toBeInTheDocument();
+    expect(third.getByText('CBL＋女性レフトターン×1½（インサイド）')).toBeInTheDocument();
+    // 前の CBL で女性が右へ抜けた → この技は「男左・女右」から
+    expect(third.getByTestId('start-pos')).toHaveTextContent('男左・女右 →');
+    expect(within(rows[0]).getByTestId('start-pos')).toHaveTextContent('男右・女左 →');
     expect(third.getByLabelText('推定')).toBeInTheDocument();
     expect(third.getByText('5-6-7')).toBeInTheDocument();
     expect(third.getByText('頭上で回す')).toBeInTheDocument();
@@ -314,10 +344,10 @@ describe('ReportModal の振付シート表示', () => {
     await waitFor(() => expect(third.getAllByRole('img')).toHaveLength(5));
     const imgs = third.getAllByRole('img');
     expect(imgs[0]).toHaveAttribute('src', `${BASE}/analysis-output/${JOB_ID}/out/move_frames/03_014.2_0.jpg`);
-    expect(imgs[4]).toHaveAttribute('alt', '#3 CBL＋インサイドターン 5/5コマ目');
+    expect(imgs[4]).toHaveAttribute('alt', '#3 CBL＋女性レフトターン×1½（インサイド） 5/5コマ目');
     expect(third.getByTestId('choreo-shots')).toBeInTheDocument();
     // 見どころのコマには拍と説明（画像に焼かず文字で）
-    expect(imgs[1]).toHaveAttribute('alt', '#3 CBL＋インサイドターン 2/5コマ目 5拍目 通過');
+    expect(imgs[1]).toHaveAttribute('alt', '#3 CBL＋女性レフトターン×1½（インサイド） 2/5コマ目 5拍目 通過');
     expect(third.getAllByTestId('shot-caption')).toHaveLength(1);
     expect(third.getByTestId('shot-caption')).toHaveTextContent('5通過');
     // 上から見た図（SVG は読み上げず、下の説明を読む）
@@ -354,9 +384,9 @@ describe('ReportModal の振付シート表示', () => {
     const rows = await screen.findAllByTestId('choreo-row');
     expect(screen.queryByText(/0\.5×/)).toBeNull();
     fireEvent.click(rows[2]);
-    expect(await screen.findByText('#3 CBL＋インサイドターン（1-8）')).toBeInTheDocument();
+    expect(await screen.findByText('#3 CBL＋女性レフトターン×1½（インサイド）（1-8）')).toBeInTheDocument();
     expect(screen.getByText('0.5×')).toBeInTheDocument();
-    expect(rows[2]).toHaveAttribute('aria-label', '#3 CBL＋インサイドターン を再生');
+    expect(rows[2]).toHaveAttribute('aria-label', '#3 CBL＋女性レフトターン×1½（インサイド） を再生');
     // もう一度押すと閉じる
     fireEvent.click(rows[2]);
     await waitFor(() => expect(screen.queryByText('0.5×')).toBeNull());

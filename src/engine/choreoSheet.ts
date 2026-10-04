@@ -24,6 +24,8 @@ export type SheetRow = {
   time: string;
   counts: string;
   name: string;
+  /** 技の頭の立ち位置（動画の画面の左右そのまま）: 「男右・女左」。分からなければ null */
+  startPos: string | null;
   steps: SheetStep[];
   /** 例: 右手同士（握手）でつなぐ / 左手同士 → 右手同士に持ち替え */
   hold: string | null;
@@ -195,6 +197,48 @@ export function diagramFor(m: RoutineMove & { sides?: MoveSides | null }): MoveD
   };
 }
 
+/** 立ち位置（画面の左右。女性の側から）: left → 「男右・女左」 */
+export function startPosLabel(followerSide: 'left' | 'right' | null): string | null {
+  if (followerSide === 'left') return '男右・女左';
+  if (followerSide === 'right') return '男左・女右';
+  return null;
+}
+
+/** 女性が反対側へ抜ける技（sheetState の CBL_MOVES と同じ） */
+const PASS_MOVES = new Set(['cbl', 'cbl_inside_turn', 'cbl_outside_turn', 'reverse_cbl']);
+const TURN_EN = { right: 'ライト', left: 'レフト' } as const;
+const IN_PLACE_TURNS = new Set(['right_turn', 'left_turn', 'inside_turn', 'outside_turn']);
+const KIND_SHORT: Record<TurnKind, string> = { inside: 'インサイド', outside: 'アウトサイド' };
+
+/** 技名の回転数（1 回は付けない）: 2 → 「×2」、1.5 → 「×1½」（サーバーの rot_suffix と同じ） */
+function rotSuffix(n: unknown): string {
+  return typeof n === 'number' && n > 1 ? `×${fmtRotations(n)}` : '';
+}
+
+/**
+ * 回る技の名前をダンサーの言い方で: 「女性ライトターン×2」「男性レフトターン」「CBL＋女性レフトターン×1½（インサイド）」。
+ * ライト/レフト = 回る人自身の右/左（上から見て時計回り = ライト。turn.direction と同じ決まり）。
+ * インサイド/アウトサイドは今まで名前に出ていた CBL＋ターンだけ添える。向きが分からない・回る技でなければ null（元の名前のまま）
+ */
+export function dancerTurnName(m: Pick<RoutineMove, 'move' | 'turn' | 'holdStart' | 'holdEnd'>): string | null {
+  const t = m.turn as TurnLike | null | undefined;
+  if (!t || typeof t !== 'object') return null;
+  const d = t.direction === 'left' || t.direction === 'right' ? t.direction : null;
+  if (!d) return null;
+  const n = rotSuffix(t.rotations);
+  const move = String(m.move);
+  if (move === 'leader_turn' || t.by === 'leader') {
+    return move === 'leader_turn' || IN_PLACE_TURNS.has(move) ? `男性${TURN_EN[d]}ターン${n}` : null;
+  }
+  const who = t.by === 'both' ? '2人で' : '女性';
+  if (IN_PLACE_TURNS.has(move)) return `${who}${TURN_EN[d]}ターン${n}`;
+  if (move === 'cbl_inside_turn' || move === 'cbl_outside_turn') {
+    const kind = turnKind(t, m.holdStart, m.holdEnd);
+    return `CBL＋${who}${TURN_EN[d]}ターン${n}${kind ? `（${KIND_SHORT[kind]}）` : ''}`;
+  }
+  return null;
+}
+
 function isUncertain(m: RoutineMove, rawName: string): boolean {
   if (m.evidence === 'inferred' || m.confidence === 'doubtful') return true;
   if (typeof m.confidence === 'number' && m.confidence < LOW_CONFIDENCE) return true;
@@ -247,9 +291,20 @@ export function parseChoreoSheet(resultJson: string | null): ChoreoSheetData | n
   const beatSec = typeof gridBeat === 'number' && gridBeat > 0 ? gridBeat : hasBpm ? 60 / bpm : null;
 
   const rows: SheetRow[] = [];
+  // 女性の画面の側（立ち位置）: その行の sides.followerStart、無ければ前の行の終わり、最初は男の側の反対
+  let followerSide: 'left' | 'right' | null =
+    d.leader?.side === 'right' ? 'left' : d.leader?.side === 'left' ? 'right' : null;
   moves.forEach((raw, index) => {
     if (!raw || typeof raw !== 'object') return;
     const m = raw as RoutineMove & { steps?: unknown; sides?: MoveSides | null };
+    const fs = sideOf(m.sides?.followerStart), fe = sideOf(m.sides?.followerEnd);
+    if (fs) followerSide = fs;
+    const startPos = startPosLabel(followerSide);
+    // 終わりの側: 見えていればそれ、無ければ通過する技（CBL 系・男の左右を通る）なら反対側へ
+    if (fe) followerSide = fe;
+    else if (followerSide && (PASS_MOVES.has(String(m.move)) || m.passSide === 'left' || m.passSide === 'right')) {
+      followerSide = followerSide === 'left' ? 'right' : 'left';
+    }
     const rawName = (typeof m.name === 'string' && m.name.trim())
       || MOVE_LABEL[m.move as RoutineMoveId] || String(m.move ?? '技');
     const counts = typeof m.counts === 'number' && m.counts > 0 ? m.counts : 8;
@@ -267,7 +322,8 @@ export function parseChoreoSheet(resultJson: string | null): ChoreoSheetData | n
       end,
       time: start === null ? '' : fmtClock(start),
       counts: `1-${counts}`,
-      name: rawName.replace(/\s*[?？]$/, ''),
+      name: dancerTurnName(m) ?? rawName.replace(/\s*[?？]$/, ''),
+      startPos,
       steps: parseSteps(m.steps),
       hold: holdLabel(m.holdStart, m.holdEnd),
       turn: turnLabel(m.turn, m.holdStart, m.holdEnd),

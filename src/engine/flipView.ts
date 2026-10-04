@@ -4,7 +4,7 @@ import type { MoveFrameSet, SheetRow } from './choreoSheet';
  * 「めくり」表示（上 = 技のコマのパラパラ漫画、下 = 1 技 1 ページの解説を左右にめくる）の純粋な部分。
  * UI（components/FlipView.tsx）から切り離して、コマの時間割・ページ送り・index.json の読み取りを持つ。
  *
- * 時刻はすべて元動画の秒（メディア時刻）。パラパラ漫画は技の区間 [start, end) を速度（0.5 / 1 倍）で
+ * 時刻はすべて元動画の秒（メディア時刻）。パラパラ漫画は技の区間 [start, end) を速度（0.25 / 0.5 / 1 倍）で
  * 流す時計で動かし、コマは「その時刻に写っているコマ」を出す。各コマはその技の拍のうち自分の持ち分
  * （次のコマまでの時間）だけ出ている = カウントどおりの速さ。練習モードのクリックと同じ時計で鳴らせる。
  */
@@ -17,12 +17,14 @@ export type FlipFrame = {
   label?: string;
   /** 見どころのコマ（サーバーの flip[].key）。カード用の frames[] から来たコマも見どころ扱い */
   key?: boolean;
+  /** 拍の間（「&」）のコマ（サーバーの flip[].half。count は直前の拍）。古い flip[]（1 拍 1 コマ）には無い */
+  half?: boolean;
   strip?: { n: number; i: number; tileW: number; gap: number };
 };
 
 /**
  * 技 1 つ分の写真の出どころ。
- * - flip: サーバーが作った密なコマ（1 拍 1 コマ＋見どころ。index.json の flip[]）
+ * - flip: サーバーが作った密なコマ（半拍 1 コマ＋見どころ。古いジョブは 1 拍 1 コマ。index.json の flip[]）
  * - frames: 見どころの 5 コマ前後（v2 の frames[]）
  * - strip: v1 の帯だけ。読み込んで幅からコマ数が分かれば分割、分からなければ帯をそのまま出す
  */
@@ -30,7 +32,11 @@ export type FlipSource =
   | { kind: 'flip' | 'frames'; frames: FlipFrame[]; strip: string | null }
   | { kind: 'strip'; frames: []; strip: string };
 
-const SPEEDS = [0.5, 1] as const;
+/** パラパラ漫画は速く見えるので 0.25 倍が既定（ユーザーの要望） */
+const SPEEDS = [0.25, 0.5, 1] as const;
+export const DEFAULT_FLIP_SPEED: FlipSpeed = 0.25;
+/** 拍の間のコマの字 */
+export const AND_LABEL = '&';
 export type FlipSpeed = (typeof SPEEDS)[number];
 export const FLIP_SPEEDS: readonly FlipSpeed[] = SPEEDS;
 
@@ -40,12 +46,16 @@ export const FALLBACK_BEAT_SEC = 0.35;
 // ─── index.json の読み取り ───────────────────────────────────────────────────
 
 function parseShot(raw: unknown, resolve: (u: string) => string): FlipFrame | null {
-  const f = raw as { t?: unknown; url?: unknown; count?: unknown; label?: unknown; key?: unknown } | null;
+  const f = raw as { t?: unknown; url?: unknown; count?: unknown; label?: unknown; key?: unknown; half?: unknown } | null;
   if (!f || typeof f.url !== 'string' || !f.url) return null;
   const out: FlipFrame = { url: resolve(f.url), t: typeof f.t === 'number' && Number.isFinite(f.t) ? f.t : null };
   if (typeof f.count === 'number' && f.count >= 1 && f.count <= 8) out.count = Math.round(f.count);
   if (typeof f.label === 'string' && f.label.trim()) out.label = f.label.trim();
   if (f.key === true) out.key = true;
+  if (f.half === true) {
+    out.half = true;
+    if (out.label === AND_LABEL) delete out.label; // 「&」は字の方（frameCaption）で出す
+  }
   return out;
 }
 
@@ -201,9 +211,24 @@ export function loopTime(m: number, win: MoveWindow): number {
   return win.start + ((m - win.start) % len);
 }
 
-/** コマの大きな字（「2 通過」）。カウントも説明も無ければ空 */
-export function frameCaption(f: Pick<FlipFrame, 'count' | 'label'>): string {
-  return [f.count ? String(f.count) : '', f.label ?? ''].filter(Boolean).join(' ');
+/** コマのカウントの字: 拍の上は「2」、拍の間は「2&」（直前の拍が分からなければ「&」） */
+export function frameCount(f: Pick<FlipFrame, 'count' | 'half'>): string {
+  if (f.half) return `${f.count ?? ''}${AND_LABEL}`;
+  return f.count ? String(f.count) : '';
+}
+
+/**
+ * コマの説明の字。最初のコマ（技の頭）は立ち位置（「男右・女左」）があればそれを出す
+ * （サーバーの「スタート（女は左）」より、写真の左右そのままの方が分かりやすい）
+ */
+export function frameLabel(f: Pick<FlipFrame, 'label'>, i = -1, startPos: string | null = null): string {
+  if (i === 0 && startPos) return startPos;
+  return f.label ?? '';
+}
+
+/** コマの大きな字（「2 通過」「2&」）。カウントも説明も無ければ空 */
+export function frameCaption(f: Pick<FlipFrame, 'count' | 'label' | 'half'>, i = -1, startPos: string | null = null): string {
+  return [frameCount(f), frameLabel(f, i, startPos)].filter(Boolean).join(' ');
 }
 
 // ─── ページ送り ────────────────────────────────────────────────────────────
@@ -270,7 +295,8 @@ export function preloadUrls(sources: Map<number, FlipSource>, rows: SheetRow[], 
 
 export type ReportView = 'flip' | 'list';
 export const VIEW_STORAGE_KEY = 'motionlab.reportView';
-export const SPEED_STORAGE_KEY = 'motionlab.flipSpeed';
+/** 0.25 倍を既定にしたときに変えた（前の既定 0.5 で保存された値を引き継がない） */
+export const SPEED_STORAGE_KEY = 'motionlab.flipSpeed2';
 export const NARROW_PX = 600;
 
 /** 保存された選び方。無ければ画面幅で（600px 以下 = めくり） */
@@ -289,9 +315,10 @@ export function saveReportView(v: ReportView): void {
 export function loadFlipSpeed(): FlipSpeed {
   try {
     const v = Number(localStorage.getItem(SPEED_STORAGE_KEY));
-    if (v === 0.5 || v === 1) return v;
+    const hit = SPEEDS.find(s => s === v);
+    if (hit !== undefined) return hit;
   } catch { /* noop */ }
-  return 0.5;
+  return DEFAULT_FLIP_SPEED;
 }
 
 export function saveFlipSpeed(v: FlipSpeed): void {

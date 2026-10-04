@@ -385,7 +385,7 @@ TURN_SWEEP_MIN = 0.04      # 反転の前後で要求する肩分離の振り幅
 TURN_PRE_SEC = 1.0         # 1回目の反転前にこの秒数以内で旧向きの振り幅があること
 TURN_CHAIN_GAP_SEC = 0.6   # 連続回転（ダブルターン）とみなす反転ペア間の最大間隔
 TURN_MAX_ROTATIONS = 3     # 連続回転として連結する反転ペアの上限（それ以上はジッタの可能性が高い）
-# 回転数の数え方の上限。連結（上の上限）とは別に、反転の総数から数える（count_rotations）
+# 回転数の数え方の上限。連結（上の上限）とは別に、反転の総数から数える（detect_turns の最後）
 TURN_COUNT_MAX = 4
 CBL_MIN_SEP = 0.08         # 交差前後で必要な左右分離（正規化X。ジッタの往復を弾く）
 CBL_WINDOW_SEC = 2.0       # 交差の前後この秒数内に十分な分離があること
@@ -420,21 +420,19 @@ SPIN_POST_SEC = 1.6
 SPIN_KP_MIN = 0.3
 
 
-def count_rotations(flips, i_start):
-    """ターンの回転数 = 最初の反転から TURN_CHAIN_GAP_SEC 以内の間隔で続く反転の数 / 2（切り捨て）。
-
-    10fps の骨格では速い連続回転は1周3〜4コマしかなく、反転ペアの連結（振り幅条件つき）では
-    途中のペアが条件を外して回転数を少なく数える（正解表で4回転→3、3回転→2）。
-    連結はターンの区切り（検出時刻）にだけ使い、回転数は反転の総数から数える
-    （正解表2本の回転数 MAE 0.43 → 0.29。eval_ground_truth.py）
-    """
-    n, last = 0, None
-    for t, _ in flips[i_start:]:
-        if last is not None and t - last > TURN_CHAIN_GAP_SEC:
-            break
-        n += 1
-        last = t
-    return max(1, min(TURN_COUNT_MAX, n // 2))
+# 速い連続回転: 反転が TURN_CHAIN_GAP_SEC 以内の間隔で MIN〜MAX 個続く連なり（2½〜3 回転）。
+# EVENT_COOLDOWN_SEC は「前のターンの始まり」から測るので、CBL の通過や前のターンの 1.3〜2.5 秒後に始まる
+# 頭上の連続回転を落としていた（2fda2815 の 11.2 / 13.8 / 19.2 を 3 件とも見逃し）。また冷却が明けた所、
+# つまり回転の終わり際から始まったターンは回転数を少なく数えていた（bb0efcb9 8.5: 右 2½ を 1）。
+# そこで冷却で落ちた連なりはターンとして足し、連なりの最後の TAIL 個の反転から始まっていたターンは
+# この連なりに置き換える（始まりを前へ、回転数を連なり全体で数え直す）。それ以外と重なるときは何もしない。
+# 10/4、正解表 5 本（tracks モード）: 女性のターン P/R .800/.828 → .844/.931、向き 23/24 → 26/27、
+# 回転数の誤差 .360 → .304、CBL・男のターンは不変。MIN=4 は向き 25/27（2fda2815 5.9 の CBL の通過の
+# 半回転から始めて逆向きを読む）、MIN=3 は往復・歩きの向き直りまで拾って P .771。MAX を 7 以上にすると
+# 入れ替わりの前後の揺れ（bb0efcb9 21〜23.5 の 8 反転など）まで1つにまとめる
+TURN_FAST_MIN_FLIPS = 5
+TURN_FAST_MAX_FLIPS = 6
+TURN_FAST_TAIL_FLIPS = 2
 
 
 def detect_turns(draw_frames, pid):
@@ -462,17 +460,24 @@ def detect_turns(draw_frames, pid):
         """区間内に sign 向きで TURN_SWEEP_MIN 以上の分離があるか"""
         return any(d * sign >= TURN_SWEEP_MIN for t, d in series if t_from <= t <= t_to)
 
-    events = []  # (開始時刻, 回転数)
+    def pair_ok(i):
+        (t1, sign_before), (t2, _) = flips[i], flips[i + 1]
+        return (t2 - t1 <= TURN_FLIP_WINDOW
+                and sweep_ok(t1 - TURN_PRE_SEC, t1, sign_before)   # 反転前: 旧向きでしっかり見えていた
+                and sweep_ok(t1, t2, -sign_before))                # 反転間: 背面までしっかり回った
+
+    def chain_end(i):
+        j = i
+        while j + 1 < len(flips) and flips[j + 1][0] - flips[j][0] <= TURN_CHAIN_GAP_SEC:
+            j += 1
+        return j
+
+    spans = []  # [最初の反転の番号, 最後の反転の番号, 時刻]（回転数を数える範囲）
     last_event = -1e9
     i = 0
     while i + 1 < len(flips):
         (t1, sign_before), (t2, _) = flips[i], flips[i + 1]
-        if (
-            t2 - t1 <= TURN_FLIP_WINDOW
-            and t1 - last_event > EVENT_COOLDOWN_SEC
-            and sweep_ok(t1 - TURN_PRE_SEC, t1, sign_before)   # 反転前: 旧向きでしっかり見えていた
-            and sweep_ok(t1, t2, -sign_before)                 # 反転間: 背面までしっかり回った
-        ):
+        if t1 - last_event > EVENT_COOLDOWN_SEC and pair_ok(i):
             # 連続回転（ダブルターン等）: 「直後（0.6秒以内）に始まり、振り幅条件も満たす」
             # 反転ペアのみ連結する。緩い連結は後続の別ターンやジッタを際限なく飲み込む（実測: rotations=10）
             rotations = 1
@@ -488,11 +493,28 @@ def detect_turns(draw_frames, pid):
                 rotations += 1
                 t2 = flips[i + 1][0]
                 i += 2
-            events.append((round(t1, 2), count_rotations(flips, i_start)))
+            spans.append([i_start, chain_end(i_start), t1])
             last_event = t1
         else:
             i += 1
-    return events
+
+    # 速い連続回転（反転 TURN_FAST_MIN_FLIPS〜TURN_FAST_MAX_FLIPS 個の連なり）: 冷却で落ちたものを足し、
+    # 回転の終わりの方（最後の TURN_FAST_TAIL_FLIPS 個の反転）から始まっていたターンはこの回転に置き換える
+    i = 0
+    while i + 1 < len(flips):
+        j = chain_end(i)
+        if TURN_FAST_MIN_FLIPS <= j - i + 1 <= TURN_FAST_MAX_FLIPS and pair_ok(i):
+            # 既存のターンの範囲は2つ目の反転までは含む（間隔が空いて連なりの直前で終わるものも重なりとみなす）
+            over = [s for s in spans if s[0] <= j and max(s[1], s[0] + 1) >= i]
+            if all(i < s[0] and s[0] > j - TURN_FAST_TAIL_FLIPS for s in over):
+                spans = [s for s in spans if s not in over] + [[i, max([j] + [s[1] for s in over]), flips[i][0]]]
+        i = j + 1
+    spans.sort()
+    # 回転数 = 範囲内の反転の数 / 2（切り捨て）。10fps の骨格では速い連続回転は1周3〜4コマしかなく、
+    # 反転ペアの連結（振り幅条件つき）では途中のペアが条件を外して少なく数えるので、連結はターンの区切りにだけ使い、
+    # 回転数は反転の総数から数える（正解表2本の回転数 MAE 0.43 → 0.29）。
+    # ½ 刻み（反転の数 / 2 をそのまま）は正解表 5 本で誤差 .36 → .38 と悪くなるので切り捨てのまま
+    return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2))) for a, b, t in spans]
 
 
 def detect_cbl(draw_frames):

@@ -895,7 +895,7 @@ CBL_PIVOT_SUPPRESS_SEC = 0.8  # CBL・女性のターンの±この秒数内の�
 # （29.45 の候補が 31.2 のターンを含んで CBL 29.99 の近くで捨てられる、2fda2815 7.0 が 5.91 になる等）。
 # 10/4、正解表 5 本（tracks モード）: 男のターン P/R/F1 .333/.222/.267 → .462/.667/.545（tp 2→6、fp 4→7）、
 # CBL・女性のターンは不変。向きは対応した男のターン 7 件中 6 件（外れは向きを決めきれない bb0efcb9 16.6）
-LEADER_TURN_COOLDOWN_SEC = 1.5   # 男のターン同士の最小間隔（1.0〜2.5 秒で結果は同じ。冷却なしは fp +1）
+LEADER_TURN_COOLDOWN_SEC = 0.8   # 男のターン同士の最小間隔（1.5 → 0.8、README 32。33.9 の左の 1 秒弱後に逆へもう 1 回回る bb0efcb9 34.9 のため。冷却なしは fp +1）
 # 男の振り返りの誤検出（img1884 の背中側から撮った男が正面を見せて戻る等）: 肩の左右（shDx の符号）の反転は、
 # YOLO が背中向きの人の左右の肩を付け違えたときにも起きる。本当に回ったなら反転のたびに正面 ↔ 背中が入れ替わり、
 # 顔（鼻）の見え方も変わる。そこで反転ペアの2つ目の反転の前後で、それぞれいちばん正対したコマ（|shDx| 最大）の
@@ -904,6 +904,7 @@ LEADER_TURN_COOLDOWN_SEC = 1.5   # 男のターン同士の最小間隔（1.0〜
 LEADER_FACE_FLIP_CHECK = True
 LEADER_FACE_SEEN = 0.4
 LEADER_FACE_FLIP_BOTH = False
+LEADER_FACE_MIN_FRAC = 0.6   # 0 = 従来（|shDx| 最大のコマの鼻）。>0 なら、最大の この倍以上のコマのうち鼻の信頼度の最小（README 32）
 EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔（冷却を縮める・終わりから測る等は README 20 で試して不採用）
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
 # 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
@@ -1186,9 +1187,19 @@ LEADER_IN_SPIN_RAISED = 0.5       # >0 なら、その範囲で手が頭上（�
 LEADER_IN_SPIN_MARGIN = 0.0       # 範囲の前後に足す秒数（0.3 でも同じ）
 
 
-def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follower_spans=(), with_span=False):
+# 男の回る向きが、近くの女性のターンの向きと逆なら、女性を回すときの上体の連れ回りではない（連れ回りは女性と同じ向きに
+# 肩がひねられる）ので、随伴フィルタ（女性のターンの ±CBL_PIVOT_SUPPRESS_SEC）で落とさない（README 32）。
+# 女性の向きは spin_hint の正味（netDeg）で、読めない・0 のときは従来どおり落とす。CBL の近傍は変えない
+LEADER_COUNTER_ROT_KEEP = True
+LEADER_DROP_GLITCH = True
+LEADER_GLITCH_MAX_SEC = 0.25   # 前後の同符号のコマがこの秒数以内（10fps の連続した 3 コマ）に収まるものだけ。穴の空いた列は触らない
+
+
+def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follower_spans=(), with_span=False,
+                        follower_turn_dirs=None):
     """男のターン: 向きの反転ペア（= 1 回転）を1つずつ見て、2つの反転が同じ向き（RR / LL）に読めたものだけ残す。
     follower_spans: 女性のターンの [(最初の反転, 最後の反転)]
+    follower_turn_dirs: {女性のターンの時刻: +1（右）/ -1（左）}。LEADER_COUNTER_ROT_KEEP で逆向きを随伴から外す
     戻り値: [(時刻, 回転数, spin)]。with_span なら [(時刻, 回転数, spin, 最初の反転, 最後の反転)]"""
     in_spin = []
     if LEADER_IN_SPIN_SUPPRESS:
@@ -1204,6 +1215,12 @@ def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follow
         for p in df["kept"]:
             if p.get("pid") == pid and abs(p["shDx"]) >= TURN_FLIP_MARGIN:
                 series.append((df["t"], p["shDx"], p))
+    if LEADER_DROP_GLITCH:
+        # 同じ符号の両側に挟まれた 1 コマだけ逆の符号は、肩の左右の付け違い（YOLO のラベルの揺れ）で、回転ではない
+        # （体は 1 コマ = 0.1 秒で 180° 反転しない）。反転の列から外す
+        series = [s for k, s in enumerate(series)
+                  if not (0 < k < len(series) - 1 and (series[k - 1][1] > 0) == (series[k + 1][1] > 0) != (s[1] > 0)
+                          and series[k + 1][0] - series[k - 1][0] <= LEADER_GLITCH_MAX_SEC)]
     flips = []  # (時刻, 反転前の符号, "R"/"L"/"?")
     for (t0, d0, p0), (t1, d1, p1) in zip(series, series[1:]):
         if (d0 > 0) == (d1 > 0):
@@ -1219,11 +1236,25 @@ def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follow
     def near(t, ts):
         return any(abs(t - s) <= CBL_PIVOT_SUPPRESS_SEC for s in ts)
 
+    def companion_times(r):
+        """向き r の男の回転に対して随伴とみなす女性のターンの時刻（逆向きと読めたものは除く）"""
+        if not (LEADER_COUNTER_ROT_KEEP and follower_turn_dirs):
+            return follower_turn_times
+        mine = 1 if r == "R" else -1
+        return [t for t in follower_turn_times if follower_turn_dirs.get(t, 0) != -mine]
+
     def face_seen(t_from, t_to, sign):
         """区間内で sign 側の向きにいちばん正対したコマで顔（鼻）が見えたか。コマが無ければ None"""
         ph = [(abs(d), p["kps"][0][2]) for t, d, p in series
               if t_from <= t < t_to and d * sign > 0 and p.get("kps")]
-        return None if not ph else max(ph)[1] >= LEADER_FACE_SEEN
+        if not ph:
+            return None
+        if LEADER_FACE_MIN_FRAC > 0:
+            # 正対に近いコマ（|shDx| が最大の LEADER_FACE_MIN_FRAC 倍以上）のうち鼻がいちばん見えないコマ。
+            # 10fps では背中向きの瞬間が 1 コマしか無く、最大のコマの鼻が帽子のつばや肩越しで読めてしまう
+            top = max(a for a, _ in ph)
+            return min(c for a, c in ph if a >= LEADER_FACE_MIN_FRAC * top) >= LEADER_FACE_SEEN
+        return max(ph)[1] >= LEADER_FACE_SEEN
 
     def second_flip_turns(i):
         """2つ目の反転で顔の見え方（正面 ↔ 背中）が変わったか。変わらなければ肩の左右の付け違いとみなす"""
@@ -1244,7 +1275,7 @@ def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follow
         (t1, s, r1), (t2, _, r2) = flips[i], flips[i + 1]
         tm = (t1 + t2) / 2
         if (t2 - t1 <= TURN_FLIP_WINDOW and sweep_ok(t1 - TURN_PRE_SEC, t1, s) and sweep_ok(t1, t2, -s)
-                and r1 == r2 and r1 != "?" and not near(tm, cbl_times) and not near(tm, follower_turn_times)
+                and r1 == r2 and r1 != "?" and not near(tm, cbl_times) and not near(tm, companion_times(r1))
                 and not any(a <= tm <= b for a, b in in_spin)
                 and (not LEADER_FACE_FLIP_CHECK or second_flip_turns(i))):
             pairs.append((i, tm, r1))
@@ -1871,8 +1902,19 @@ def detect_events(draw_frames, leader_pid):
     leader_spins = {}
     if leader_pid is not None:
         follower_turn_times = [t for t, _ in turns[1 - leader_pid]]
+        follower_turn_dirs = {}
+        if LEADER_COUNTER_ROT_KEEP:
+            ps = detect_turns(draw_frames, 1 - leader_pid, with_span="pair")
+            for k, (t, _, a, b) in enumerate(ps):
+                if t not in follower_turn_times:
+                    continue
+                span = (a, b, ps[k - 1][3] if k else float("-inf"),
+                        ps[k + 1][2] if k + 1 < len(ps) else float("inf")) if SPIN_USE_TURN_SPAN else None
+                net = (spin_hint(draw_frames, 1 - leader_pid, t, span) or {}).get("netDeg", 0)
+                follower_turn_dirs[t] = (net > 0) - (net < 0)
         lt = detect_leader_turns(draw_frames, leader_pid, cbl_times, follower_turn_times,
-                                 [(a, b) for _, _, a, b in spans[1 - leader_pid]], with_span=True)
+                                 [(a, b) for _, _, a, b in spans[1 - leader_pid]], with_span=True,
+                                 follower_turn_dirs=follower_turn_dirs)
         turns[leader_pid] = [(t, r) for t, r, _, _, _ in lt]
         leader_spins = {t: s for t, _, s, _, _ in lt}
         rot_spans = {leader_pid: {t: (a, b) for t, _, _, a, b in lt}}

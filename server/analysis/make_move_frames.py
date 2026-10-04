@@ -28,16 +28,20 @@ LOCAL_SEC 秒で合わせ、余白を足してから縦横比 CROP_ASPECT（2:3 
 書き出し:
   <out_dir>/<NN>_<start>_<k>.jpg  1コマずつ（k = 0 始まり。左上に時刻）
   <out_dir>/<NN>_<start>.jpg      同じコマを横に並べた帯（v1 のフロント向け。キャッシュされた古いアプリ用）
+  <out_dir>/<NN>_<start>_fKK.jpg  めくり（パラパラ漫画）用の密なコマ（1 拍に 1 コマ＋見どころ。360x540・時刻なし）
   <out_dir>/index.json            {"version": 2, "complete": bool,
                                    "moves": [{"index", "start", "end", "url",
-                                              "frames": [{"t", "url", "count", "label"}]}]}
+                                              "frames": [{"t", "url", "count", "label"}],
+                                              "flip": [{"t", "url", "count", "label", "key"?}]}]}
                                   index は routine.moves の 0 始まりの位置。url は帯。画像が作れなかった技は載せない。
-                                  count は技の頭から数えた拍（1〜8）、label はそのコマの説明（空文字もある）
+                                  count は技の頭から数えた拍（1〜8）、label はそのコマの説明（空文字もある）。
+                                  flip[] は frames[] とは別に足すだけ（frames[] は変えない）。key=true は見どころのコマ
 何度実行しても同じ結果になる（out_dir 内の古い jpg は消してから書く）。
 
-Usage: python make_move_frames.py <video_path> <tracks.json> <result.json> <measurements.json> <out_dir> <url_prefix> [--only=2,5]
+Usage: python make_move_frames.py <video_path> <tracks.json> <result.json> <measurements.json> <out_dir> <url_prefix> [--only=2,5] [--no-flip]
   url_prefix: index.json に書く画像URLの前置き（例: /analysis-output/<jobId>/out/move_frames）
   --only: その番号（1 始まり）の技だけ作る（確かめ用。index.json にもその技だけ載る）
+  --no-flip: めくり用の密なコマ（flip[]）を作らない（以前の出力と同じ）
 """
 import glob
 import json
@@ -150,7 +154,7 @@ def crop_box(frames, pids, t0, t1, global_box, frame_w, frame_h, t=None):
 
 
 def render_tile(frame, crop, t):
-    """1コマ: 切り取って TILE_W x TILE_H に収め（はみ出し分は黒）、左上に時刻を入れる。
+    """1コマ: 切り取って TILE_W x TILE_H に収め（はみ出し分は黒）、左上に時刻を入れる（t が None なら入れない）。
     crop が None（ペア不明）ならフレーム全体を縦横比そのまま高さ TILE_H に"""
     if crop is not None and (crop[2] - crop[0] < 10 or crop[3] - crop[1] < 10):
         crop = None
@@ -167,6 +171,8 @@ def render_tile(frame, crop, t):
         fh, fw = frame.shape[:2]
         nw = max(1, min(TILE_H * 2, int(round(fw * TILE_H / fh))))
         tile = cv2.resize(frame, (nw, TILE_H), interpolation=cv2.INTER_AREA)
+    if t is None:
+        return tile
     label = fmt_time(t)
     cv2.rectangle(tile, (0, 0), (16 + 20 * len(label), 44), (0, 0, 0), -1)
     cv2.putText(tile, label, (8, 33), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 235, 255), 2, cv2.LINE_AA)
@@ -346,6 +352,85 @@ def labeled_frames(mv, t0, t1, beat, series, crosses, events):
     return out
 
 
+# ─── めくり（パラパラ漫画）用の密なコマ ─────────────────────────────────────────
+# アプリの「めくり」表示は、上半分で技のコマをパラパラ漫画のように流す。見どころ 5 コマだけでは
+# 動きが飛ぶので、1 拍に 1 コマ（1×8 なら 8 コマ）＋見どころのコマを、小さめの JPEG で別に作る（flip[]）。
+# frames[]（見どころ・カード用）はそのまま残す
+FLIP_W, FLIP_H = 360, 540     # 1コマ（2:3）。スマホの上半分に出すには十分で、1枚 20〜40KB 程度
+FLIP_JPEG_QUALITY = 72
+FLIP_MIN_GAP_BEATS = 0.3      # 拍のコマと見どころのコマがこれ（拍）より近ければ、拍のコマは取らない
+FLIP_MAX_FRAMES = 24          # 長い技（12 秒・16 カウント超）でも作りすぎない
+
+
+def flip_times(t0, t1, beat, counts, keys):
+    """めくり用のコマの時刻 [(t, count, label, is_key)]（時刻順）。
+    - 拍のコマ: 技の頭から 1 拍ごと（区間の終わりの少し手前まで）。説明は On2 の拍の言葉（無ければ空）
+    - 見どころのコマ: keys = labeled_frames の [(t, count, label)]。拍のコマと近いときは見どころを残す
+    beat が無ければ見どころだけ"""
+    end = max(t0, t1 - 0.05)
+    out = [(float(t), c, label or "", True) for t, c, label in keys]
+    if beat and beat > 0:
+        n = int(math.floor((end - t0) / beat + 1e-6)) + 1
+        gap = FLIP_MIN_GAP_BEATS * beat
+        for k in range(min(n, FLIP_MAX_FRAMES)):
+            t = t0 + k * beat
+            if t > end + 1e-6:
+                break
+            if any(abs(t - kt) < gap for kt, *_ in keys):
+                continue
+            out.append((t, count_of(t, t0, beat, counts), "", False))
+    out.sort(key=lambda x: x[0])
+    if len(out) > FLIP_MAX_FRAMES:
+        # 拍のコマから 1 つおきに間引く（見どころは残す）
+        beat_pos = [i for i, o in enumerate(out) if not o[3]]
+        drop = set(beat_pos[1::2][:len(out) - FLIP_MAX_FRAMES])
+        out = [o for i, o in enumerate(out) if i not in drop]
+    return out
+
+
+def flip_label(mv, count, label):
+    """拍のコマの説明: 見どころの説明が無ければ On2 の拍の言葉（CBL 系は CBL の言葉）"""
+    if label:
+        return label
+    return (CBL_FILL_LABEL if mv.get("move") in CBL_MOVES else FILL_LABEL).get(count, "")
+
+
+def render_flip_tile(frame, crop):
+    """めくり用の1コマ: 見どころのコマと同じ切り取りで、小さく・時刻は焼かない（流すとちらつくため）"""
+    tile = render_tile(frame, crop, None)
+    h, w = tile.shape[:2]
+    if (w, h) != (TILE_W, TILE_H):
+        # 切り取れなかった（フレーム全体）コマは縦横比が違う。黒で 2:3 に収める
+        scale = min(TILE_W / w, TILE_H / h)
+        nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+        canvas = np.zeros((TILE_H, TILE_W, 3), np.uint8)
+        ox, oy = (TILE_W - nw) // 2, (TILE_H - nh) // 2
+        canvas[oy:oy + nh, ox:ox + nw] = cv2.resize(tile, (nw, nh), interpolation=cv2.INTER_AREA)
+        tile = canvas
+    return cv2.resize(tile, (FLIP_W, FLIP_H), interpolation=cv2.INTER_AREA)
+
+
+def make_flip(cap, mv, t0, t1, beat, keys, frames, pids, global_box, out_dir, url_prefix, stem):
+    """1つの技のめくり用コマを書き出し、index.json の flip[] を返す"""
+    shots = []
+    for t, count, label, is_key in flip_times(t0, t1, beat, mv.get("counts") or 8, keys):
+        frame = grab(cap, t)
+        if frame is None:
+            continue
+        fh, fw = frame.shape[:2]
+        crop = crop_box(frames, pids, t0, t1, global_box, fw, fh, t)
+        name = f"{stem}_f{len(shots):02d}.jpg"
+        cv2.imwrite(os.path.join(out_dir, name), render_flip_tile(frame, crop),
+                    [cv2.IMWRITE_JPEG_QUALITY, FLIP_JPEG_QUALITY])
+        shot = {"t": round(t, 2), "url": f"{url_prefix}/{name}", "label": flip_label(mv, count, label)}
+        if count is not None:
+            shot["count"] = count
+        if is_key:
+            shot["key"] = True
+        shots.append(shot)
+    return shots
+
+
 def write_index(out_dir, entries, done):
     """index.json を原子的に書く（読み手が書きかけの JSON を掴まない）。
     done=False は作成中の印で、フロントは揃うまで読み直す"""
@@ -370,9 +455,12 @@ def main():
     video_path, tracks_path, result_path, meas_path, out_dir, url_prefix = sys.argv[1:7]
     # --only=2,5: その番号（1 始まり）の技だけ作る（確かめ用）
     only = None
+    flip = True
     for a in sys.argv[7:]:
         if a.startswith("--only="):
             only = {int(x) for x in a[len("--only="):].split(",") if x.strip().isdigit()}
+        elif a == "--no-flip":
+            flip = False
 
     with open(result_path, encoding="utf-8") as f:
         routine = (json.load(f) or {}).get("routine") or {}
@@ -421,7 +509,8 @@ def main():
         t0, t1 = win
         stem = f"{i + 1:02d}_{t0:05.1f}"
         tiles, shots = [], []
-        for t, count, label in labeled_frames(mv, t0, t1, beat, series, crosses, events):
+        keys = labeled_frames(mv, t0, t1, beat, series, crosses, events)
+        for t, count, label in keys:
             frame = grab(cap, t)
             if frame is None:
                 continue
@@ -439,11 +528,15 @@ def main():
         if not tiles:
             continue
         cv2.imwrite(os.path.join(out_dir, f"{stem}.jpg"), strip_of(tiles), [cv2.IMWRITE_JPEG_QUALITY, 78])
-        entries.append({
+        entry = {
             "index": i, "start": round(t0, 2), "end": round(t1, 2),
             "url": f"{url_prefix.rstrip('/')}/{stem}.jpg",
             "frames": shots,
-        })
+        }
+        if flip:
+            entry["flip"] = make_flip(cap, mv, t0, t1, beat, keys, frames, pids, global_box,
+                                      out_dir, f"{url_prefix.rstrip('/')}", stem)
+        entries.append(entry)
         # 1枚できるたびに index.json を書き直す（作っている途中にレポートを開いても、できた分の写真は出る）
         write_index(out_dir, entries, done=False)
     cap.release()

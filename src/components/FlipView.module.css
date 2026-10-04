@@ -1,0 +1,441 @@
+/* めくり表示: 画面いっぱい。上 ≈55% = パラパラ漫画、下 = 1 技 1 ページの解説（左右にめくる） */
+
+.root {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  grid-template-rows: minmax(0, 55fr) minmax(0, 45fr);
+  background: var(--color-bg, #080814);
+  color: var(--color-fg, #e0e0ff);
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* 横長の画面（スマホ横向き）: 左にパラパラ漫画、右に解説 */
+@media (orientation: landscape) and (max-height: 600px) {
+  .root {
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+/* 広い画面（PC）: 中央に縦長の列 */
+@media (min-width: 900px) and (min-height: 601px) {
+  .root {
+    padding-left: calc(50vw - 360px);
+    padding-right: calc(50vw - 360px);
+  }
+}
+
+/* ─── 上: パラパラ漫画 ─── */
+
+.top {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+}
+
+.flipbook {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+
+.stage:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--color-accent, #7c6bff);
+}
+
+.frame {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  visibility: hidden;
+}
+
+.frameOn {
+  visibility: visible;
+}
+
+.frame > img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/* v1 の帯を 1 コマずつ見せる箱 */
+.stripBox {
+  position: relative;
+  height: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.stripBox > img {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  max-width: none;
+  pointer-events: none;
+}
+
+.stripWhole > img {
+  object-fit: contain;
+}
+
+.noPhoto {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-fg-dim, #6060a0);
+  font-size: 0.9rem;
+}
+
+/* 「2 通過」: カウントは大きく、説明はその横 */
+.caption {
+  position: absolute;
+  left: 0.6rem;
+  right: 0.6rem;
+  bottom: 0.5rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  pointer-events: none;
+  text-shadow: 0 1px 3px #000, 0 0 10px rgba(0, 0, 0, 0.85);
+  line-height: 1.05;
+}
+
+.capCount {
+  font-size: clamp(2.6rem, 11vmin, 4.2rem);
+  font-weight: 900;
+  color: #ffd84d;
+  font-variant-numeric: tabular-nums;
+}
+
+.capLabel {
+  font-size: clamp(1.3rem, 6vmin, 2rem);
+  font-weight: 800;
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+
+.frameNo {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.55rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #ddd;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.pauseMark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 0.6rem 0.9rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 1.4rem;
+  letter-spacing: -0.1em;
+  pointer-events: none;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--color-surface, #0e0e1e);
+  border-bottom: 1px solid var(--color-border, #1e1e3a);
+  min-height: 2.6rem;
+}
+
+.scrub {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.scrub input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--color-accent, #7c6bff);
+}
+
+.hint {
+  flex: 1;
+  font-size: 0.72rem;
+  color: var(--color-fg-dim, #6060a0);
+}
+
+.ctl {
+  min-width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border2, #2a2a4a);
+  background: transparent;
+  color: var(--color-fg, #e0e0ff);
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.ctl:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ctlOn {
+  border-color: var(--color-accent, #7c6bff);
+  background: color-mix(in srgb, var(--color-accent, #7c6bff) 25%, transparent);
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--color-border2, #2a2a4a);
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.segBtn {
+  padding: 0.35rem 0.6rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-dim, #6060a0);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.segOn {
+  background: var(--color-accent, #7c6bff);
+  color: #fff;
+}
+
+/* 一覧（ReportModal）の上の切り替え */
+.viewToggle {
+  align-self: flex-start;
+}
+
+/* 上に重ねるバー（表示の切り替え・閉じる） */
+.bar {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.bar > * {
+  pointer-events: auto;
+}
+
+.bar .seg {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.bar .segBtn:not(.segOn) {
+  color: #ddd;
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.72rem;
+  color: #ccc;
+  text-shadow: 0 1px 2px #000;
+}
+
+.close {
+  margin-left: auto;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+/* ─── 下: 解説のページ ─── */
+
+.bottom {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--color-surface, #0e0e1e);
+}
+
+.viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  /* 縦のスクロールはブラウザ、横はこちらで受ける。ページが勝手に横へ流れない */
+  touch-action: pan-y;
+  overscroll-behavior-x: none;
+}
+
+.track {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+.snapping {
+  transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .snapping {
+    transition: none;
+  }
+}
+
+.slot {
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.7rem 1rem 0.9rem;
+  max-width: 640px;
+  margin: 0 auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pageHead {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--color-fg-dim, #6060a0);
+  font-variant-numeric: tabular-nums;
+}
+
+.no {
+  font-weight: 800;
+  color: var(--color-fg, #e0e0ff);
+}
+
+.counts {
+  padding: 0 0.35rem;
+  border: 1px solid var(--color-border2, #2a2a4a);
+  border-radius: 4px;
+}
+
+.name {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+  line-height: 1.3;
+  color: var(--color-fg, #e0e0ff);
+}
+
+.facts {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--color-fg, #e0e0ff);
+  opacity: 0.8;
+}
+
+.diagram {
+  max-width: 320px;
+}
+
+.nav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem 0.4rem;
+  border-top: 1px solid var(--color-border, #1e1e3a);
+}
+
+.navBtn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  min-height: 2.4rem;
+  padding: 0 0.3rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-dim, #6060a0);
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.navBtn > span[aria-hidden] {
+  font-size: 1.3rem;
+  color: var(--color-fg, #e0e0ff);
+}
+
+.navBtn:disabled {
+  cursor: default;
+}
+
+.navNext {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.navName {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pageNo {
+  font-size: 0.85rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg, #e0e0ff);
+}

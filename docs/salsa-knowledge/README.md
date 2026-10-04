@@ -589,6 +589,13 @@
     - 本番のジョブへの反映: `tools/backfill-report-frames.mjs --update-events [--retrack] --normalize`。`--update-events` は
       `analysis/update_events.py` でイベント（と holdTimeline）を今のコードで計算し直し、前の値は `summary.eventsPrev` に残す。
       `--retrack` は動画から服の色のヒストグラムを取り直して人物 ID を付け直す（YOLO は回さない。元の tracks は `measurements.tracks.prev.json`）。
+      `--beats` はその後に音声からビート格子とカウント 1（`beatGrid.downbeat`、15）を作り直す。
+    - 15〜23 を入れた後（2026-10-04、6 本を `--retrack`・全フレームの回転・downbeat で作り直し、8c312c6d 13.9 の正解の訂正込み）:
+      cbl .924（61/66）・swap .909・cblRows .890・rowAgree .885（115/130）・turn .745（38/51）・向き 26/35・側 54/70・回転数の誤差 .436（n=31）。
+      上の表（15 の前）から cbl .894 → .924・rowAgree .875 → .885、turn は 40/51 → 38/51（8c312c6d と 2fda2815 で 1 行ずつ）。
+    - 出来事の検出（同じイベント、`eval_ground_truth.py --events-dir`）: tracks だけ（10fps）なら CBL F1 .887・女性のターン P/R 1.0/.919・
+      男 F1 .667・向き 40/40。**ジョブと同じく全フレームで回転を取り直す（`refine_turns_dense`）と女性のターン R .838・向き 33/37 に下がる**
+      （取り直しが 21〜23 の直した向き・回転を上書きしている。次に見る所）。
 
 ## 評価セット（2026-10-04）
 

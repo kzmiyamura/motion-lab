@@ -2,6 +2,8 @@ import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type PointerEven
 import type { ChoreoSheetData, MoveFrameSet, SheetRow } from '../engine/choreoSheet';
 import styles from './ChoreoSheet.module.css';
 import { MoveDiagram } from './MoveDiagram';
+import type { CardState } from '../engine/sheetState';
+import { ContinuityMark, StateStrip } from './StateStrip';
 
 type Props = {
   sheet: ChoreoSheetData;
@@ -21,6 +23,8 @@ type Props = {
   onPick?: (row: SheetRow) => void;
   /** カードの長押し（範囲ループの始め） */
   onLongPress?: (row: SheetRow) => void;
+  /** 行 index（routine.moves の位置）→ 始まり/終わりの状態・見えた/推定・前のカードとの食い違い（engine/sheetState.ts） */
+  states?: (CardState | null)[] | null;
 };
 
 const LONG_PRESS_MS = 480;
@@ -110,7 +114,7 @@ function MovePhotos({ set, row, linkOut }: { set: MoveFrameSet; row: SheetRow; l
  * 最後に技の区間の連続コマ写真。元動画があればカードを押すとその技だけ 0.5 倍で繰り返し流す
  */
 export function ChoreoSheet({
-  sheet, frames, onPlay, playingIndex, toolbar, range, picking, anchorIndex, onPick, onLongPress,
+  sheet, frames, onPlay, playingIndex, toolbar, range, picking, anchorIndex, onPick, onLongPress, states,
 }: Props) {
   const listRef = useRef<HTMLOListElement>(null);
   const longPress = useLongPress(onLongPress);
@@ -173,6 +177,7 @@ export function ChoreoSheet({
               aria-label={playable ? `#${row.no} ${row.name} を再生` : undefined}
               onKeyDown={playable ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPlay!(row); } } : undefined}
             >
+              {states?.[row.index] && <ContinuityMark warnings={states[row.index]!.warnings} />}
               <div className={styles.head}>
                 <span className={styles.no}>#{row.no}</span>
                 {row.time && <span className={styles.time}>{row.time}</span>}
@@ -185,6 +190,7 @@ export function ChoreoSheet({
                   <span className={styles.q} title="推定を含む（自信が低い）" aria-label="推定">?</span>
                 )}
               </p>
+              {states?.[row.index] && <StateStrip state={states[row.index]!} />}
               {row.steps.length > 0 && (
                 <ul className={styles.steps}>
                   {row.steps.map((s, i) => (

@@ -24,7 +24,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import analyze_pair as ap  # noqa: E402
 
-STORAGE_DIR = os.path.join(HERE, "..", "storage")
+# MOTION_LAB_STORAGE: 別の場所に写した storage を読む（worktree から本体の解析出力の写しを採点する等）
+STORAGE_DIR = os.environ.get("MOTION_LAB_STORAGE") or os.path.join(HERE, "..", "storage")
 JOBS_DIR = os.path.join(STORAGE_DIR, "analysis-jobs")
 GT_DIR = os.path.join(HERE, "ground_truth")
 MATCH_SEC = 1.0

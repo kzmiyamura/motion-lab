@@ -12,7 +12,7 @@
 | `video` | 何の動画か（人が読むメモ） |
 | `job` | 解析ジョブ ID（`storage/analysis-jobs/<job>/out/measurements.tracks.json` を読む） |
 | `outDir` | ジョブを経ずに解析した動画だけ。`storage` からの相対パス（例 `gt-sheets/8c312c6d/out`）。`job` より優先 |
-| `holdout` | `true` = 検出器のチューニングに使っていない検証用（メモ。採点は同じ）。この動画を見ながら閾値を合わせない。`outDir` がローカルの storage に無ければ採点は飛ばされる |
+| `holdout` | `true` = 検出器のチューニングに使っていない検証用（メモ。採点は同じ）。この動画を見ながら閾値を合わせない。`outDir` がローカルの storage に無ければ採点は飛ばされる。開発に使ったら `false` にして `role` に何に使ったかを書く（cap1790: `"dev (used to build the waist-up fallback, 2026-10-05)"`） |
 | `leaderAtStart` | 冒頭で男性が画面の `"left"` / `"right"` どちらか（メモ。採点はしない — 入場直後や冒頭の CBL で「冒頭」が定まらないため。人物の取り違えは各 CBL の `from` で測る） |
 | `evalRange` | 採点する範囲 `[開始秒, 終了秒]`。録画停止時の画面・リールのループなどを外す。範囲外の検出は無視する（省略時は全編） |
 | `turnTime` | ターンの `t` を回転のどこに付けたか。`"mid"` = 回転の真ん中（memo の範囲の真ん中）、`"start"` = 回り始め。採点はこれに合わせて検出の `tMid`（回転の範囲の真ん中）か `t`（回り始め）と照合する（`eval_ground_truth.py --turn-match`、README 28）。省略時は `"start"` 扱い。新しく書くときは `"mid"` で、memo に回転の範囲（`0:07.8〜0:09.4`）を書く |

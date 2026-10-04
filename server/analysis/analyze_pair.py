@@ -861,9 +861,53 @@ TURN_FAST_TAIL_FLIPS = 2
 # 向き 36/38 → 37/39、回転数の誤差 .329 → .295、CBL・男のターン・通る側は不変（screenrec 29.0 も 28.42 の
 # 1 回転 → 29.17 の 2 回転に）。半回転を残して連続回転を足す版は fp +1。README 20
 TURN_FAST_ABSORB_LEAD = True
+# 頭上の手の下での連続回転: 相手（男）の手首が頭より上にある間の反転の連なりは、TURN_FAST_MAX_FLIPS を超えても
+# 連続回転として扱う。男が手を頭上に上げて女性を回している間は女性が速く何回も回れるが、入れ替わりの前後の揺れ
+# （bb0efcb9 21〜23.5 の 8 反転など）では手は下がっている。8c312c6d 13.9（13.70〜15.76 の 7 反転、頭上で手をつないで
+# 左回り）がこれで、12.82 のターンの冷却に隠れていた。手は左右どちらでもよい（内側/外側は回る向きで決まり、手では決まらない）。
+# 連なりの終わりは手が上がっていた最後の反転で切る（15.37〜15.76 は 15.9 の CBL の通過の半回転）。
+# 手前で終わるターン（12.82、正解 12.6 の 1 回転）は、上の取り込み（半回転の歩き込み）と違って本物なので残す。
+# 10/4、正解表 6 本（tracks モード）: 女性のターン P/R .917/.892 → .919/.919（tp 33 → 34）。README 21
+TURN_RAISED_MAX_FLIPS = 12    # 0 = 無効。7〜99 で結果は同じ（ほかに手が頭上の長い連なりは無い）
+TURN_RAISED_MIN_RATIO = 0.5   # 連なりの間、相手の手首が頭より上にあったコマの割合（13.9 は 0.59。0.6 では外れる）
+TURN_RAISED_WHO = "partner"   # partner / self / either（0.5 ならどれも同じ。0.4 にすると self / either は男のターンを落とす）
+TURN_RAISED_TRIM = True       # 連なりの終わりを、手が上がっていた最後の反転で切る（回転数 3 → 2、正解 1½）
+TURN_RAISED_KEEP_LEAD = True  # 手前で終わるターンを残す（False だと 12.6 を落として R は変わらない）
 
 
-def detect_turns(draw_frames, pid):
+def wrist_over_head(p):
+    """左右どちらかの手首が本人の頭（鼻。鼻が読めなければ肩の上 0.05）より上か。読めなければ None"""
+    k = p.get("kps") if p else None
+    if not k:
+        return None
+    if k[0][2] >= SPIN_KP_MIN:
+        head_y = k[0][1]
+    else:
+        sh = [k[i][1] for i in (LEFT_SHOULDER, RIGHT_SHOULDER) if k[i][2] >= SPIN_KP_MIN]
+        if not sh:
+            return None
+        head_y = min(sh) - 0.05
+    ws = [k[i][1] for i in (LEFT_WRIST, RIGHT_WRIST) if k[i][2] >= SPIN_KP_MIN]
+    return bool(ws) and min(ws) < head_y
+
+
+def raised_samples(draw_frames, pid, who="partner"):
+    """[(t, 手が頭上か)]（読めたコマのみ）。who: partner = 相手の手、self = 本人、either = どちらか"""
+    out = []
+    for df in draw_frames:
+        ps = {p.get("pid"): p for p in df["kept"] if p.get("pid") in (0, 1)}
+        vals = []
+        if who in ("partner", "either"):
+            vals.append(wrist_over_head(ps.get(1 - pid)))
+        if who in ("self", "either"):
+            vals.append(wrist_over_head(ps.get(pid)))
+        vals = [v for v in vals if v is not None]
+        if vals:
+            out.append((df["t"], any(vals)))
+    return out
+
+
+def detect_turns(draw_frames, pid, with_span=False):
     """指定人物のターン候補時刻を返す。
 
     COCO キーポイントは左肩(5)と右肩(6)を区別するため、画面上での左右肩の
@@ -928,29 +972,76 @@ def detect_turns(draw_frames, pid):
 
     # 速い連続回転（反転 TURN_FAST_MIN_FLIPS〜TURN_FAST_MAX_FLIPS 個の連なり）: 冷却で落ちたものを足し、
     # 回転の終わりの方（最後の TURN_FAST_TAIL_FLIPS 個の反転）から始まっていたターンはこの回転に置き換える
+    raised = raised_samples(draw_frames, pid, TURN_RAISED_WHO) if TURN_RAISED_MAX_FLIPS else []
+
+    def raised_end(t_from, t_to):
+        """区間内で手が頭上だったコマの割合が足りれば、手が上がっていた最後の時刻。足りなければ None"""
+        vals = [(t, r) for t, r in raised if t_from <= t <= t_to]
+        if len(vals) < 3 or sum(r for _, r in vals) < TURN_RAISED_MIN_RATIO * len(vals):
+            return None
+        return max(t for t, r in vals if r)
+
     i = 0
     while i + 1 < len(flips):
-        j = chain_end(i)
-        if TURN_FAST_MIN_FLIPS <= j - i + 1 <= TURN_FAST_MAX_FLIPS and pair_ok(i):
+        j_chain = j = chain_end(i)
+        raised_run = False
+        if TURN_RAISED_MAX_FLIPS and TURN_FAST_MAX_FLIPS < j - i + 1 <= TURN_RAISED_MAX_FLIPS:
+            t_up = raised_end(flips[i][0], flips[j][0])
+            if t_up is not None:
+                raised_run = True
+                if TURN_RAISED_TRIM:
+                    j = max(k for k in range(i, j + 1) if k == i or flips[k][0] <= t_up + 0.1)
+                    j = max(j, i + TURN_FAST_MIN_FLIPS - 1)
+                ok_n = True
+            else:
+                ok_n = False
+        else:
+            ok_n = TURN_FAST_MIN_FLIPS <= j - i + 1 <= TURN_FAST_MAX_FLIPS
+        if ok_n and pair_ok(i):
             # 既存のターンの範囲は2つ目の反転までは含む（間隔が空いて連なりの直前で終わるものも重なりとみなす）
             over = [s for s in spans if s[0] <= j and max(s[1], s[0] + 1) >= i]
             # 連なりの前で始まり、2つ目の反転が連なりの最初の反転になっているだけのターン（半回転の歩き込み）
             lead = [s for s in over if s[0] < i and s[1] < i] if TURN_FAST_ABSORB_LEAD else []
             rest = [s for s in over if s not in lead]
             if all(i < s[0] and s[0] > j - TURN_FAST_TAIL_FLIPS for s in rest):
-                spans = [s for s in spans if s not in over] + [[i, max([j] + [s[1] for s in rest]), flips[i][0]]]
-        i = j + 1
+                drop = rest if (raised_run and TURN_RAISED_KEEP_LEAD) else over
+                spans = [s for s in spans if s not in drop] + [[i, max([j] + [s[1] for s in rest]), flips[i][0]]]
+        i = j_chain + 1
     spans.sort()
     # 回転数 = 範囲内の反転の数 / 2（切り捨て）。10fps の骨格では速い連続回転は1周3〜4コマしかなく、
     # 反転ペアの連結（振り幅条件つき）では途中のペアが条件を外して少なく数えるので、連結はターンの区切りにだけ使い、
     # 回転数は反転の総数から数える（正解表2本の回転数 MAE 0.43 → 0.29）。
     # ½ 刻み（反転の数 / 2 をそのまま）は正解表 5 本で誤差 .36 → .38 と悪くなるので切り捨てのまま
+    if with_span:
+        return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2)), flips[a][0], flips[b][0])
+                for a, b, t in spans]
     return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2))) for a, b, t in spans]
 
 
-def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times):
+# 頭上で女性を回している間の男の反転は随伴回転: 女性のターンの範囲（最初〜最後の反転）の中で、2 人のどちらかの手首が
+# 頭より上にあったコマが LEADER_IN_SPIN_RAISED 以上なら、その範囲の男のターンは捨てる。男が手を上げて女性を回すと、
+# 男の上体も女性について回る（2fda2815 12.00 は女性の 10.86〜12.38 の連続回転の中、screenrec 17.61 は 16.68〜19.29 の中）。
+# ±CBL_PIVOT_SUPPRESS_SEC の窓は女性のターンの始まりからしか測らないので、長い連続回転の後半を拾えていなかった。
+# 10/4、正解表 6 本（tracks モード）: 男のターン F1 .600 → .667（fp 4 → 2）、ほかは不変。手の条件を外す（範囲だけ）と
+# bb0efcb9 12.73（optional の正解に当たっていた男の左回り）も落ちて向きが 37/39 → 36/38。0.4〜0.6 で結果は同じ。README 21
+LEADER_IN_SPIN_SUPPRESS = True
+LEADER_IN_SPIN_RAISED = 0.5       # >0 なら、その範囲で手が頭上（どちらかの人）だったコマの割合がこれ以上のときだけ捨てる
+LEADER_IN_SPIN_MARGIN = 0.0       # 範囲の前後に足す秒数（0.3 でも同じ）
+
+
+def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follower_spans=()):
     """男のターン: 向きの反転ペア（= 1 回転）を1つずつ見て、2つの反転が同じ向き（RR / LL）に読めたものだけ残す。
+    follower_spans: 女性のターンの [(最初の反転, 最後の反転)]
     戻り値: [(時刻, 回転数, spin)]"""
+    in_spin = []
+    if LEADER_IN_SPIN_SUPPRESS:
+        raised = raised_samples(draw_frames, pid, "either") if LEADER_IN_SPIN_RAISED > 0 else []
+        for a, b in follower_spans:
+            if LEADER_IN_SPIN_RAISED > 0:
+                vals = [r for t, r in raised if a <= t <= b]
+                if not vals or sum(vals) < LEADER_IN_SPIN_RAISED * len(vals):
+                    continue
+            in_spin.append((a - LEADER_IN_SPIN_MARGIN, b + LEADER_IN_SPIN_MARGIN))
     series = []
     for df in draw_frames:
         for p in df["kept"]:
@@ -997,6 +1088,7 @@ def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times):
         tm = (t1 + t2) / 2
         if (t2 - t1 <= TURN_FLIP_WINDOW and sweep_ok(t1 - TURN_PRE_SEC, t1, s) and sweep_ok(t1, t2, -s)
                 and r1 == r2 and r1 != "?" and not near(tm, cbl_times) and not near(tm, follower_turn_times)
+                and not any(a <= tm <= b for a, b in in_spin)
                 and (not LEADER_FACE_FLIP_CHECK or second_flip_turns(i))):
             pairs.append((i, tm, r1))
             i += 2
@@ -1519,11 +1611,13 @@ def detect_events(draw_frames, leader_pid):
                "handRaise": detect_hand_raise(draw_frames, t, leader_pid)}
               for t in cbl_times]
 
-    turns = {0: detect_turns(draw_frames, 0), 1: detect_turns(draw_frames, 1)}
+    spans = {pid: detect_turns(draw_frames, pid, with_span=True) for pid in (0, 1)}
+    turns = {pid: [(t, r) for t, r, _, _ in spans[pid]] for pid in (0, 1)}
     leader_spins = {}
     if leader_pid is not None:
         follower_turn_times = [t for t, _ in turns[1 - leader_pid]]
-        lt = detect_leader_turns(draw_frames, leader_pid, cbl_times, follower_turn_times)
+        lt = detect_leader_turns(draw_frames, leader_pid, cbl_times, follower_turn_times,
+                                 [(a, b) for _, _, a, b in spans[1 - leader_pid]])
         turns[leader_pid] = [(t, r) for t, r, _ in lt]
         leader_spins = {t: s for t, _, s in lt}
 

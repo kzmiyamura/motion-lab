@@ -3,6 +3,7 @@
   "job": "659353c4-ba3f-44d2-ab1f-9781f88c4103",
   "source": "storage/gt-sheets/bb0efcb9 コマ一覧（0.5秒刻み）を目視で読み取り（2026-10-03）。2026-10-04 に全編 0.2 秒刻み＋ターン区間 0.1 秒刻み（上半身の切り出し）で読み直し、ターンの向き・回転数・男のターンを足した",
   "leaderAtStart": "right",
+  "turnTime": "mid",
   "evalRange": [0, 37.8],
   "turnsComplete": false,
   "notes": [

@@ -884,6 +884,24 @@ TURN_RAISED_MIN_RATIO = 0.5   # 連なりの間、相手の手首が頭より上
 TURN_RAISED_WHO = "partner"   # partner / self / either（0.5 ならどれも同じ。0.4 にすると self / either は男のターンを落とす）
 TURN_RAISED_TRIM = True       # 連なりの終わりを、手が上がっていた最後の反転で切る（回転数 3 → 2、正解 1½）
 TURN_RAISED_KEEP_LEAD = True  # 手前で終わるターンを残す（False だと 12.6 を落として R は変わらない）
+# CBL の通過の半回転: 反転が 2 つだけ（½〜1 回転未満）で、その反転の間（± 1 コマ）に CBL の腰の交差があるものは
+# 女性のターンとして出さない。CBL の通過では女性は相手に向き合ったまま ½ 回って反対側へ出るので、肩の左右が 2 回入れ替わる
+# ことがあるが、CBL＋ターンなら通過の½に 1 回転が足されて反転は 3 つ以上になる。誤検出だった 2fda2815 3.91
+# （クローズドから開いて正面へ）・screenrec 10.72（CBL 10.6）・19.29（入れ替わり 20.4）は 3 件ともこの形。
+# 捨てた半回転も男のターンの随伴フィルタには使う（通過で男も一緒に回る）。
+# 10/4、正解表 6 本（tracks モード）: 女性のターン P/R .919/.919 → 1.000/.919（fp 3 → 0）、全体 F1 .884 → .895、
+# ほかは不変、揺らし検査の食い違い 48 → 48。余裕 0 は 2fda2815 の d2 で 3.91 が 4.00 にずれて残り食い違い 50、
+# 0.2 以上は screenrec 22.36（CBL の 0.28 秒前に終わる本物の 1 回転）まで落とす。README 23
+TURN_CBL_HALF_DROP = True
+TURN_CBL_HALF_MARGIN = 0.1
+TURN_CBL_HALF_KEEP_SUPPRESS = True
+# 冷却の内の、手を上げ直したターン（試して出していない。既定は無効）: 前のターンの反転から TURN_REARM_GAP 秒以上空き、
+# 次のターンとも離れた反転ペアで、本人（女性）の手首が頭上だったコマが TURN_REARM_RATIO 以上なら、冷却の内でもターンとして足す。
+# 8c312c6d 22.7 は拾える（全体 F1 .900）が、揺らし検査の食い違いが 48 → 51 に増える。README 23
+TURN_REARM_RATIO = 0.0
+TURN_REARM_GAP = 0.8
+TURN_REARM_WHO = "self"
+TURN_REARM_PRE_SEC = 0.3
 
 
 def wrist_over_head(p):
@@ -1019,10 +1037,45 @@ def detect_turns(draw_frames, pid, with_span=False):
                 spans = [s for s in spans if s not in drop] + [[i, max([j] + [s[1] for s in rest]), flips[i][0]]]
         i = j_chain + 1
     spans.sort()
+    if TURN_REARM_RATIO > 0:
+        rearm = raised_samples(draw_frames, pid, TURN_REARM_WHO)
+        added = []
+        i = 0
+        while i + 1 < len(flips):
+            prev = [s for s in spans + added if s[0] < i]
+            nxt = [s[0] for s in spans if s[0] > i]
+            ok = bool(prev) and pair_ok(i)
+            if ok:
+                p = max(prev)
+                p_end = min(len(flips) - 1, max(p[1], p[0] + 1))
+                ok = (i > p_end and flips[i][0] - p[2] <= EVENT_COOLDOWN_SEC
+                      and flips[i][0] - flips[p_end][0] >= TURN_REARM_GAP
+                      and not (nxt and min(nxt) <= i + 1))
+            if ok:
+                t1, t2 = flips[i][0], flips[i + 1][0]
+                vals = [r for t, r in rearm if t1 - TURN_REARM_PRE_SEC <= t <= t2]
+                ok = len(vals) >= 2 and sum(vals) >= TURN_REARM_RATIO * len(vals)
+            if ok:
+                j = chain_end(i)
+                if nxt:
+                    j = min(j, min(nxt) - 1)
+                if nxt and flips[min(nxt)][0] - flips[max(j, i + 1)][0] < TURN_REARM_GAP:
+                    i += 1  # 次のターンと同じ連なり（その前触れ）
+                    continue
+                added.append([i, j, flips[i][0]])
+                i = max(j, i + 1) + 1
+            else:
+                i += 1
+        spans = sorted(spans + added)
     # 回転数 = 範囲内の反転の数 / 2（切り捨て）。10fps の骨格では速い連続回転は1周3〜4コマしかなく、
     # 反転ペアの連結（振り幅条件つき）では途中のペアが条件を外して少なく数えるので、連結はターンの区切りにだけ使い、
     # 回転数は反転の総数から数える（正解表2本の回転数 MAE 0.43 → 0.29）。
     # ½ 刻み（反転の数 / 2 をそのまま）は正解表 5 本で誤差 .36 → .38 と悪くなるので切り捨てのまま
+    if with_span == "count":
+        # (時刻, 回転数, 最初の反転, 最後の反転（単発のペアなら 2 つ目）, 反転の数)
+        return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2)), flips[a][0],
+                 flips[min(len(flips) - 1, max(b, a + 1))][0], min(len(flips) - 1, max(b, a + 1)) - a + 1)
+                for a, b, t in spans]
     if with_span == "pair":
         # 向きを読む範囲: 1 つ目の反転から、連なりの最後の反転（単発の反転ペアなら 2 つ目の反転）まで
         return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2)), flips[a][0],
@@ -1639,6 +1692,14 @@ def detect_events(draw_frames, leader_pid):
 
     spans = {pid: detect_turns(draw_frames, pid, with_span=True) for pid in (0, 1)}
     turns = {pid: [(t, r) for t, r, _, _ in spans[pid]] for pid in (0, 1)}
+    half = set()
+    if TURN_CBL_HALF_DROP and leader_pid is not None:
+        m = TURN_CBL_HALF_MARGIN
+        half = {t for t, _, a, b, n in detect_turns(draw_frames, 1 - leader_pid, with_span="count")
+                if n <= 2 and any(a - m <= c <= b + m for c in cbl_times)}
+        if not TURN_CBL_HALF_KEEP_SUPPRESS:
+            spans[1 - leader_pid] = [s for s in spans[1 - leader_pid] if s[0] not in half]
+            turns[1 - leader_pid] = [(t, r) for t, r, _, _ in spans[1 - leader_pid]]
     leader_spins = {}
     if leader_pid is not None:
         follower_turn_times = [t for t, _ in turns[1 - leader_pid]]
@@ -1661,7 +1722,9 @@ def detect_events(draw_frames, leader_pid):
         else:
             by = "leader" if pid == leader_pid else "follower"
         for t, rotations in turns[pid]:
-            spin = leader_spins[t] if by == "leader" else spin_hint(draw_frames, pid, t, spin_spans[pid].get(t))
+            if by == "follower" and t in half:
+                continue  # CBL の通過の半回転（随伴フィルタには残す）
+            spin =leader_spins[t] if by == "leader" else spin_hint(draw_frames, pid, t, spin_spans[pid].get(t))
             events.append({"t": t, "type": "Turn", "by": by, "rotations": rotations,
                            "hold": detect_hold(draw_frames, t, leader_pid), "spin": spin})
     events.sort(key=lambda e: e["t"])

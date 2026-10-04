@@ -7,7 +7,8 @@
     "CBL は「2人の左右が入れ替わる瞬間」。技としての CBL に加えて位置交換（kind: swap）も含む",
     "from = 入れ替わる前に女性がいた画面の側。depth = すれ違うとき女性がカメラ側(near)か奥(far)か。読み取れないものは null",
     "turn の runs は女性（または男性）から見た回る向きと回転数。dir/turns が null は読み取れなかったもの",
-    "optional: true は有無が確定しないもの（検出されても誤検出に数えず、見逃しても取りこぼしに数えない）"
+    "optional: true は有無が確定しないもの（検出されても誤検出に数えず、見逃しても取りこぼしに数えない）",
+    "CBL に続けて回るものは、通過の½回転も回転数に含めた（2026-10-04 に揃えた。7.5・21.7 は 1 → 1½）"
   ],
   "cbl": [
     {"t": 8.0, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": true, "memo": "0:07 CBLからのアウトサイドターン"},
@@ -21,11 +22,11 @@
     {"t": 31.5, "kind": "cbl", "from": "left", "depth": "near", "leaderHandRaised": null, "memo": "0:31 開いてフィニッシュ"}
   ],
   "turns": [
-    {"t": 7.5, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:07 アウトサイドターン"},
+    {"t": 7.5, "by": "follower", "runs": [{"dir": "right", "turns": 1.5}], "memo": "0:07 アウトサイドターン（CBL＋アウトサイド。通過の½込みで 1½）", "note": "2026-10-04: 回転数の決まりを揃えた（CBL に続けて回るものは通過の½を含める）。元はターンだけで 1"},
     {"t": 11.8, "by": "follower", "runs": [{"dir": null, "turns": null}], "optional": true, "memo": "0:12 回ったかどうか読み取れない"},
     {"t": 13.3, "by": "leader", "runs": [{"dir": "left", "turns": 2}], "memo": "0:13 男性のレフトターン2回"},
     {"t": 16.4, "by": "follower", "runs": [{"dir": "left", "turns": 1}, {"dir": "right", "turns": 3}], "memo": "0:16 レフト1→ライト3"},
-    {"t": 21.7, "by": "follower", "runs": [{"dir": "right", "turns": 1}], "memo": "0:21 アウトサイドターン"},
+    {"t": 21.7, "by": "follower", "runs": [{"dir": "right", "turns": 1.5}], "memo": "0:21 アウトサイドターン（CBL＋アウトサイド。通過の½込みで 1½）", "note": "2026-10-04: 回転数の決まりを揃えた（CBL に続けて回るものは通過の½を含める）。元はターンだけで 1"},
     {"t": 23.0, "by": "leader", "runs": [{"dir": "right", "turns": 1}], "memo": "0:23 男性のライトターン"},
     {"t": 24.4, "by": "follower", "runs": [{"dir": "right", "turns": 4}], "memo": "0:24 ライト3→もう1回"},
     {"t": 29.0, "by": "follower", "runs": [{"dir": null, "turns": 2}], "memo": "0:29 ターン2回?（向き不明）"}

@@ -33,6 +33,8 @@ export type RoutineMove = {
   /** 拍数。8 の倍数（既定 8） */
   counts?: number;
   turn?: { by: 'leader' | 'follower' | 'both'; direction?: 'right' | 'left' | null; rotations?: number } | null;
+  /** 同じ行で男も回ったとき（turn は女性のターンが主。サーバーの normalize_routine.py が付ける） */
+  leaderTurn?: { direction?: 'right' | 'left' | null; rotations?: number | null } | null;
   /** 女性が男性の体から見てどちらを通ったか（return = コパのように行って戻る） */
   passSide?: 'left' | 'right' | 'return' | null;
   holdStart?: RoutineHold | null;

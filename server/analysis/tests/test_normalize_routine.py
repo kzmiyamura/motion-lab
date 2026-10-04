@@ -189,14 +189,21 @@ class SwapGridTest(unittest.TestCase):
         hit = sum(1 for s in cbl_starts if any(s <= t < ends[s] for t in sw))
         self.assertGreaterEqual(hit, len(cbl_starts) - 1)
 
-    def test_audio_grid_ignores_swaps(self):
-        # 音声の格子があれば入れ替わりは使わない（従来どおり）
-        sw = swaps_on_grid(2.6, 0.5, 20, jitter=self.JIT)
-        res = {"routine": {"moves": [mv(0.6), mv(4.3, "cbl"), mv(8.9)]}}
-        normalize(res, {"beatGrid": {"bpm": 120, "beatIntervalSec": 0.5, "firstBeatSec": 0.5},
-                        "events": cbl_events(sw)}, duration=12.6)
+    def test_audio_grid_keeps_phase_and_aligns_rows_to_swaps(self):
+        # 音声の格子があれば周期・位相は音のまま（入れ替わりで当て直さない）。行の割り当てだけ入れ替わりに合わせる:
+        # Claude の CBL の行（4.3 秒）は、入れ替わり（10.8 秒）のある 8 カウント（8.5〜12.5）へ 1 行ずれる
+        grid = {"beatGrid": {"bpm": 120, "beatIntervalSec": 0.5, "firstBeatSec": 0.5}}
+        res = {"routine": {"moves": [mv(0.6), mv(4.3, "cbl"), mv(8.9), mv(12.6)]}}
+        normalize(res, {**grid, "events": cbl_events([10.8])}, duration=16.6)
+        moves = res["routine"]["moves"]
         self.assertEqual(res["routine"]["grid"]["source"], "audio")
-        self.assertEqual([m["start"] for m in res["routine"]["moves"]], [0.5, 4.5, 8.5])
+        self.assertEqual(res["routine"]["grid"]["phaseSec"], 0.5)
+        self.assertTrue(all((m["start"] - 0.5) % 4 == 0 for m in moves))
+        self.assertEqual([m["move"] for m in moves if m["start"] == 8.5], ["cbl"])
+        # 入れ替わりが無ければ従来どおり最寄りの頭
+        res2 = {"routine": {"moves": [mv(0.6), mv(4.3, "cbl"), mv(8.9)]}}
+        normalize(res2, grid, duration=12.6)
+        self.assertEqual([m["start"] for m in res2["routine"]["moves"]], [0.5, 4.5, 8.5])
 
     def test_idempotent_with_swaps(self):
         sw = swaps_on_grid(2.6, 0.5, 30, jitter=self.JIT)
@@ -423,40 +430,29 @@ class TurnKindTest(unittest.TestCase):
 
 
 class RotationPriorTest(unittest.TestCase):
-    """回転数の事前分布: CBL ½・CBL＋ターン 1½（2½）・その場 1（2）。強い証拠が無ければ最寄りへ寄せる"""
+    """回転数の事前分布: CBL ½・CBL＋ターン 1½（2½）・その場 1（2）。数が無いときの穴埋めと拍の上限だけに使う"""
 
     def row(self, move, r, **kw):
         return {"move": move, "turn": {"by": "follower", "direction": "left", "rotations": r}, **kw}
 
-    def test_cbl_turn_snaps_to_one_and_a_half(self):
-        m = self.row("cbl_inside_turn", 1.0, evidence="seen", confidence=0.4)
-        self.assertEqual(apply_rotation_prior(m, None, 0.32), "rotations:1.0->1.5(prior)")
+    def test_counts_are_not_snapped_to_the_prior(self):
+        # 目安（CBL＋ターン 1½・その場 1）と違う数でも寄せない。目安より多い数を下げない（正解表では多く回るのが普通）
+        for move, r in (("cbl_inside_turn", 1.0), ("cbl_inside_turn", 2.0), ("cbl_inside_turn", 3.0),
+                        ("left_turn", 1.5), ("right_turn", 2.0), ("left_turn", 3.0)):
+            m = self.row(move, r)
+            self.assertIsNone(apply_rotation_prior(m, None, 0.32), (move, r))
+            self.assertEqual(m["turn"]["rotations"], r)
+
+    def test_missing_count_is_filled(self):
+        # 数が無いときだけ埋める: CV の数（同じ向き）があればそれ、無ければ技の普通の回数
+        m = self.row("cbl_inside_turn", None)
+        self.assertEqual(apply_rotation_prior(m, None, 0.32), "rotations:None->1.5(prior)")
         self.assertEqual(m["turn"]["rotations"], 1.5)
-        self.assertEqual(m["turn"]["claudeRotations"], 1.0)
-        m2 = self.row("cbl_inside_turn", 2.0)
-        apply_rotation_prior(m2, None, 0.32)
-        self.assertEqual(m2["turn"]["rotations"], 1.5)        # 1½ と 2½ の真ん中は普通の方（1½）
-        m3 = self.row("cbl_inside_turn", 3.0, evidence="seen", confidence=0.5)
-        apply_rotation_prior(m3, None, 0.32)
-        self.assertEqual(m3["turn"]["rotations"], 2.5)
-
-    def test_in_place_turn_prior(self):
-        m = self.row("left_turn", 1.5)
-        apply_rotation_prior(m, None, 0.32)
-        self.assertEqual(m["turn"]["rotations"], 1.0)
-        m2 = self.row("right_turn", 2.0)
-        self.assertIsNone(apply_rotation_prior(m2, None, 0.32))   # ダブルは普通の回数
-
-    def test_strong_evidence_keeps_value(self):
-        # 画像で見えて自信が高い
-        m = self.row("cbl_inside_turn", 1.0, evidence="seen", confidence=0.8)
-        self.assertIsNone(apply_rotation_prior(m, None, 0.32))
-        # CV が同じ向きで同じ回数を数えた（1 回で止める = チェック・ラップの入り）
-        m2 = self.row("cbl_inside_turn", 1.0)
-        self.assertIsNone(apply_rotation_prior(m2, {"dir": "left", "turns": 1.0, "dur": 0.7}, 0.32))
-        # CV が逆向き・向きの混ざった回転なら証拠にしない
-        m3 = self.row("cbl_inside_turn", 1.0)
-        apply_rotation_prior(m3, {"dir": None, "turns": None, "dur": 2.7}, 0.32)
+        m2 = self.row("left_turn", None)
+        apply_rotation_prior(m2, {"dir": "left", "turns": 2.0, "dur": 1.0}, 0.32)
+        self.assertEqual((m2["turn"]["rotations"], m2["turn"]["rotationSource"]), (2.0, "cv"))
+        m3 = self.row("cbl_inside_turn", None)
+        apply_rotation_prior(m3, {"dir": "right", "turns": 2.0, "dur": 1.0}, 0.32)   # 逆向きの CV は使わない
         self.assertEqual(m3["turn"]["rotations"], 1.5)
 
     def test_never_more_rotations_than_beats(self):
@@ -483,10 +479,10 @@ class RotationPriorTest(unittest.TestCase):
             {**spin, "t": 1.0, "spin": {**spin["spin"], "from": 0.9, "to": 2.5}}]}, duration=2.56)
         m = res["routine"]["moves"][0]
         self.assertEqual(m["turn"]["direction"], "left")
-        self.assertEqual(m["turn"]["rotations"], 1.5)
-        self.assertEqual(m["turn"]["rotationSource"], "prior")
-        self.assertEqual(m["name"], "CBL＋インサイド×1½?")
-        self.assertEqual(res["routine"]["rotationChecks"], 1)
+        self.assertEqual(m["turn"]["rotations"], 1.0)      # CV の最初のはっきりした回転（左 1）。目安の 1½ には寄せない
+        self.assertNotIn("rotationSource", m["turn"])
+        self.assertEqual(m["name"], "CBL＋インサイド?")
+        self.assertEqual(res["routine"]["rotationChecks"], 0)
 
 
 class TempoRangeTest(unittest.TestCase):
@@ -586,8 +582,8 @@ class PassCheckTest(unittest.TestCase):
         a, b, c = res["routine"]["moves"]
         self.assertEqual(a["sides"]["swapAt"], [3.55])
         self.assertEqual(b["move"], "cbl_inside_turn")
-        self.assertEqual(b["name"], "CBL＋インサイド×1½?")   # 回転 1 は CBL＋ターンの普通の 1½ に寄せる
-        self.assertEqual(b["turn"]["rotations"], 1.5)
+        self.assertEqual(b["name"], "CBL＋インサイド?")   # 回転 1 は目安（1½）に寄せない
+        self.assertEqual(b["turn"]["rotations"], 1)
         self.assertTrue(b["passCheck"].startswith("turnNearSwap"))
 
     def test_right_turn_takes_unclaimed_nearby_swap_as_cbl_outside(self):
@@ -601,7 +597,7 @@ class PassCheckTest(unittest.TestCase):
         normalize(res, self.summary([3.7]), duration=12.0, tracks=tracks)
         b = res["routine"]["moves"][1]
         self.assertEqual(b["move"], "cbl_outside_turn")
-        self.assertEqual(b["name"], "CBL＋アウトサイド×1½?")
+        self.assertEqual(b["name"], "CBL＋アウトサイド?")
         self.assertTrue(b["passCheck"].startswith("turnNearSwap:right_turn->cbl_outside_turn"))
 
     def test_left_turn_without_swap_stays_in_place_left_turn(self):
@@ -684,6 +680,62 @@ class InferHoldTest(unittest.TestCase):
         self.assertNotIn("inferredHold", m)
         self.assertEqual(m["leadHand"], "R")
         self.assertEqual(m["turn"]["kind"], "inside")
+
+
+class CardFixTest(unittest.TestCase):
+    """1×8 に入れ替わり 2 回（CBL×2）・女性のターンを主にする（男のターンは leaderTurn）"""
+    GRID = {"beatGrid": {"beatIntervalSec": 0.5, "firstBeatSec": 0.0}}
+
+    def cbl(self, t, side="left"):
+        return {"t": t, "type": "CBL", "by": "pair", "pass": {"side": side}}
+
+    def turn(self, t, by, d, n):
+        return {"t": t, "type": "Turn", "by": by, "spin": {"from": t, "to": t + 0.6, "runs": [{"dir": d, "turns": n}]}}
+
+    def test_other_with_two_swaps_becomes_cbl_x2(self):
+        res = {"routine": {"timing": "on2", "moves": [
+            mv(0.0, "other", name="アラウンド・ザ・ワールド"), mv(4.0, "other", name="CBL→アンダーアーム"),
+            mv(8.0, "wrap", name="ラップ", turn={"by": "follower", "direction": "left", "rotations": 1.5}),
+            mv(12.0, "other", name="終わりのポーズ")]}}
+        ev = [self.cbl(1.0, "left"), self.cbl(3.0, "left"), self.cbl(5.0, "left"), self.cbl(7.0, "right"), self.cbl(9.5)]
+        normalize(res, {**self.GRID, "events": ev}, duration=16.0)
+        a, b, c, d = res["routine"]["moves"]
+        self.assertEqual((a["move"], a["name"], a["swapCount"]), ("cbl", "CBL×2?", 2))
+        self.assertEqual(a["claudeName"], "アラウンド・ザ・ワールド")
+        self.assertEqual((b["move"], b["name"]), ("cbl", "CBL＋逆CBL?"))      # 通る側が逆
+        self.assertEqual(c["move"], "cbl_inside_turn")                         # 1 回 + 女性の左回り
+        self.assertEqual((d["move"], d["name"]), ("other", "終わりのポーズ"))  # 入れ替わりの無い other はそのまま
+        # 振付シートの評価でも入れ替わりの行になる
+        gt = {"cbl": [{"t": 1.2, "kind": "cbl"}, {"t": 3.1, "kind": "cbl"}, {"t": 5.2, "kind": "cbl"}], "turns": []}
+        self.assertEqual(evaluate_rows(res["routine"]["moves"], gt, 0.5)["cbl"]["acc"], 1.0)
+
+    def test_follower_turn_is_primary_and_leader_turn_moves_aside(self):
+        res = {"routine": {"timing": "on2", "moves": [
+            mv(0.0, "leader_turn", name="男 右回り", turn={"by": "leader", "direction": "right", "rotations": 1}),
+            mv(4.0, "basic", name="ベーシック"),
+            mv(8.0, "hand_change", name="持ち替え"),
+            mv(12.0, "basic", name="ベーシック")]}}
+        ev = [self.turn(1.0, "follower", "left", 1.5), self.turn(5.0, "follower", "right", 2.0),
+              self.turn(9.0, "follower", "right", 0.5)]      # ½ 回転だけの CV は付けない
+        normalize(res, {**self.GRID, "events": ev}, duration=16.0)
+        a, b, c, d = res["routine"]["moves"]
+        self.assertEqual(a["move"], "left_turn")
+        self.assertEqual(a["turn"], {**a["turn"], "by": "follower", "direction": "left", "rotations": 1.5})
+        self.assertEqual(a["leaderTurn"], {"direction": "right", "rotations": 1})
+        self.assertEqual(a["name"], "左回りターン×1½?")
+        self.assertEqual((b["move"], b["turn"]["direction"], b["turn"]["rotations"]), ("right_turn", "right", 2.0))
+        self.assertTrue(b["name"].endswith("?"))
+        self.assertEqual(c["move"], "hand_change")
+        self.assertEqual(d["move"], "basic")
+
+    def test_merged_leader_turn_kept_as_leader_turn(self):
+        res = {"routine": {"timing": "on2", "moves": [
+            mv(0.0, "left_turn", name="左回り", confidence=0.8, turn={"by": "follower", "direction": "left", "rotations": 1}),
+            mv(0.8, "leader_turn", name="男 右回り", confidence=0.4, turn={"by": "leader", "direction": "right", "rotations": 1})]}}
+        normalize(res, self.GRID, duration=4.0)
+        (m,) = res["routine"]["moves"]
+        self.assertEqual(m["turn"]["by"], "follower")
+        self.assertEqual(m["leaderTurn"], {"direction": "right", "rotations": 1})
 
 
 if __name__ == "__main__":

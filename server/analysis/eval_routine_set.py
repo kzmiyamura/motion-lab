@@ -13,7 +13,7 @@
   rot   上の行のうち回転数が分かるものの、回転数の誤差の平均（|行の rotations − 正解の合計回転数|）
   side  正解の入れ替わり（optional でない）を覆う CBL 系の行の sides.followerStart が正解の from と合うか
 
-Usage: python eval_routine_set.py [--job screenrec=<jobId> ...] [--json out.json] [--verbose]
+Usage: python eval_routine_set.py [--job screenrec=<jobId> ...] [--jobs-dir <dir>] [--json out.json] [--verbose]
 """
 import argparse
 import glob
@@ -106,6 +106,7 @@ def main():
     a = argparse.ArgumentParser()
     a.add_argument("--job", action="append", default=[], help="名前=ジョブID（既定は routine の入った最新のジョブ）")
     a.add_argument("--json", help="指標を JSON で書き出す")
+    a.add_argument("--jobs-dir", help="result.json / measurements.json をこの下の <ジョブID>/out から読む（正規化し直した写しの採点用。ジョブの選び方は同じ）")
     a.add_argument("--verbose", "-v", action="store_true")
     args = a.parse_args()
     forced = dict(x.split("=", 1) for x in args.job)
@@ -123,7 +124,7 @@ def main():
             print(f"{name:10s} （routine の入ったジョブが無い）")
             report[name] = None
             continue
-        out = os.path.join(JOBS_DIR, jid, "out")
+        out = os.path.join(args.jobs_dir or JOBS_DIR, jid, "out")
         res = json.load(open(os.path.join(out, "result.json"), encoding="utf-8"))
         meas_p = os.path.join(out, "measurements.json")
         meas = json.load(open(meas_p, encoding="utf-8")) if os.path.exists(meas_p) else None

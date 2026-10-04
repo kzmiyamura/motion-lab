@@ -202,6 +202,8 @@ export function ChoreoSheet({
                   {(row.diagram ? [row.hold] : [row.hold, row.turn, row.pass]).filter(Boolean).join(' ／ ')}
                 </p>
               )}
+              {/* 男も回った行は 1 行だけ添える（図・説明の turn は女性のターン） */}
+              {row.leaderTurn && <p className={styles.facts}>{row.leaderTurn}</p>}
               {row.diagram && <MoveDiagram data={row.diagram} />}
               {photos && <MovePhotos set={photos} row={row} linkOut={!playable} />}
             </li>

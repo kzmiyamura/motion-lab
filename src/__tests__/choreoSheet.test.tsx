@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import {
   countAt, fmtRotations, holdLabel, moveFramesPending, parseChoreoSheet, parseMoveFrames, passLabel,
-  diagramFor, reportSummary, turnKind, turnLabel, TURN_LEGEND,
+  diagramFor, leaderTurnLabel, reportSummary, turnKind, turnLabel, TURN_LEGEND,
 } from '../engine/choreoSheet';
 
 vi.mock('../engine/homeServer', async (importOriginal) => {
@@ -154,6 +154,21 @@ describe('choreoSheet（純関数）', () => {
       routine: { timing: 'on2', bpm: 186, bpmSource: 'swaps', moves: [{ start: 0, move: 'basic' }] },
     }))!;
     expect(s.header.join(' · ')).toBe('On2 · BPM 186 · 男＝右スタート');
+  });
+
+  it('同じ行で男も回ったら（leaderTurn）短い 1 行を添える。主のターンは女性', () => {
+    expect(leaderTurnLabel({ direction: 'left', rotations: 1 })).toBe('男も: 左回り1回転');
+    expect(leaderTurnLabel({ direction: null, rotations: null })).toBe('男も: 回る');
+    expect(leaderTurnLabel(null)).toBeNull();
+    const s = parseChoreoSheet(JSON.stringify({
+      routine: { timing: 'on2', moves: [
+        { start: 0, move: 'left_turn', turn: { by: 'follower', direction: 'left', rotations: 1.5 }, leaderTurn: { direction: 'right', rotations: 1 } },
+        { start: 3, move: 'basic' },
+      ] },
+    }))!;
+    expect(s.rows[0].turn).toBe('女: 左回り（反時計回り）1½回転・インサイドターン');
+    expect(s.rows[0].leaderTurn).toBe('男も: 右回り1回転');
+    expect(s.rows[1].leaderTurn).toBeNull();
   });
 
   it('routine が無ければ null', () => {

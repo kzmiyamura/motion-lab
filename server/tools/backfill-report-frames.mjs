@@ -21,6 +21,10 @@
  *     … さらにその前に refine_events.py で入れ替わり・ターンの前後を 25〜30fps で取り直す
  *       （measurements.json / tracks.json の events を書き換える。取り直し済み（summary.eventRefine あり）なら飛ばす。
  *       YOLO を回すので重い。1 件ずつ）
+ *   node tools/backfill-report-frames.mjs --move-frames --update-events --normalize [<jobId> ...]
+ *     … 先に update_events.py で技イベントを tracks.json から今の analyze_pair で作り直す（ターンの区間は全フレームで
+ *       YOLO をかけ直す = ジョブと同じ。measurements.json / tracks.json の events を書き換え、元は summary.eventsPrev に残す）。
+ *       --retrack を足すと先に人物 ID を今の外見追跡（assign_appearance_ids）で付け直す（動画を読み直して色ヒストグラムを作る。YOLO なし）
  *   jobId 省略時は status=done の全ジョブ
  */
 import { spawnSync } from 'node:child_process';
@@ -47,6 +51,9 @@ const MOVE_SCRIPT = path.join(SERVER_DIR, 'analysis/make_move_frames.py');
 const normalize = args.includes('--normalize');
 const NORMALIZE_SCRIPT = path.join(SERVER_DIR, 'analysis/normalize_routine.py');
 const refine = args.includes('--refine');
+const updateEvents = args.includes('--update-events');
+const retrackIds = args.includes('--retrack');   // --update-events と一緒に: 人物 ID を今の外見追跡で付け直す
+const UPDATE_EVENTS_SCRIPT = path.join(SERVER_DIR, 'analysis/update_events.py');
 const REFINE_SCRIPT = path.join(SERVER_DIR, 'analysis/refine_events.py');
 const MODEL_PATH = process.env.YOLO_MODEL_PATH ?? path.join(SERVER_DIR, 'models/yolov8s-pose.pt');
 const REFINE_BUDGET_SEC = Number(process.env.REFINE_BUDGET_SEC ?? 240);
@@ -115,9 +122,21 @@ function backfillMoveFrames(targets) {
       continue;
     }
     if (dryRun) {
-      console.log(`${tag} would ${refine ? 'refine events, ' : ''}${normalize ? 'normalize routine and ' : ''}make ${moves} move frames`);
+      console.log(`${tag} would ${updateEvents ? 'update events, ' : ''}${refine ? 'refine events, ' : ''}${normalize ? 'normalize routine and ' : ''}make ${moves} move frames`);
       t.made++;
       continue;
+    }
+    if (updateEvents) {
+      // 技イベントを tracks.json から今の analyze_pair で作り直す（ターンの区間は全フレームで取り直す = ジョブと同じ）
+      const u = spawnSync(PYTHON_BIN, [UPDATE_EVENTS_SCRIPT, path.join(outDir, 'measurements.json'),
+        `--video=${videoPath}`, `--model=${MODEL_PATH}`, ...(retrackIds ? ['--retrack'] : [])], { encoding: 'utf-8' });
+      const last = (u.stderr || u.error?.message || '').trim().split('\n').pop();
+      if (u.status !== 0) {
+        console.log(`${tag} update events failed: ${last}`);
+        t.failed++;
+        continue;
+      }
+      console.log(`${tag} ${last}`);
     }
     if (refine) {
       const measPath = path.join(outDir, 'measurements.json');

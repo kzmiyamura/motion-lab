@@ -15,11 +15,11 @@ Claude の routine は技イベントの時刻（CBL・ターンの瞬間）か�
    入れ替わりが少ない・揃わないときは、routine の間隔の中央値から推定し技の頭の時刻に合わせる（従来）
 2. 位相（8カウントの頭がどこか）: 音声なら技の頭の時刻が最もよく乗る拍。入れ替わりで当てたならそれで決まる。
    各技の start を最寄りの 8 カウントの頭へ寄せる。入れ替わりで当てたときは、Claude の行の順番を保ったまま
-   CBL 系の行が入れ替わりのある 8 カウントに来るよう前後にずらす（Claude の行の時刻が 1 行ずれることがある）
+   CBL 系の行が入れ替わりのある 8 カウントに来るよう前後にずらす（Claude の行の時刻が 1 行ずれることがある）。
+   音声の格子でも、位相は音のまま、行の割り当てだけ同じように CV の入れ替わりに合わせる
 3. 同じ頭に寄った技は 1 行にまとめる（ターン・パスがある方を主にする）。counts は次の技の頭までの 8 の倍数
-4. 回転数は技ごとの普通の回数（事前分布: CBL ½・CBL＋ターン 1½（ダブルは 2½）・その場のターン 1（ダブル 2）、
-   docs/salsa-knowledge/on2-timing-and-terms.md §5・§8-4）の最寄りに寄せる。画像で見えていて自信 0.7 以上か、
-   CV が全フレームで数えた回転（spin.runs）が同じ数を示すときだけ、寄せずに ½ 刻みの値を残す。
+4. 回転数の普通の回数（事前分布: CBL ½・CBL＋ターン 1½（ダブルは 2½）・その場のターン 1（ダブル 2）、
+   docs/salsa-knowledge/on2-timing-and-terms.md §5・§8-4）は、数が無いときの穴埋めにだけ使う（寄せて減らさない）。
    2 回転を上限にし（強い証拠があれば 3 回転まで）、使える拍より多い回転は採らない（多回転でも 1 回転 ≈ 1 拍が最短。
    CV の回転区間があればその拍数、無ければ半分の 8 カウント = 4 拍）。削ったら自信を下げて「?」が付くようにする
 5. 技名は全角 14 文字以内に縮める（括弧書きを落とし「クロスボディリード」→「CBL」等）
@@ -34,7 +34,10 @@ Claude の routine は技イベントの時刻（CBL・ターンの瞬間）か�
 8. パスの整合: 左右が入れ替わったのにパスの無い技（ベーシック・その場のターン）は CBL 系に付け替え、
    CBL 系なのに入れ替わっていなければ種類はそのままで「?」を付ける（passCheck に印）。
    インサイドターンは CBL と組むのが普通なので、その場のインサイドターンで入れ替わりが無ければ、前後半分の
-   8 カウント以内の持ち主の無い入れ替わりを取って CBL＋インサイドにし、それも無ければ「?」を付ける
+   8 カウント以内の持ち主の無い入れ替わりを取って CBL＋インサイドにし、それも無ければ「?」を付ける。
+   1×8 に入れ替わりが入った other / wrap / copa の行は CBL 系にし、2 回なら「CBL×2」（通る側が逆なら「CBL＋逆CBL」）
+   女性のターンが主: 男のターンの行・ベーシック・持ち替えの行に女性の CV のターンがあれば女性のターンを turn にし、
+   男のターンは leaderTurn に移す（「?」を付ける）
 9. 回る向き: 右回り = 回る人自身の右へ = 上から見て時計回り。女性のターンは向きだけでインサイド/アウトサイドを
    決める（turn.kind。左回り = インサイド・右回り = アウトサイド。つなぎ手が変わっても同じ。サルサの主流の
    Dance Dojo の呼び方。docs/salsa-knowledge/on2-timing-and-terms.md §3）。本文（steps・回転の欄）は
@@ -57,6 +60,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pair_sides  # noqa: E402
+
 
 NAME_MAX = 14
 MIN_UNIT8 = 1.6     # 1×8 の秒数の下限（≒ 300 BPM）
@@ -367,13 +371,31 @@ def swap_cells(heads, swaps, swap_beat=SWAP_BEAT):
     return has
 
 
-def align_to_swaps(moves, heads, swaps, swap_beat=SWAP_BEAT):
+AUDIO_ALIGN = True   # 音声の格子でも、行の割り当てを CV の入れ替わりに合わせる（位相は音のまま）
+
+
+def audio_swap_cells(heads, swaps):
+    """音声の格子（位相は音で決まっている）で、各 8 カウントに CV の入れ替わり（腰の交差）が入っているか。
+    入れ替わりは入っている 8 カウント（頭〜次の頭）のもの。
+    「6 拍目以降の入れ替わりは、次の 8 カウントに入れ替わりが無ければ次のもの」とする溢れの規則も試したが、
+    正解表 6 本で cbl .894 → .848・img1884 .857 → .571 と悪くなったので入れていない（README 反映済み 16）"""
+    n = len(heads)
+    has = [False] * n
+    for s in swaps:
+        j = bisect.bisect_right(heads, s) - 1
+        if 0 <= j < n - 1:
+            has[j] = True
+    return has
+
+
+def align_to_swaps(moves, heads, swaps, swap_beat=SWAP_BEAT, has=None):
     """Claude の行（時刻順）を 8 カウントへ順番を保って割り当てる。各行はまず元の時刻の最寄りの頭が候補で、
     CBL 系の行が入れ替わりのある 8 カウントに、そうでない行が入れ替わりの無い 8 カウントに来るよう
     前後にずらしてよい（Claude の行の時刻が 1 行ぶんずれていることがあるため）。
     罰: ずらした分 × SWAP_SHIFT_WEIGHT、食い違い × SWAP_ALIGN_WEIGHT。同じ 8 カウントに 2 行 → まとめる"""
     n = len(heads)
-    has = swap_cells(heads, swaps, swap_beat)
+    if has is None:
+        has = swap_cells(heads, swaps, swap_beat)
     inf = float("inf")
     pref = [nearest_head(heads, m["start"]) for m in moves]
     span = [((heads[j + 1] - heads[j]) if j + 1 < n else (heads[j] - heads[j - 1])) for j in range(n)]
@@ -492,6 +514,12 @@ def merge_group(group):
         out["turn"] = next((g["turn"] for g in group if g.get("turn")), None)
     if not out.get("passSide"):
         out["passSide"] = next((g["passSide"] for g in group if g.get("passSide")), None)
+    # 女性のターンが主の行にまとめた男のターンは leaderTurn に残す（1 行に書けるターンは 1 つ）
+    if (out.get("turn") or {}).get("by") in ("follower", "both") and not out.get("leaderTurn"):
+        lt = next((g["turn"] for g in group if g is not main and isinstance(g.get("turn"), dict)
+                   and g["turn"].get("by") == "leader"), None)
+        if lt:
+            out["leaderTurn"] = {"direction": lt.get("direction"), "rotations": lt.get("rotations")}
     heavy = [g for g in group if g.get("move") not in LIGHT_MOVES]
     if len({g.get("move") for g in heavy}) > 1:
         # 別々の技が同じ 1×8 に入った = どちらかの時刻・種類が怪しい
@@ -870,7 +898,7 @@ ROT_PRIOR = {
     "right_turn": (1.0, 2.0), "left_turn": (1.0, 2.0), "inside_turn": (1.0, 2.0), "outside_turn": (1.0, 2.0),
     "leader_turn": (1.0, 2.0),
 }
-MIN_BEATS_PER_ROT = 1.0     # 多回転でも 1 回転に最低 1 拍（シングルは ≈ 2 拍）。これより多い回転は採らない
+MIN_BEATS_PER_ROT = 1.0    # 多回転でも 1 回転に最低 1 拍（シングルは ≈ 2 拍）。これより多い回転は採らない
 TURN_WINDOW_BEATS = 4.0     # CV の回転区間が無いときに回転に使える拍（半分の 8 カウント。On2 の 2-3-(4)-5 等）
 
 
@@ -895,27 +923,31 @@ def cv_spin_info(summary, t0, t1, by="follower"):
 
 
 def apply_rotation_prior(mv, spin, beat):
-    """回転数を技の普通の回数（ROT_PRIOR）の最寄りに寄せ、使える拍より多い回転を削る。戻り値は直した印（変えなければ None）。
-    - 寄せないのは強い証拠があるとき: 画像で見えて自信 STRONG_CONF 以上、または CV の回転（同じ向きの run だけ）が
-      同じ数（±¼）を示すとき（例: CBL＋インサイドで 1 回転で止める = チェック・ラップの入り）
+    """回転数の目安（ROT_PRIOR）は穴埋めと上限だけに使う。戻り値は直した印（変えなければ None）。
+    - 数が無いとき: CV の回転（同じ向きの run だけ）があればその数、無ければ技の普通の回数で埋める
+    - 数があるときは目安の最寄りへ寄せない（Claude・CV の数が目安より多くても下げない）。以前は寄せていたが、
+      正解表で寄せた行は 5 行とも悪化した（8c312c6d 4.1 2→1½・正解 3 等。目安より多く回るのが普通）。
+      6 本の回転数の誤差 .469 → .406（docs/salsa-knowledge/README.md 反映済み 16）
     - 拍の上限: 回転に使える拍（TURN_WINDOW_BEATS。CV の回転区間がそれより長ければその拍数。CV の区間は見えていた
       間だけなので下限であって上限ではない）÷ MIN_BEATS_PER_ROT。MAX_ROT と合わせて二重の歯止め
     元の値は turn.claudeRotations、寄せた理由は turn.rotationSource（prior / beats）に残す"""
     turn = mv.get("turn")
-    if not isinstance(turn, dict) or not _num(turn.get("rotations")):
+    if not isinstance(turn, dict):
         return None
-    r = turn["rotations"]
-    new, src = r, None
     prior = ROT_PRIOR.get(mv.get("move"))
     if mv.get("move") == "leader_turn" and turn.get("by") != "leader":
         prior = None
-    if prior and r not in prior:
-        conf = mv.get("confidence")
-        seen = mv.get("evidence") == "seen" and _num(conf) and conf >= STRONG_CONF
-        cv = spin.get("turns") if spin and spin.get("dir") == turn.get("direction") else None
-        if not seen and not (_num(cv) and abs(cv - r) <= 0.25):
-            new = min(prior, key=lambda p: (abs(p - r), prior.index(p)))
-            src = "prior"
+    if not _num(turn.get("rotations")):
+        # 数が無いときだけ目安で埋める（CV の数があればそれ）
+        cv = spin.get("turns") if spin and spin.get("dir") in (turn.get("direction"), None) else None
+        fill = cv if _num(cv) and cv > 0 else (prior[0] if prior else None)
+        if fill is None:
+            return None
+        turn["rotations"] = fill
+        turn["rotationSource"] = "cv" if fill == cv else "prior"
+        return f"rotations:None->{fill}({turn['rotationSource']})"
+    r = turn["rotations"]
+    new, src = r, None
     if beat and beat > 0:
         dur = (spin or {}).get("dur")
         beats = max(TURN_WINDOW_BEATS, dur / beat if _num(dur) else 0.0)
@@ -928,6 +960,35 @@ def apply_rotation_prior(mv, spin, beat):
     turn["rotations"] = new
     turn["rotationSource"] = src
     return f"rotations:{r}->{new}({src})"
+
+
+FOLLOWER_FIRST_MOVES = {"basic", "hand_change", "leader_turn"}   # 女性の CV のターンがあれば女性のターンを付ける行
+
+
+def prefer_follower_turn(mv, fspin):
+    """1 行に書けるターンは 1 つなので、女性のターンを主（turn）にし、男のターンは leaderTurn に移す。
+    - 行のターンが男（leader_turn 等）で、行の中で女性の CV のターン（向きのそろった 1 回転以上）が回り始めていれば、
+      女性のターンを turn に、男のターンを leaderTurn に
+    - ベーシック・持ち替えの行に女性の CV のターンがあれば、ターンを付ける
+    どちらも CV の向き・回転数で、その場のターン（left_turn / right_turn）にして「?」を付ける（入れ替わりがあれば
+    この後の check_pass が CBL＋ターンにする）。戻り値は直した印（変えなければ None）。
+    正解表では 2fda2815 5.9（CBL 直後の女性の左 1½ が男のライトターンの行に入る）・screenrec 16.4・img1884 44.1 等"""
+    turn = mv.get("turn") if isinstance(mv.get("turn"), dict) else None
+    by = (turn or {}).get("by")
+    if by in ("follower", "both") or not fspin or fspin.get("dir") not in DIR_SHORT or not _num(fspin.get("turns")) \
+            or fspin["turns"] < 1:
+        return None
+    move = mv.get("move")
+    if not (by == "leader" or move in FOLLOWER_FIRST_MOVES):
+        return None
+    if by == "leader":
+        mv["leaderTurn"] = {"direction": turn.get("direction"), "rotations": turn.get("rotations")}
+    d = fspin["dir"]
+    mv["turn"] = {"by": "follower", "direction": d, "rotations": max(0.5, min(MAX_ROT, round_half(fspin["turns"]))),
+                  "directionSource": "cv", "rotationSource": "cv"}
+    mv["move"] = f"{d}_turn"
+    mv["name"] = DEFAULT_NAME[mv["move"]]
+    return f"followerTurn:{move}->{mv['move']}"
 
 
 def check_direction(mv, spin):
@@ -978,7 +1039,48 @@ def check_pass(mv, cv_side):
     return None
 
 
-INSIDE_NEAR_BEATS = 4.0   # インサイドターンの行の外でも、この拍数（半分の 8 カウント）以内の入れ替わりはその技のパスとみなす
+SWAP_TO_CBL_MOVES = {"other", "wrap", "copa"}   # CV の入れ替わりが入っていたら CBL 系に寄せる技（名前の付けにくい速い組み合わせ）
+
+
+def cv_swaps_in(summary, t0, t1):
+    """行の中の CV の CBL イベント（腰の交差の時刻の順）"""
+    ev = [e for e in (summary or {}).get("events") or []
+          if isinstance(e, dict) and e.get("type") == "CBL" and _num(e.get("t")) and t0 <= cross_t(e) < t1]
+    return sorted(ev, key=cross_t)
+
+
+def check_multi_swap(mv, swaps):
+    """1×8 に入れ替わりが 2 回ある（通って戻る・CBL を 4 拍で 2 回）と Claude は別の名前（move = other 等）にしがちで、
+    振付シートでも評価でも入れ替わりの行にならない（2fda2815 3.2「CBL→アンダーアーム?」、screenrec 9.7・19.8
+    「アラウンド・ザ・ワールド?」等）。CV の入れ替わりが入った other / wrap / copa の行は CBL 系に寄せる
+    （女性のターンがあれば CBL＋インサイド/アウトサイド、無ければ CBL）。
+    入れ替わりが 2 つ以上の other / wrap / copa / cbl の行は「CBL×2」、2 回の通る側（pass.side）が逆なら「CBL＋逆CBL」。
+    元の名前は claudeName に残す。戻り値は直した印（変えなければ None）"""
+    move = mv.get("move")
+    if not swaps or move not in SWAP_TO_CBL_MOVES | {"cbl"}:
+        return None
+    if move == "cbl" and len(swaps) < 2:
+        return None
+    turn = mv.get("turn") if isinstance(mv.get("turn"), dict) else {}
+    d = turn.get("direction") if turn.get("by") in ("follower", "both") else None
+    new = "cbl"
+    if len(swaps) < 2 and d in DIR_SHORT:
+        new = "cbl_inside_turn" if d == "left" else "cbl_outside_turn"
+    mv.setdefault("claudeName", mv.get("name"))
+    mv["move"] = new
+    if len(swaps) >= 2:
+        sides = [(e.get("pass") or {}).get("side") for e in swaps[:2]]
+        rev = sides[0] in ("left", "right") and sides[1] in ("left", "right") and sides[0] != sides[1]
+        mv["name"] = "CBL＋逆CBL" if rev else "CBL×2"
+        mv["swapCount"] = len(swaps)
+    else:
+        mv["name"] = DEFAULT_NAME[new]
+    if mv.get("passSide") not in ("left", "right"):
+        mv["passSide"] = (swaps[0].get("pass") or {}).get("side") if (swaps[0].get("pass") or {}).get("side") in ("left", "right") else None
+    return f"multiSwap:{move}->{new}x{len(swaps)}"
+
+
+INSIDE_NEAR_BEATS = 4.0  # インサイドターンの行の外でも、この拍数（半分の 8 カウント）以内の入れ替わりはその技のパスとみなす
 
 
 def check_inside_turns(out, beat, timing, summary=None):
@@ -1117,6 +1219,11 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
 
     if swap_fit:
         cells = align_to_swaps(moves, heads, swaps, sb)
+    elif tempo_src == "audio" and AUDIO_ALIGN and swap_times(summary):
+        # 音声の格子も、位相はそのまま、Claude の行の割り当てだけ CV の入れ替わりのある 8 カウントに合わせる
+        # （無音の格子と同じ align_to_swaps。Claude の行が 1 行ずれて CBL が隣の行に入るのを直す）
+        swaps = swap_times(summary)
+        cells = align_to_swaps(moves, heads, swaps, sb, has=audio_swap_cells(heads, swaps))
     else:
         cells = [nearest_head(heads, m["start"]) for m in moves]
 
@@ -1157,6 +1264,10 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
     for k, mv in enumerate(out):
         t0 = mv["start"]
         t1 = out[k + 1]["start"] if k + 1 < len(out) else t0 + mv["counts"] * beat
+        ft = prefer_follower_turn(mv, cv_spin_info(summary, t0, t1))
+        if ft:
+            mv["turnCheck"] = ft
+            mark_uncertain(mv)
         before = mv.get("move")
         flip = check_direction(mv, cv_spin(summary, t0, t1))
         if flip:
@@ -1170,6 +1281,11 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
             fixes.append(fix)
             if mv["move"] != before and mv["move"] in DEFAULT_NAME:
                 mv["name"] = DEFAULT_NAME[mv["move"]]
+            mark_uncertain(mv)
+        ms = check_multi_swap(mv, cv_swaps_in(summary, t0, t1))
+        if ms:
+            mv["swapCheck"] = ms
+            fixes.append(ms)
             mark_uncertain(mv)
         # 回転数を技の普通の回数へ（技の種類が決まった後で）
         rot = apply_rotation_prior(mv, cv_spin_info(summary, t0, t1), beat)

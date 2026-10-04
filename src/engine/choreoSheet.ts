@@ -29,6 +29,8 @@ export type SheetRow = {
   hold: string | null;
   /** 例: 女が左回り1½回転 */
   turn: string | null;
+  /** 同じ行で男も回ったときの短い 1 行（例: 男も: 左回り1回転）。無ければ null */
+  leaderTurn: string | null;
   /** 例: 女が男の左側を通る */
   pass: string | null;
   /** 推定で埋めた・自信が低い行（「?」バッジを出す） */
@@ -122,6 +124,19 @@ export function turnLabel(turn: TurnLike | null | undefined, holdStart?: Routine
   const d = turn.direction === 'left' || turn.direction === 'right' ? turn.direction : null;
   const kind = turnKind(turn, holdStart, holdEnd);
   return `${who}: ${d ? DIR_LONG[d] : ''}${n}${kind ? `・${KIND_WORD[kind]}` : ''}`;
+}
+
+const DIR_SHORT = { right: '右回り', left: '左回り' } as const;
+
+/**
+ * 同じ行で男も回ったとき（routine.moves[].leaderTurn）の短い 1 行: 「男も: 左回り1回転」。
+ * 行の主のターン（turn）は女性のターンで、男のターンはこちらに添える
+ */
+export function leaderTurnLabel(lt: RoutineMove['leaderTurn']): string | null {
+  if (!lt || typeof lt !== 'object') return null;
+  const d = lt.direction === 'left' || lt.direction === 'right' ? DIR_SHORT[lt.direction] : '';
+  const n = typeof lt.rotations === 'number' && lt.rotations > 0 ? `${fmtRotations(lt.rotations)}回転` : '回る';
+  return `男も: ${d}${n}`;
 }
 
 const SIDE_WORD = { left: '左', right: '右' } as const;
@@ -256,6 +271,7 @@ export function parseChoreoSheet(resultJson: string | null): ChoreoSheetData | n
       steps: parseSteps(m.steps),
       hold: holdLabel(m.holdStart, m.holdEnd),
       turn: turnLabel(m.turn, m.holdStart, m.holdEnd),
+      leaderTurn: leaderTurnLabel(m.leaderTurn),
       pass: passLabel(m.passSide, m.sides),
       uncertain: isUncertain(m, rawName),
       diagram: diagramFor(m),

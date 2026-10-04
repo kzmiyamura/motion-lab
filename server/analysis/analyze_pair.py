@@ -838,6 +838,17 @@ CBL_SIZE_WIN_SEC = 3.0
 SPIN_PRE_SEC = 0.4
 SPIN_POST_SEC = 1.6
 SPIN_KP_MIN = 0.3
+# 女性のターンの向きは、固定窓（時刻の -0.4〜+1.6 秒）ではなく、そのターンを作った反転（最初の反転〜連なりの最後の
+# 反転。単発の反転ペアなら 2 つ目の反転）だけで読む。隣のターンの反転は入れない（前のターンの最後の反転より後、次の
+# ターンの最初の反転より前）。固定窓は短いターンでは次のターンの反転まで読み、長い連続回転では途中で切れていた:
+# 8c312c6d 12.82（12.3〜12.9 の左回り。続く 13.70 の右回りの反転 3 つまで窓に入って LRRR → 右）と
+# screenrec 16.68（左 1 → 右 3 の 16.68〜19.29 を 18.3 で切って左 1½ / 右 1½ の同数 → 左）。
+# 10/4、正解表 6 本（tracks モード、保存した YOLO の検出）: 向き 37/40 → 39/40、spin の回転数の誤差 .362 → .287、
+# イベント・通る側・回転数（rotations）は不変。揺らし検査（5 通り）でも向きはどれも +2、イベントの差分は 48 のまま。
+# 余裕 0〜0.4 秒で向きは同じ。隣のターンで切らない版は余裕 0.3 秒以上で 12.82 が戻る。README 22
+SPIN_USE_TURN_SPAN = True
+SPIN_SPAN_FRAME_SEC = 0.15   # 反転の 1 つ前のコマを入れるための余裕（10fps の 1 コマ + α）
+SPIN_SPAN_MARGIN_SEC = 0.1
 
 
 # 速い連続回転: 反転が TURN_CHAIN_GAP_SEC 以内の間隔で MIN〜MAX 個続く連なり（2½〜3 回転）。
@@ -1012,6 +1023,10 @@ def detect_turns(draw_frames, pid, with_span=False):
     # 反転ペアの連結（振り幅条件つき）では途中のペアが条件を外して少なく数えるので、連結はターンの区切りにだけ使い、
     # 回転数は反転の総数から数える（正解表2本の回転数 MAE 0.43 → 0.29）。
     # ½ 刻み（反転の数 / 2 をそのまま）は正解表 5 本で誤差 .36 → .38 と悪くなるので切り捨てのまま
+    if with_span == "pair":
+        # 向きを読む範囲: 1 つ目の反転から、連なりの最後の反転（単発の反転ペアなら 2 つ目の反転）まで
+        return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2)), flips[a][0],
+                 flips[min(len(flips) - 1, max(b, a + 1))][0]) for a, b, t in spans]
     if with_span:
         return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2)), flips[a][0], flips[b][0])
                 for a, b, t in spans]
@@ -1169,7 +1184,7 @@ def face_side(p):
     return 1 if off > 0 else -1
 
 
-def spin_hint(draw_frames, pid, t_center):
+def spin_hint(draw_frames, pid, t_center, span=None):
     """ターン候補の回る向きと回転量の目安: {"seq": "RRL", "netDeg": 360} or None
 
     shDx の符号が変わる瞬間（真横向き）に顔が画面の右/左どちらを向いているかで、
@@ -1179,10 +1194,21 @@ def spin_hint(draw_frames, pid, t_center):
     反転ごとに ±180° を足すので、半回転して戻る動きは 0° になり1回転と区別できる。
     10fps 間引きのため速いターンで真横を取りこぼし、回転量は ±180° ずれることがある
     （9/23 の2本で向きは女性のターン10件中9件一致・量は目安）。確定は Claude がストリップで行う
+    span を渡すと固定窓の代わりにそのターンの反転の範囲だけを読む（SPIN_USE_TURN_SPAN）
     """
+    lo, hi = t_center - SPIN_PRE_SEC, t_center + SPIN_POST_SEC
+    if span is not None:
+        # span = (最初の反転, 最後の反転, 前のターンの最後の反転, 次のターンの最初の反転)。そのターンの反転だけを読む。
+        # 反転は「真横を跨いだ後のコマ」の時刻なので、1 つ前のコマ（約 0.1 秒前）も入るように前へ余裕を取る
+        first, last, prev_end, next_start = span
+        lo, hi = first - SPIN_SPAN_FRAME_SEC - SPIN_SPAN_MARGIN_SEC, last + SPIN_SPAN_MARGIN_SEC
+        if prev_end < first:
+            lo = max(lo, prev_end)
+        if next_start > first:
+            hi = min(hi, next_start - 0.01)
     series = []
     for df in draw_frames:
-        if not (t_center - SPIN_PRE_SEC <= df["t"] <= t_center + SPIN_POST_SEC):
+        if not (lo <= df["t"] <= hi):
             continue
         for p in df["kept"]:
             if p.get("pid") == pid and abs(p["shDx"]) >= TURN_FLIP_MARGIN:
@@ -1621,13 +1647,21 @@ def detect_events(draw_frames, leader_pid):
         turns[leader_pid] = [(t, r) for t, r, _ in lt]
         leader_spins = {t: s for t, _, s in lt}
 
+    spin_spans = {0: {}, 1: {}}  # pid -> {ターン時刻: spin_hint の span}
+    if SPIN_USE_TURN_SPAN:
+        for pid in (0, 1):
+            ps = detect_turns(draw_frames, pid, with_span="pair")
+            for k, (t, _, a, b) in enumerate(ps):
+                prev_end = ps[k - 1][3] if k else float("-inf")
+                next_start = ps[k + 1][2] if k + 1 < len(ps) else float("inf")
+                spin_spans[pid][t] = (a, b, prev_end, next_start)
     for pid in (0, 1):
         if leader_pid is None:
             by = "unknown"
         else:
             by = "leader" if pid == leader_pid else "follower"
         for t, rotations in turns[pid]:
-            spin = leader_spins[t] if by == "leader" else spin_hint(draw_frames, pid, t)
+            spin = leader_spins[t] if by == "leader" else spin_hint(draw_frames, pid, t, spin_spans[pid].get(t))
             events.append({"t": t, "type": "Turn", "by": by, "rotations": rotations,
                            "hold": detect_hold(draw_frames, t, leader_pid), "spin": spin})
     events.sort(key=lambda e: e["t"])

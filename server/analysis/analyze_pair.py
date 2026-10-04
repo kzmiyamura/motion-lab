@@ -1381,10 +1381,51 @@ DENSE_MAX_POST_SEC = 4.0   # 連続ターンでもイベント時刻のこの秒
 DENSE_QUIET_SEC = 0.6      # 最後の反転からこの秒数反転が無ければ回転が終わったとみなす（回転中の反転は0.15〜0.45秒おき。0.8だとCBLの半回転まで飲み込んだ）
 DENSE_JITTER_SEC = 0.12    # これより短い向きの区間は真横付近の揺れとして前後に吸収する
 DENSE_MATCH_DIST = 0.2     # 追跡中の人物とみなす bbox 中心の最大ずれ（正規化）
+# 全フレームの取り直しは ROI マスクも観客フィルタも無い全画面で YOLO をかけるので、近くの別人（寄りの動画の手前に座った
+# 見学者など）を拾うことがある。拾った人の胴の長さが、10fps の追跡でのその人の胴の長さ（全編の中央値）の
+# DENSE_SIZE_RATIO 倍未満か 1 / DENSE_SIZE_RATIO 倍より大きければ別人として使わない（0 で無効。README 30）
+DENSE_SIZE_RATIO = 0.6
+DENSE_OVERLAP_SEC = 0.15     # 全フレームの反転の範囲が 10fps の回転の範囲 ± この秒数と重ならなければ取り直しを捨てる（None で無効）
+# 回転が続く限り読み進めると、10fps が別のターンと分けた同じ人の次のターンまで飲み込み（absorbed）、範囲の真ん中が
+# どちらのターンからも外れる。True なら次のターンの 10fps の回転の始まり（の 1 コマ前）で読むのをやめ、次のターンは自分で取り直す
+DENSE_SPLIT_AT_NEXT = True
+
+
+def _turn_start(e):
+    """ターンの回転の始まり: 10fps の範囲（span.from）、無ければ t"""
+    sp = e.get("span")
+    return sp["from"] if isinstance(sp, dict) and isinstance(sp.get("from"), (int, float)) else e["t"]
 
 
 def _bbox_center(b):
     return ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+
+
+def torso_height(p):
+    """胴の長さ（画面の高さ単位）: 肩の中点と腰の中点の高さの差。肩だけの人は推した胴（torsoN）。読めなければ None"""
+    if p.get("torsoN"):
+        return p["torsoN"]
+    k = p.get("kps")
+    if not k or len(k) <= RIGHT_HIP:
+        return None
+    if min(k[i][2] for i in (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)) < KP_CONF:
+        return None
+    t = abs((k[LEFT_HIP][1] + k[RIGHT_HIP][1]) / 2 - (k[LEFT_SHOULDER][1] + k[RIGHT_SHOULDER][1]) / 2)
+    return t or None
+
+
+def track_torso_median(draw_frames, pid):
+    """10fps の追跡でのその人の胴の長さの中央値（画面の高さ単位）。測れたコマが無ければ None"""
+    xs = sorted(x for df in draw_frames for p in df["kept"] if p.get("pid") == pid for x in [torso_height(p)] if x)
+    return xs[len(xs) // 2] if xs else None
+
+
+def same_body_size(p, ref_torso):
+    """全フレームの取り直しで拾った人 p が、追跡中の人と同じくらいの体の大きさか（DENSE_SIZE_RATIO）"""
+    if not DENSE_SIZE_RATIO or not ref_torso:
+        return True
+    t = torso_height(p)
+    return t is None or DENSE_SIZE_RATIO <= t / ref_torso <= 1 / DENSE_SIZE_RATIO
 
 
 def _spin_runs(seq):
@@ -1425,7 +1466,9 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock
     （9/23 の人手校正で実測。0:16 の「左1→右3」が差し引き0になっていた）。全フレームなら
     正解の分かっている5区間すべてで向きが合い、回転数も ±半回転に収まった。
     回転が続く限り区間を延ばし（最大 DENSE_MAX_POST_SEC）、同じ人の区間内に入った後続の
-    ターン候補は同じ回転の一部として吸収する（absorbed に時刻を残す）。
+    ターン候補は同じ回転の一部として吸収する（absorbed に時刻を残す）。ただし 10fps が分けた同じ人の次のターンの手前で
+    読むのをやめ（DENSE_SPLIT_AT_NEXT）、体の大きさの違う人は拾わず（DENSE_SIZE_RATIO）、読めた反転が 10fps の回転の範囲と
+    重ならなければ書き換えない（DENSE_OVERLAP_SEC）。README 30。
     clock（frame_time.FrameClock）: 10fps の tracks と同じ時計。シークは clock.to_pts、読んだコマの PTS は
     clock.from_pts で解析の時刻に直す（無ければ動画から作る。README 27）。
     """
@@ -1450,7 +1493,10 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock
     if clock is None:
         clock = frame_clock(video_path, cap.get(cv2.CAP_PROP_FPS) or 30.0)
     covered = {0: [], 1: []}  # pid → [(from, to, event)]
+    ref_torso = {pid: track_torso_median(draw_frames, pid) for pid in (0, 1)}
     out = []
+    turn_starts = {by: sorted(_turn_start(x) for x in events if x["type"] == "Turn" and x["by"] == by)
+                   for by in ("leader", "follower")}
     for e in events:
         if e["type"] != "Turn" or e["by"] not in ("leader", "follower"):
             out.append(e)
@@ -1462,6 +1508,10 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock
             continue
 
         t = e["t"]
+        # 同じ人の次のターン（10fps の回転の始まり）の手前で読むのをやめる（DENSE_SPLIT_AT_NEXT。README 30）
+        t_stop = float("inf")
+        if DENSE_SPLIT_AT_NEXT:
+            t_stop = next((s for s in turn_starts[e["by"]] if s > _turn_start(e) + 1e-6), t_stop) - SPIN_SPAN_FRAME_SEC
         # POS_MSEC のシークは可変フレームレートで最大 0.3 秒遅れて着くので、手前に着いたことを確かめてから読む（README 27）
         t_begin = t - DENSE_PRE_SEC
         frame, p = seek_read(cap, clock.to_pts(t_begin))
@@ -1476,11 +1526,11 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock
             p = None  # 次の周回で次のコマを読む
             if t_cur < t_begin - 1e-6:
                 continue
-            if t_cur > t + DENSE_MAX_POST_SEC:
+            if t_cur > t + DENSE_MAX_POST_SEC or t_cur >= t_stop:
                 break
             if t_cur > t + DENSE_MIN_POST_SEC and (last_flip_t is None or t_cur - last_flip_t > DENSE_QUIET_SEC):
                 break
-            persons = detect_persons(model, frame)
+            persons = [q for q in detect_persons(model, frame) if same_body_size(q, ref_torso[pid])]
             ref = tracked_center(pid, t_cur)
             target = prev_c or ref
             if ref and prev_c and math.dist(prev_c, ref) > 0.15:
@@ -1527,6 +1577,13 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock
             right = (side < 0) if d0 > 0 else (side > 0)
             seq += "R" if right else "L"
             net += 180 if right else -180
+        coarse_span = e.get("span") if isinstance(e.get("span"), dict) else None
+        if seq and DENSE_OVERLAP_SEC is not None and coarse_span and (
+                flip_times[0] > coarse_span["to"] + DENSE_OVERLAP_SEC
+                or flip_times[-1] < coarse_span["from"] - DENSE_OVERLAP_SEC):
+            # 全フレームで読めた反転が 10fps で見つけた回転の範囲と重ならない = 本人を見失って別の動き（次の技・相手）を
+            # 読んだ。spin・範囲は 10fps のまま（README 30）
+            seq = ""
         if seq:
             if isinstance(e.get("spin"), dict) and "spinCoarse" not in e:
                 # 10fps の向きの読み（spin_hint。反転ペアの向き・21〜23 の直し込み）を残す。全フレームの取り直しは

@@ -25,6 +25,8 @@
  *     … 先に update_events.py で技イベントを tracks.json から今の analyze_pair で作り直す（ターンの区間は全フレームで
  *       YOLO をかけ直す = ジョブと同じ。measurements.json / tracks.json の events を書き換え、元は summary.eventsPrev に残す）。
  *       --retrack を足すと先に人物 ID を今の外見追跡（assign_appearance_ids）で付け直す（動画を読み直して色ヒストグラムを作る。YOLO なし）
+ *       --beats を足すとその後に音声のビート格子とカウント 1（beatGrid.downbeat、analyze_beats.py）を作り直す
+ *       （ジョブの audio.wav は消えているので ffmpeg で取り直す。イベントの後に回すのはカウント 1 が踊りの手がかりも使うため）
  *   jobId 省略時は status=done の全ジョブ
  */
 import { spawnSync } from 'node:child_process';
@@ -54,6 +56,9 @@ const refine = args.includes('--refine');
 const updateEvents = args.includes('--update-events');
 const retrackIds = args.includes('--retrack');   // --update-events と一緒に: 人物 ID を今の外見追跡で付け直す
 const UPDATE_EVENTS_SCRIPT = path.join(SERVER_DIR, 'analysis/update_events.py');
+const redoBeats = args.includes('--beats');      // 音声のビート格子とカウント 1（beatGrid.downbeat）を今の analyze_beats で作り直す
+const BEATS_SCRIPT = path.join(SERVER_DIR, 'analysis/analyze_beats.py');
+const FFMPEG_BIN = process.env.FFMPEG_PATH ?? path.join(SERVER_DIR, 'node_modules/ffmpeg-static/ffmpeg.exe');
 const REFINE_SCRIPT = path.join(SERVER_DIR, 'analysis/refine_events.py');
 const MODEL_PATH = process.env.YOLO_MODEL_PATH ?? path.join(SERVER_DIR, 'models/yolov8s-pose.pt');
 const REFINE_BUDGET_SEC = Number(process.env.REFINE_BUDGET_SEC ?? 240);
@@ -137,6 +142,18 @@ function backfillMoveFrames(targets) {
         continue;
       }
       console.log(`${tag} ${last}`);
+    }
+    if (redoBeats) {
+      // jobWorker と同じ: 音声を WAV にして analyze_beats.py（格子・カウント 1・各イベントの count）。失敗しても続ける
+      const wav = path.join(outDir, 'audio.wav');
+      const f = spawnSync(FFMPEG_BIN, ['-y', '-loglevel', 'error', '-i', videoPath, '-ac', '1', '-ar', '22050', wav], { encoding: 'utf-8' });
+      if (f.status !== 0) {
+        console.log(`${tag} beats skipped: ffmpeg ${(f.stderr || f.error?.message || '').trim().slice(-200)}`);
+      } else {
+        const b = spawnSync(PYTHON_BIN, [BEATS_SCRIPT, wav, path.join(outDir, 'measurements.json')], { encoding: 'utf-8' });
+        console.log(`${tag} ${b.status !== 0 ? 'beats failed: ' : ''}${(b.stderr || b.error?.message || '').trim().split('\n').slice(-2).join(' | ')}`);
+      }
+      rmSync(wav, { force: true });
     }
     if (refine) {
       const measPath = path.join(outDir, 'measurements.json');

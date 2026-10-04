@@ -100,7 +100,7 @@ def main():
                                "retracked": retracked is not None}
     tmp = out_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(meas, f, ensure_ascii=False)
+        json.dump(meas, f)  # ASCII のまま（analyze_beats.py などは既定のエンコーディングで読む）
     os.replace(tmp, out_path)
     tracks_out = opts.get("tracks-out") or (tracks_path if out_path == meas_path else None)
     if tracks_out:

@@ -815,7 +815,7 @@ LEADER_TURN_COOLDOWN_SEC = 1.5   # 男のターン同士の最小間隔（1.0〜
 LEADER_FACE_FLIP_CHECK = True
 LEADER_FACE_SEEN = 0.4
 LEADER_FACE_FLIP_BOTH = False
-EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔
+EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔（冷却を縮める・終わりから測る等は README 20 で試して不採用）
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
 # 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
 CBL_COOLDOWN_SEC = 0.6
@@ -853,6 +853,14 @@ SPIN_KP_MIN = 0.3
 TURN_FAST_MIN_FLIPS = 5
 TURN_FAST_MAX_FLIPS = 6
 TURN_FAST_TAIL_FLIPS = 2
+# 半回転の取り込み: 冷却が明けた所で拾ったターンが、2つ目の反転でちょうど速い連続回転の始まりに乗っているだけ
+# （遅い反転ペア = 歩き込み・CBL の通過の半回転）のとき、上の「それ以外と重なるときは何もしない」に当たって
+# 連続回転が冷却に隠れていた。8c312c6d 27.41（半回転、1.27 秒かけた反転ペア）が 28.68〜30.05 の
+# 5 反転の右 2 回転（正解 29.6）を塞いでいたのがこれ。そこでその半回転は捨てて連続回転に置き換える。
+# 10/4、正解表 6 本（tracks モード、保存した YOLO の検出）: 女性のターン P/R .914/.865 → .917/.892（tp 32 → 33）、
+# 向き 36/38 → 37/39、回転数の誤差 .329 → .295、CBL・男のターン・通る側は不変（screenrec 29.0 も 28.42 の
+# 1 回転 → 29.17 の 2 回転に）。半回転を残して連続回転を足す版は fp +1。README 20
+TURN_FAST_ABSORB_LEAD = True
 
 
 def detect_turns(draw_frames, pid):
@@ -926,8 +934,11 @@ def detect_turns(draw_frames, pid):
         if TURN_FAST_MIN_FLIPS <= j - i + 1 <= TURN_FAST_MAX_FLIPS and pair_ok(i):
             # 既存のターンの範囲は2つ目の反転までは含む（間隔が空いて連なりの直前で終わるものも重なりとみなす）
             over = [s for s in spans if s[0] <= j and max(s[1], s[0] + 1) >= i]
-            if all(i < s[0] and s[0] > j - TURN_FAST_TAIL_FLIPS for s in over):
-                spans = [s for s in spans if s not in over] + [[i, max([j] + [s[1] for s in over]), flips[i][0]]]
+            # 連なりの前で始まり、2つ目の反転が連なりの最初の反転になっているだけのターン（半回転の歩き込み）
+            lead = [s for s in over if s[0] < i and s[1] < i] if TURN_FAST_ABSORB_LEAD else []
+            rest = [s for s in over if s not in lead]
+            if all(i < s[0] and s[0] > j - TURN_FAST_TAIL_FLIPS for s in rest):
+                spans = [s for s in spans if s not in over] + [[i, max([j] + [s[1] for s in rest]), flips[i][0]]]
         i = j + 1
     spans.sort()
     # 回転数 = 範囲内の反転の数 / 2（切り捨て）。10fps の骨格では速い連続回転は1周3〜4コマしかなく、

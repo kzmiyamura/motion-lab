@@ -50,6 +50,22 @@ class DetectTurnsTest(unittest.TestCase):
         self.assertEqual([round(t, 1) for t, _ in turns], [1.0, 2.8])
         self.assertEqual(turns[1][1], 2)
 
+    def test_half_turn_leading_into_spin_is_absorbed(self):
+        # 冷却が明けた 3.7 秒に遅い反転ペア（3.7 → 4.9、1.2 秒かけた半回転の歩き込み）があり、その 2 つ目の反転から
+        # 速い連続回転（4.9〜6.1 秒の反転 5 回）が始まる: 半回転を捨てて連続回転（2 回転）に置き換える
+        f = frames([(1.0, FRONT), (0.3, BACK), (2.4, FRONT), (1.2, BACK),
+                    (0.3, FRONT), (0.3, BACK), (0.3, FRONT), (0.3, BACK), (1.5, FRONT)])
+        turns = ap.detect_turns(f, 1)
+        self.assertEqual([round(t, 1) for t, _ in turns], [1.0, 4.9])
+        self.assertEqual(turns[1][1], 2)
+        before = ap.TURN_FAST_ABSORB_LEAD
+        try:
+            ap.TURN_FAST_ABSORB_LEAD = False
+            # 取り込まないと半回転（3.7）が残り、連続回転は冷却に隠れる
+            self.assertEqual([round(t, 1) for t, _ in ap.detect_turns(f, 1)], [1.0, 3.7])
+        finally:
+            ap.TURN_FAST_ABSORB_LEAD = before
+
     def test_long_jitter_chain_is_not_merged(self):
         # 反転が 8 個続く揺れ（TURN_FAST_MAX_FLIPS を超える）は速い連続回転として扱わない
         f = frames([(1.0, FRONT), (0.3, BACK), (1.2, FRONT)] + [(0.3, BACK), (0.3, FRONT)] * 4 + [(1.5, FRONT)])

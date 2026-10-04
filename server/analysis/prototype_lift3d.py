@@ -267,6 +267,9 @@ def main():
                     continue
                 series.setdefault(p["pid"], []).append((f["t"], f["frameIdx"], p["bbox"]))
         vfps = float(tracks.get("fps") or 30.0)
+        # tracks の t は PTS（analyze_pair、README 26）。時刻 → コマ番号も同じ時計で（コマ番号 / fps は可変フレームレートで最大 1 秒ずれる）
+        from frame_time import FrameClock
+        clock = FrameClock.from_video(args.video, vfps)
         t_end = frames[-1]["t"]
         step = 1.0 / args.fps
         # 原盤のサンプル間隔より大きく開いた区間は補間しない（人物が居ない区間を埋めない）
@@ -274,7 +277,7 @@ def main():
         max_gap = src_dt * 2.5
         t = 0.0
         while t <= t_end + 1e-6:
-            fidx = int(round(t * vfps))
+            fidx = clock.index_at(t)
             persons = []
             for pid, arr in series.items():
                 # t を挟む2サンプルを探す

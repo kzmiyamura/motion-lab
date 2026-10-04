@@ -25,6 +25,9 @@ import sys
 import cv2
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frame_time import grab_at  # noqa: E402
+
 FRAMES_PER_SCENE = 5
 MIN_SPAN_SEC = 1.0
 MAX_SPAN_SEC = 2.5
@@ -132,9 +135,10 @@ def pair_box(frames, t0, t1):
 
 
 def grab(cap, t):
-    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t) * 1000)
-    ok, frame = cap.read()
-    return frame if ok else None
+    """時刻 t（秒。ブラウザの video.currentTime と同じ PTS の時計）に画面に出ているコマ。
+    cv2 の POS_MSEC のシークだけだと可変フレームレートで最大 0.3 秒遅れたコマになるので frame_time.grab_at で直す（README 27）"""
+    frame, _ = grab_at(cap, t)
+    return frame
 
 
 def fmt_time(t):

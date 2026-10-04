@@ -146,7 +146,7 @@ function backfillMoveFrames(targets) {
     if (redoBeats) {
       // jobWorker と同じ: 音声を WAV にして analyze_beats.py（格子・カウント 1・各イベントの count）。失敗しても続ける
       const wav = path.join(outDir, 'audio.wav');
-      const f = spawnSync(FFMPEG_BIN, ['-y', '-loglevel', 'error', '-i', videoPath, '-ac', '1', '-ar', '22050', wav], { encoding: 'utf-8' });
+      const f = spawnSync(FFMPEG_BIN, ['-y', '-loglevel', 'error', '-i', videoPath, '-ac', '1', '-ar', '22050', '-af', 'aresample=async=1:first_pts=0', wav], { encoding: 'utf-8' });
       if (f.status !== 0) {
         console.log(`${tag} beats skipped: ffmpeg ${(f.stderr || f.error?.message || '').trim().slice(-200)}`);
       } else {

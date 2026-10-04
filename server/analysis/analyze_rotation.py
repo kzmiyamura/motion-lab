@@ -19,10 +19,14 @@ Usage: python analyze_rotation.py <video_path> <model_path> <output_json_path>
 import sys
 import json
 import math
+import os
 import cv2
 import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import PoseLandmarker, PoseLandmarkerOptions, RunningMode
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frame_time import FrameClock  # noqa: E402
 
 LEFT_SHOULDER = 11
 RIGHT_SHOULDER = 12
@@ -50,11 +54,14 @@ def main():
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_interval = max(1, round(fps / TARGET_FPS))
+    # コマの時刻は analyze_pair と同じ PTS（可変フレームレートで コマ番号 / fps は最大 1 秒ずれる。README 27）
+    clock = FrameClock.from_video(video_path, fps)
     frame_idx = 0
     samples = []
     prev_angle = None
     cumulative = 0.0
     detected_frames = 0
+    last_ms = -1
 
     with PoseLandmarker.create_from_options(options) as landmarker:
         while True:
@@ -64,8 +71,9 @@ def main():
             if frame_idx % frame_interval != 0:
                 frame_idx += 1
                 continue
-            t_sec = frame_idx / fps
-            t_ms = int(t_sec * 1000)
+            t_sec = clock.time(frame_idx)
+            t_ms = max(int(t_sec * 1000), last_ms + 1)  # detect_for_video は増え続ける時刻が要る
+            last_ms = t_ms
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             result = landmarker.detect_for_video(mp_image, t_ms)
 

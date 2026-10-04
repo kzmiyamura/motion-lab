@@ -211,7 +211,9 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
       const audioPath = path.join(outDir, 'audio.wav');
       try {
         await new Promise<void>((resolve, reject) => {
-          const proc = spawn(ffmpegPath, ['-y', '-i', ctx.videoPath, '-ac', '1', '-ar', '22050', audioPath], { signal });
+          // aresample=async=1:first_pts=0: 音声が動画より遅れて始まる分（stream の start_time。iPhone の録画で 5〜110 ms）を
+          // 頭の無音で埋め、WAV の 0 サンプル目を動画の 0 秒（PTS）にそろえる。無いと拍の時刻がその分早く出る（README 27）
+          const proc = spawn(ffmpegPath, ['-y', '-i', ctx.videoPath, '-ac', '1', '-ar', '22050', '-af', 'aresample=async=1:first_pts=0', audioPath], { signal });
           proc.on('error', reject);
           proc.on('exit', code => (code === 0 ? resolve() : reject(new Error(`ffmpeg audio exited ${code}`))));
         });

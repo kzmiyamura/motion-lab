@@ -77,7 +77,11 @@ SWAP_MIN_R = 0.2           # 当てた周期での入れ替わりの位相の揃
 SWAP_MIN_Z = 4.5           # 入れ替わりの Rayleigh z = n·R² がこれ未満なら使わない（2026-10-05 まで入れ替わり＋ターンで 7.5）。
                            # でたらめな時刻（51 個・156 秒、60 回）でも周期を振れば z は中央値 4.0・90% 点 5.8 になり、
                            # 1230b3d5 の本物（5.2）と見分ける力は弱い。「揃わない時刻の山を落とす」程度の門で、
-                           # 偶然との区別は SWAP_MIN 個以上・SWAP_MIN_R に任せる（README 26）
+                           # 偶然との区別は SWAP_MIN 個以上・SWAP_MIN_R に任せる（README 26）→ SWAP_MIN_Z2 を足した（README 27）
+SWAP_MIN_Z2 = 2.5          # 偶然の門: 当てた周期の 2 倍の揃い（8 カウントの同じ所と 4 拍後。On2 の 1 行 2 回の通過）の
+                           # Rayleigh z2 がこれ未満なら使わない。z2 は周期を探していないので偶然なら P(z2 ≥ x) ≈ e^−x。
+                           # でたらめな時刻（50 個・158 秒、300 回 × 2 種類）で z ≥ 4.5 を通るのが 28〜30% → z2 ≥ 2.5 も足して 3〜5%。
+                           # 1230b3d5 の本物は 10 版すべて 3.8〜7.1（PTS の版 6.8）、1 つ抜き 50 通り・1 つ足し 30 通りも全部通る
 SWAP_PERIOD_RANGE = 0.25   # 周期を routine の目安の ±25% で探す
 SWAP_PERIOD_STEP = 0.002   # 秒。156 秒で 60 個の 8 カウントなら、0.002 秒の差が終わりで 0.12 拍になる
 SWAP_PRIOR = 0.1           # 目安から離れた周期への小さな罰（同じくらい揃うなら目安に近い方）
@@ -286,7 +290,7 @@ def swap_concentration(swaps, period, drift=0.0, span=1.0):
     return math.hypot(c, s), (math.atan2(s, c) / (2 * math.pi)) % 1
 
 
-def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT):
+def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT, chance_gate=True):
     """CV の入れ替わり時刻に 8 カウントの格子を当てる。CBL なら入れ替わりは毎回 8 カウントの同じ所
     （On2 は 2 で女が男の横を通る）に来るので、周期を目安の ±SWAP_PERIOD_RANGE で振って位相が最も揃う周期を取る。
     SWAP_FIT_TURNS なら周期（と揃っているかの判定）に女性のターン（turns）も足すが、既定では足さない
@@ -315,12 +319,32 @@ def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT
     r_swap, mean = swap_concentration(used, period, drift, span)
     if r_swap < SWAP_MIN_R:
         return None
+    # 偶然の門（README 27）: On2 の入れ替わりは 8 カウントの同じ所か、その 4 拍後（1 行に 2 回通る）に来るので、
+    # 当てた周期の半分（4 拍）でも揃う。周期は z（1 倍の揃い）を最大にするよう探したので、でたらめな時刻でも z は
+    # 大きく出るが、2 倍の揃い z2 は探していないので偶然なら指数分布（P(z2 ≥ x) ≈ e^−x）になる
+    # 時刻が コマ番号 / fps（2026-10-05 より前のジョブ）だと入れ替わりが最大 1 秒ずれて z2 が崩れる（1230b3d5 で 0.5〜0.9）ので、
+    # chance_gate=False（measurements の summary.frameClock が "pts" でない）ときは掛けない
+    z2 = len(used) * swap_harmonic(used, period, drift, span, 2) ** 2
+    if chance_gate and z2 < SWAP_MIN_Z2:
+        return None
     # 入れ替わりの平均位置が 8 カウントの SWAP_BEAT 拍目に来るように頭を決める
     head0 = (mean - swap_beat / 8) % 1
-    out = {"period": period, "drift": drift, "span": span, "head0": head0, "R": r_swap, "z": z}
+    out = {"period": period, "drift": drift, "span": span, "head0": head0, "R": r_swap, "z": z, "z2": z2}
     if len(used) != len(swaps):
         out["inliers"] = len(used)
     return out
+
+
+def swap_harmonic(swaps, period, drift=0.0, span=1.0, k=2):
+    """入れ替わりの位相の k 倍の揃い方（k = 2 なら 8 カウントの同じ所と 4 拍後を同じに数える Rayleigh R）"""
+    if not swaps:
+        return 0.0
+    c = s = 0.0
+    for t in swaps:
+        a = 2 * math.pi * k * grid_cycles(t, period, drift, span)
+        c += math.cos(a)
+        s += math.sin(a)
+    return math.hypot(c, s) / len(swaps)
 
 
 def _search_period(events, unit_guess, span):
@@ -1456,7 +1480,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
         guess = salsa_unit8(unit8_from_routine(moves)) or DEFAULT_UNIT8
         swaps = swap_times(summary)
         swap_fit = fit_grid_to_swaps(swaps, guess, duration or (max(starts) + guess), turn_times(summary),
-                                     swap_beat=sb)
+                                     swap_beat=sb, chance_gate=(summary or {}).get("frameClock") == "pts")
         if swap_fit:
             period = swap_fit["period"]
             phase = (swap_fit["head0"] * period) % period
@@ -1615,6 +1639,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
         routine["grid"]["swapR"] = round(swap_fit["R"], 3)
         routine["grid"]["swaps"] = len(swaps)
         routine["grid"]["z"] = round(swap_fit["z"], 2)
+        routine["grid"]["z2"] = round(swap_fit["z2"], 2)
         if swap_fit["drift"]:
             routine["grid"]["driftCycles"] = round(swap_fit["drift"], 3)
         routine["grid"]["swapBeat"] = sb

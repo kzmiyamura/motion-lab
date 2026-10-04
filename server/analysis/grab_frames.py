@@ -2,6 +2,9 @@
 # 使い方: python grab_frames.py <video.mp4> <outdir> <t1> <t2> ...
 import cv2, sys, os
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frame_time import grab_at  # noqa: E402  PTS の時刻 t に出ているコマ（README 27）
+
 src, outdir = sys.argv[1], sys.argv[2]
 ts = [float(x) for x in sys.argv[3:]]
 os.makedirs(outdir, exist_ok=True)
@@ -12,9 +15,8 @@ w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
 h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
 print(f'fps={fps:.3f} frames={n:.0f} size={w:.0f}x{h:.0f}')
 for t in ts:
-    cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
-    ok, img = cap.read()
-    if not ok:
+    img, _ = grab_at(cap, t)
+    if img is None:
         print(f't={t}: read failed'); continue
     # 縦長は長辺 720px に縮めて保存（見比べ用）
     s = 720 / max(img.shape[:2])

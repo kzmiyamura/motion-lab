@@ -192,6 +192,57 @@ class SwapGridTest(unittest.TestCase):
         self.assertAlmostEqual(fit["period"], 2.6, delta=0.01)
         self.assertNotIn("inliers", fit_grid_to_swaps(sorted(sw + bad), 2.4, 130.0))
 
+    def test_chance_gate_rejects_most_random_swap_sets(self):
+        # でたらめな時刻（50 個・158 秒）は周期を探すと z ≥ 4.5 を 3 割ほど通る（README 26）。
+        # 2 倍の揃い z2（SWAP_MIN_Z2）を足すと大半を落とす（README 27: 600 回で 28〜30% → 3〜5%）
+        rng = random.Random(11)
+        passed_z = passed_gate = 0
+        for _ in range(25):
+            ts = []
+            while len(ts) < 50:
+                t = rng.uniform(0, 158.0)
+                if all(abs(t - u) >= 0.6 for u in ts):
+                    ts.append(t)
+            ts.sort()
+            passed_z += fit_grid_to_swaps(ts, 2.6, 158.0, chance_gate=False) is not None
+            passed_gate += fit_grid_to_swaps(ts, 2.6, 158.0) is not None
+        self.assertGreaterEqual(passed_z, 4)
+        self.assertLessEqual(passed_gate, 2)
+        self.assertLess(passed_gate, passed_z)
+
+    def test_chance_gate_keeps_on2_swaps_with_second_passes(self):
+        # 8 カウントの SWAP_BEAT 拍目の入れ替わりに、4 拍後の 2 回目の通過・揃わない誤検出が混じる（1230b3d5 のような形）
+        rng = random.Random(4)
+        sw = swaps_on_grid(2.6, 0.5, 55, jitter=self.JIT, skip={3, 9, 10, 22, 31, 40, 47})
+        second = [round(s + 4 * 2.6 / 8 + rng.uniform(-0.2, 0.2), 2) for s in sw[2::4]]
+        noise = [round(rng.uniform(0, 143.0), 2) for _ in range(8)]
+        fit = fit_grid_to_swaps(sorted(sw + second + noise), 2.6, 143.0)
+        self.assertIsNotNone(fit)
+        self.assertGreaterEqual(fit["z2"], 2.5)
+        self.assertAlmostEqual(fit["period"], 2.6, delta=0.01)
+
+    def test_chance_gate_only_for_pts_events(self):
+        # summary.frameClock が "pts" のジョブだけ門を掛ける（コマ番号 / fps の古いジョブは z2 が崩れるので掛けない）
+        import normalize_routine as nr
+        seen = []
+        orig = nr.fit_grid_to_swaps
+
+        def spy(*a, **kw):
+            seen.append(kw.get("chance_gate"))
+            return orig(*a, **kw)
+        sw = swaps_on_grid(2.6, 0.3, 30, jitter=self.JIT)
+        moves = [{"start": round(0.3 + k * 2.4, 2), "move": "cbl", "counts": 8} for k in range(30)]
+        nr.fit_grid_to_swaps = spy
+        try:
+            for clock in (None, "index", "pts"):
+                summary = {"events": [{"t": s, "type": "CBL", "by": "pair"} for s in sw]}
+                if clock:
+                    summary["frameClock"] = clock
+                normalize({"routine": {"moves": [dict(m) for m in moves]}}, summary, 80.0)
+        finally:
+            nr.fit_grid_to_swaps = orig
+        self.assertEqual(seen, [False, False, True])
+
     def test_no_drift_when_not_needed(self):
         sw = swaps_on_grid(2.6, 0.5, 50, jitter=self.JIT)
         self.assertEqual(fit_grid_to_swaps(sw, 2.4, 130.0)["drift"], 0.0)

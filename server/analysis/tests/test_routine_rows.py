@@ -280,7 +280,8 @@ class DenseKeepsCoarseTest(unittest.TestCase):
                                              {"pid": 1, "bbox": [0.1, 0.2, 0.3, 0.9]}]} for k in range(100)]
             coarse = {"seq": "LL", "netDeg": -360}
             ev = [{"t": 2.0, "type": "Turn", "by": "follower", "rotations": 1, "spin": dict(coarse)}]
-            out = ap.refine_turns_dense("x.mp4", None, frames, ev, leader_pid=1)
+            from frame_time import FrameClock
+            out = ap.refine_turns_dense("x.mp4", None, frames, ev, leader_pid=1, clock=FrameClock(30.0))
         finally:
             ap.cv2.VideoCapture, ap.detect_persons, ap.face_side = orig
         (e,) = out

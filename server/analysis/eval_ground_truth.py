@@ -16,9 +16,11 @@ Usage: python eval_ground_truth.py [--stored] [--json out.json] [--verbose]
 """
 import argparse
 import glob
+import hashlib
 import json
 import os
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -70,6 +72,49 @@ def in_range(gt, t):
     return lo <= t <= hi
 
 
+RETRACK = False  # --retrack: 保存済み tracks の人物 ID を今のコードで付け直してから採点する
+
+
+def _retrack_cache_path(gt, path):
+    st = os.stat(path)
+    base = os.environ.get("MOTION_LAB_RETRACK_CACHE") or os.path.join(tempfile.gettempdir(), "motion-lab-retrack")
+    key = hashlib.sha1(f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}|{ap.IDENTITY_JOINT}".encode()).hexdigest()[:16]
+    return os.path.join(base, f"{key}.json")
+
+
+def load_tracks(gt):
+    """tracks の原盤を読む。RETRACK なら人物 ID（pid）と男の pid を今の assign_appearance_ids で付け直す。
+    ジョブが保存した tracks の pid は古い追跡のコードのもので、1230b3d5 は 16 秒で男女が入れ替わったまま戻らず、
+    全編の 9 割が逆だった（README 31）。付け直しは動画を 1 回読む（YOLO は回さない）ので、結果は一時ディレクトリに
+    置いて 2 回目から使う（MOTION_LAB_RETRACK_CACHE で場所を変えられる）。storage は書き換えない"""
+    path = os.path.join(out_dir(gt), "measurements.tracks.json")
+    data = json.load(open(path, encoding="utf-8"))
+    if not RETRACK:
+        return data
+    video = os.path.join(STORAGE_DIR, "originals", data.get("video") or "")
+    cache = _retrack_cache_path(gt, path)
+    if os.path.exists(cache):
+        c = json.load(open(cache, encoding="utf-8"))
+    elif data.get("video") and os.path.exists(video):
+        import update_events
+        update_events.retrack(data, video)
+        c = {"leaderPid": data["leaderPid"], "pids": [[p.get("pid") for p in f["kept"]] for f in data["frames"]]}
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        json.dump(c, open(cache, "w", encoding="utf-8"))
+        return data
+    else:
+        print(f"  （動画が無いので付け直さない: {video}）")
+        return data
+    data["leaderPid"] = c["leaderPid"]
+    for f, pids in zip(data["frames"], c["pids"]):
+        for p, pid in zip(f["kept"], pids):
+            if pid is None:
+                p.pop("pid", None)
+            else:
+                p["pid"] = pid
+    return data
+
+
 def load_events(gt, stored, events_dir=None, name=None):
     out = out_dir(gt)
     if events_dir:
@@ -81,7 +126,7 @@ def load_events(gt, stored, events_dir=None, name=None):
     if stored:
         m = json.load(open(os.path.join(out, "measurements.json"), encoding="utf-8"))
         return [e for e in m["summary"]["events"] if in_range(gt, e["t"])], None
-    data = json.load(open(os.path.join(out, "measurements.tracks.json"), encoding="utf-8"))
+    data = load_tracks(gt)
     return [e for e in ap.detect_events(data["frames"], data["leaderPid"]) if in_range(gt, e["t"])], data
 
 
@@ -237,7 +282,7 @@ def evaluate(gt, stored, verbose, events_dir=None, name=None):
 
     # ホールド（tracks の原盤から正解時刻で推定する。--stored でも原盤を読む）
     if data is None:
-        data = json.load(open(os.path.join(out_dir(gt), "measurements.tracks.json"), encoding="utf-8"))
+        data = load_tracks(gt)
     for h in gt["holds"]:
         if h.get("optional"):
             continue
@@ -309,12 +354,14 @@ def main():
     ap_ = argparse.ArgumentParser()
     ap_.add_argument("--stored", action="store_true", help="保存済み measurements.json の events を採点する")
     ap_.add_argument("--events-dir", help="<dir>/<正解表の名前>.json の summary.events を採点する（無い動画は tracks から）")
+    ap_.add_argument("--retrack", action="store_true", help="tracks の人物 ID を今のコードで付け直してから採点する（動画を読む。結果は一時ディレクトリに置く）")
     ap_.add_argument("--json", help="指標を JSON で書き出す（前後比較用）")
     ap_.add_argument("--verbose", "-v", action="store_true", help="1件ずつの対応・見逃し・誤検出を出す")
     ap_.add_argument("--turn-match", choices=("auto", "t", "mid"), default=None,
                      help="ターンの照合の時刻: auto = 正解表の turnTime に合わせる（既定）/ t = 検出の t（README 27 まで）/ mid = tMid")
     args = ap_.parse_args()
-    global TURN_MATCH
+    global TURN_MATCH, RETRACK
+    RETRACK = args.retrack
     if args.turn_match:
         TURN_MATCH = args.turn_match
 

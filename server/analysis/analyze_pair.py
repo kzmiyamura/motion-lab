@@ -1101,10 +1101,10 @@ LEADER_IN_SPIN_RAISED = 0.5       # >0 なら、その範囲で手が頭上（�
 LEADER_IN_SPIN_MARGIN = 0.0       # 範囲の前後に足す秒数（0.3 でも同じ）
 
 
-def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follower_spans=()):
+def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follower_spans=(), with_span=False):
     """男のターン: 向きの反転ペア（= 1 回転）を1つずつ見て、2つの反転が同じ向き（RR / LL）に読めたものだけ残す。
     follower_spans: 女性のターンの [(最初の反転, 最後の反転)]
-    戻り値: [(時刻, 回転数, spin)]"""
+    戻り値: [(時刻, 回転数, spin)]。with_span なら [(時刻, 回転数, spin, 最初の反転, 最後の反転)]"""
     in_spin = []
     if LEADER_IN_SPIN_SUPPRESS:
         raised = raised_samples(draw_frames, pid, "either") if LEADER_IN_SPIN_RAISED > 0 else []
@@ -1168,19 +1168,23 @@ def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follow
             i += 1
     # 同じ向きで間を空けずに続く反転ペアは連続回転として1つにまとめる（向きが変わったら別のターン）。
     # 時刻は最初の1回転の中点
-    out = []  # [時刻, 回転数, 向き, 最後の反転ペアの番号]
+    out = []  # [時刻, 回転数, 向き, 最後の反転ペアの番号, 最初の反転ペアの番号]
     for i, tm, r in pairs:
         if out and out[-1][2] == r and out[-1][3] + 2 == i and flips[i][0] - flips[i - 1][0] <= TURN_CHAIN_GAP_SEC:
             out[-1][1] += 1
             out[-1][3] = i
         else:
-            out.append([tm, 1, r, i])
+            out.append([tm, 1, r, i, i])
     res, last = [], -1e9
-    for tm, n, r, _ in out:
+    for tm, n, r, i_last, i_first in out:
         if tm - last <= LEADER_TURN_COOLDOWN_SEC:
             continue
         last = tm
-        res.append((round(tm, 2), min(n, TURN_COUNT_MAX), {"seq": r * (2 * n), "netDeg": (180 if r == "R" else -180) * 2 * n}))
+        item = (round(tm, 2), min(n, TURN_COUNT_MAX), {"seq": r * (2 * n), "netDeg": (180 if r == "R" else -180) * 2 * n})
+        if with_span:
+            # 回転の範囲: 最初の反転〜最後の反転（turn_span の材料。README 28）
+            item += (flips[i_first][0], flips[i_last + 1][0])
+        res.append(item)
     return res
 
 
@@ -1447,6 +1451,7 @@ def refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock
                 "seq": seq, "netDeg": net, "runs": _spin_runs(seq),
                 "from": round(flip_times[0], 2), "to": round(flip_times[-1], 2), "source": "fullFrames",
             }
+            set_turn_span(e, flip_times[0], flip_times[-1], source="fullFrames")
             covered[pid].append((flip_times[0], flip_times[-1], e))
         out.append(e)
     cap.release()
@@ -1723,14 +1728,19 @@ def detect_events(draw_frames, leader_pid):
     if leader_pid is not None:
         follower_turn_times = [t for t, _ in turns[1 - leader_pid]]
         lt = detect_leader_turns(draw_frames, leader_pid, cbl_times, follower_turn_times,
-                                 [(a, b) for _, _, a, b in spans[1 - leader_pid]])
-        turns[leader_pid] = [(t, r) for t, r, _ in lt]
-        leader_spins = {t: s for t, _, s in lt}
+                                 [(a, b) for _, _, a, b in spans[1 - leader_pid]], with_span=True)
+        turns[leader_pid] = [(t, r) for t, r, _, _, _ in lt]
+        leader_spins = {t: s for t, _, s, _, _ in lt}
+        rot_spans = {leader_pid: {t: (a, b) for t, _, _, a, b in lt}}
+    else:
+        rot_spans = {}
 
     spin_spans = {0: {}, 1: {}}  # pid -> {ターン時刻: spin_hint の span}
-    if SPIN_USE_TURN_SPAN:
-        for pid in (0, 1):
-            ps = detect_turns(draw_frames, pid, with_span="pair")
+    for pid in (0, 1):
+        ps = detect_turns(draw_frames, pid, with_span="pair")
+        if pid not in rot_spans:
+            rot_spans[pid] = {t: (a, b) for t, _, a, b in ps}
+        if SPIN_USE_TURN_SPAN:
             for k, (t, _, a, b) in enumerate(ps):
                 prev_end = ps[k - 1][3] if k else float("-inf")
                 next_start = ps[k + 1][2] if k + 1 < len(ps) else float("inf")
@@ -1744,10 +1754,25 @@ def detect_events(draw_frames, leader_pid):
             if by == "follower" and t in half:
                 continue  # CBL の通過の半回転（随伴フィルタには残す）
             spin =leader_spins[t] if by == "leader" else spin_hint(draw_frames, pid, t, spin_spans[pid].get(t))
-            events.append({"t": t, "type": "Turn", "by": by, "rotations": rotations,
-                           "hold": detect_hold(draw_frames, t, leader_pid), "spin": spin})
+            ev = {"t": t, "type": "Turn", "by": by, "rotations": rotations,
+                  "hold": detect_hold(draw_frames, t, leader_pid), "spin": spin}
+            if t in rot_spans.get(pid, {}):
+                set_turn_span(ev, *rot_spans[pid][t], source="flips10fps")
+            events.append(ev)
     events.sort(key=lambda e: e["t"])
     return events
+
+
+def set_turn_span(e, t_from, t_to, source):
+    """ターンのイベントに回転の範囲（最初〜最後の向きの反転）と、その真ん中 tMid を書く。
+    t は回り始め（女性: 最初の反転、男: 最初の 1 回転の中点）のまま。振付シートの行の割り当て・カードはカウントの
+    回り始めを使う。正解表の t は回転の真ん中に付けてあるので、採点（eval_ground_truth の --match=mid）は tMid で
+    対応を取る（README 28）"""
+    if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (t_from, t_to)) or t_to < t_from:
+        return e
+    e["span"] = {"from": round(t_from, 2), "to": round(t_to, 2), "source": source}
+    e["tMid"] = round((t_from + t_to) / 2, 2)
+    return e
 
 
 def draw_debug(frame, mask_roi, roi, kept, rejected, leader_pid, event_labels=()):

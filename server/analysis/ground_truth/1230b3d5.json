@@ -3,6 +3,7 @@
   "job": "b60c41f9-21fd-4212-82ac-a184a380f58b",
   "source": "storage/gt-sheets/1230b3d5 コマ一覧（0.5秒刻み）を目視で読み取り（2026-10-03）",
   "leaderAtStart": "right",
+  "turnTime": "mid",
   "evalRange": [0, 156.0],
   "turnsComplete": false,
   "notes": [

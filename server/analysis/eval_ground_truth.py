@@ -29,6 +29,32 @@ STORAGE_DIR = os.environ.get("MOTION_LAB_STORAGE") or os.path.join(HERE, "..", "
 JOBS_DIR = os.path.join(STORAGE_DIR, "analysis-jobs")
 GT_DIR = os.path.join(HERE, "ground_truth")
 MATCH_SEC = 1.0
+# ターンの照合に使う検出の時刻（README 28）。正解表の t は、0.1 秒刻みで読み直した 3 本（2fda2815・8c312c6d・bb0efcb9）と
+# 1230b3d5 は回転の真ん中（memo の範囲の 0.2〜0.62、中央値 0.50）、img1884・screenrec（2026-09 の連続フレームの校正）は
+# 回り始めに付いている。検出の t は回り始め（女性: 最初の反転、男: 最初の 1 回転の中点）なので、
+#   auto  正解表の turnTime（"mid" / "start"、無ければ start）に合わせる: mid なら検出の tMid（回転の範囲の真ん中）、start なら t
+#   t     いつも検出の t（README 27 までの照合）
+#   mid   いつも tMid
+# どれも ±MATCH_SEC は同じ。CBL の照合は変えない
+TURN_MATCH = "auto"
+
+
+def turn_mid(e):
+    """検出のターンの回転の範囲の真ん中: tMid、無ければ全フレームの取り直しの spin.from〜to、それも無ければ t"""
+    if isinstance(e.get("tMid"), (int, float)):
+        return e["tMid"]
+    sp = e.get("spin") or {}
+    if isinstance(sp.get("from"), (int, float)) and isinstance(sp.get("to"), (int, float)):
+        return (sp["from"] + sp["to"]) / 2
+    return e["t"]
+
+
+def turn_time_key(gt, mode=None):
+    """正解表と照合モードから、検出のターンの照合用の時刻を取る関数"""
+    mode = mode or TURN_MATCH
+    if mode == "auto":
+        mode = "mid" if gt.get("turnTime") == "mid" else "t"
+    return turn_mid if mode == "mid" else (lambda e: e["t"])
 
 
 def out_dir(gt):
@@ -59,11 +85,12 @@ def load_events(gt, stored, events_dir=None, name=None):
     return [e for e in ap.detect_events(data["frames"], data["leaderPid"]) if in_range(gt, e["t"])], data
 
 
-def match(gt_items, preds):
-    """時刻の近い順に1対1で対応づける。戻り値: [(gt_index, pred_index)]"""
+def match(gt_items, preds, key=None):
+    """時刻の近い順に1対1で対応づける。key: 検出の照合用の時刻（既定は t）。戻り値: [(gt_index, pred_index)]"""
+    key = key or (lambda e: e["t"])
     pairs = sorted(
-        ((abs(g["t"] - p["t"]), gi, pi) for gi, g in enumerate(gt_items) for pi, p in enumerate(preds)
-         if abs(g["t"] - p["t"]) <= MATCH_SEC),
+        ((abs(g["t"] - key(p)), gi, pi) for gi, g in enumerate(gt_items) for pi, p in enumerate(preds)
+         if abs(g["t"] - key(p)) <= MATCH_SEC),
         key=lambda x: x[0])
     used_g, used_p, out = set(), set(), []
     for _, gi, pi in pairs:
@@ -108,11 +135,11 @@ def _r(x):
     return None if x is None else round(x, 3)
 
 
-def score_events(gt_items, preds, count_fp=True):
+def score_events(gt_items, preds, count_fp=True, key=None):
     """optional な正解は、対応した検出を誤検出に数えず、見逃しても取りこぼしに数えない。
     count_fp=False は正解側が出来事を数え切れていない（turnsComplete: false）ときで、誤検出を数えない"""
     c = Counter()
-    pairs = match(gt_items, preds)
+    pairs = match(gt_items, preds, key)
     matched_g = {gi for gi, _ in pairs}
     matched_p = {pi for _, pi in pairs}
     for gi, _ in pairs:
@@ -184,11 +211,12 @@ def evaluate(gt, stored, verbose, events_dir=None, name=None):
             if gi not in {a for a, _ in pairs} and not g.get("optional")]
     log += [f"  CBL  誤検出 {p['t']:5.2f}" for pi, p in enumerate(pc) if pi not in {b for _, b in pairs}]
 
-    # ターン（女性 / 男性 別）
+    # ターン（女性 / 男性 別）。照合の時刻は正解表の turnTime に合わせる（TURN_MATCH、README 28）
+    tkey = turn_time_key(gt)
     for by, key in (("follower", "Turn.follower"), ("leader", "Turn.leader")):
         g_items = [g for g in gt["turns"] if g["by"] == by]
         p_items = [e for e in preds if e["type"] == "Turn" and e["by"] == by]
-        c, pairs = score_events(g_items, p_items, count_fp=gt.get("turnsComplete", True))
+        c, pairs = score_events(g_items, p_items, count_fp=gt.get("turnsComplete", True), key=tkey)
         res["events"][key] = c
         for gi, pi in pairs:
             g, p = g_items[gi], p_items[pi]
@@ -201,7 +229,7 @@ def evaluate(gt, stored, verbose, events_dir=None, name=None):
                 pr = pred_runs(p)
                 if pr:
                     res["spinTurns"].append(abs(sum(r["turns"] for r in pr) - gturns))
-            log.append(f"  Turn {by[0]} gt {g['t']:5.1f} ↔ {p['t']:5.2f}  dir {gdir}/{pdir}"
+            log.append(f"  Turn {by[0]} gt {g['t']:5.1f} ↔ {p['t']:5.2f} (mid {turn_mid(p):5.2f})  dir {gdir}/{pdir}"
                        f"  rot {gturns}/{p.get('rotations')}  spin {[(r['dir'][0], r['turns']) for r in pred_runs(p)]}")
         log += [f"  Turn {by[0]} 見逃し {g['t']:5.1f} {g.get('memo', '')}" for gi, g in enumerate(g_items)
                 if gi not in {a for a, _ in pairs} and not g.get("optional")]
@@ -283,9 +311,15 @@ def main():
     ap_.add_argument("--events-dir", help="<dir>/<正解表の名前>.json の summary.events を採点する（無い動画は tracks から）")
     ap_.add_argument("--json", help="指標を JSON で書き出す（前後比較用）")
     ap_.add_argument("--verbose", "-v", action="store_true", help="1件ずつの対応・見逃し・誤検出を出す")
+    ap_.add_argument("--turn-match", choices=("auto", "t", "mid"), default=None,
+                     help="ターンの照合の時刻: auto = 正解表の turnTime に合わせる（既定）/ t = 検出の t（README 27 まで）/ mid = tMid")
     args = ap_.parse_args()
+    global TURN_MATCH
+    if args.turn_match:
+        TURN_MATCH = args.turn_match
 
-    results, report = [], {"mode": "stored" if args.stored else "tracks", "matchSec": MATCH_SEC, "videos": {}}
+    results, report = [], {"mode": "stored" if args.stored else "tracks", "matchSec": MATCH_SEC,
+                           "turnMatch": TURN_MATCH, "videos": {}}
     for path in sorted(glob.glob(os.path.join(GT_DIR, "*.json"))):
         gt = json.load(open(path, encoding="utf-8"))
         name = os.path.splitext(os.path.basename(path))[0]

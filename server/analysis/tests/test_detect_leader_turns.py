@@ -79,6 +79,31 @@ class DetectLeaderTurnsTest(unittest.TestCase):
         finally:
             ap.LEADER_FACE_FLIP_CHECK = old
 
+    def test_turn_inside_overhead_spin_is_dropped(self):
+        # 女性が 0.8〜2.0 秒に連続回転していて、その間は手が頭上（男が回している）: 男の回転は随伴回転として捨てる。
+        # 女性のターンの時刻（0.8）からは ±CBL_PIVOT_SUPPRESS_SEC より離れている
+        f = with_follower(frames([(1.0, FRONT, F)] + RIGHT_TURN + [(1.0, FRONT, F)]), raised=True)
+        self.assertEqual(ap.detect_leader_turns(f, 0, [], [-5.0], [(0.8, 2.0)]), [])
+
+    def test_turn_inside_spin_with_hands_down_is_kept(self):
+        f = with_follower(frames([(1.0, FRONT, F)] + RIGHT_TURN + [(1.0, FRONT, F)]), raised=False)
+        self.assertEqual(len(ap.detect_leader_turns(f, 0, [], [-5.0], [(0.8, 2.0)])), 1)
+
+    def test_turn_outside_overhead_spin_is_kept(self):
+        f = with_follower(frames([(1.0, FRONT, F)] + RIGHT_TURN + [(1.0, FRONT, F)]), raised=True)
+        self.assertEqual(len(ap.detect_leader_turns(f, 0, [], [-5.0], [(1.8, 2.5)])), 1)
+
+
+def with_follower(fr, raised, pid=1):
+    """各コマに女性（pid）を足す。raised なら左右の手首が頭（鼻）より上"""
+    k = [[0.5, 0.3, 0.9] for _ in range(17)]
+    k[0] = [0.5, 0.2, 0.9]
+    for i in (ap.LEFT_WRIST, ap.RIGHT_WRIST):
+        k[i] = [0.5, 0.1 if raised else 0.5, 0.9]
+    for df in fr:
+        df["kept"].append({"pid": pid, "shDx": FRONT, "kps": k})
+    return fr
+
 
 if __name__ == "__main__":
     unittest.main()

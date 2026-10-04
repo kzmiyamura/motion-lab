@@ -200,6 +200,55 @@ def render_skeleton_video(skeleton_video_path, draw_frames, leader_pid, effectiv
     writer.release()
 
 
+# 同じ人への二重検出: YOLO の NMS（IoU 0.7）をすり抜けた、1 人に重なる 2 つ目の枠（bbox IoU 0.6〜0.7）。
+# 面積上位 2 人を占めて相手を外してしまう（8c312c6d 29.56〜29.76 で女性が外れた）。
+# bbox の重なりだけでは密着ホールド・CBL の交差（IoU 0.5〜0.7 の本物の 2 人）と区別できないので、
+# 肩・腰の位置が胴の長さに比べてほぼ同じ（同じ骨格）ものだけを二重とみなす。
+# 本物の 2 人は 0.3〜3（多くは 1 以上）、二重検出は 0.01〜0.2 だった（正解表 6 本の tracks で実測）
+# 既定で無効（数えて reliability.duplicateFrames に出すだけ）。正解表 6 本を YOLO から回し直して比べると、
+# 二重検出を除いた分は正しく直るが、ROI と外見追跡の連鎖で 8c312c6d の ID の見直しが変わり、合計では
+# CBL F1 .866 → .839 と下がった（docs/salsa-knowledge/README.md 反映済み 18）。
+# ID の見直しを resolve_identity_joint にした後も、有効にすると CBL .893 → .897 だが女性のターン R .865 → .838、
+# 男のターン F1 .600 → .571、向き 36/38 → 35/37 で差し引きの得にならない（同 19）
+DEDUP_DUPLICATES = False
+DEDUP_IOU = 0.5     # bbox がこれ以上重なっていて
+DEDUP_TORSO = 0.25  # 肩・腰 4 点のずれの平均が 胴の長さ × これ 未満なら同じ人
+TORSO_KPS = (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
+
+
+def torso_distance(p, q, aspect=1.0):
+    """2 つの検出の肩・腰 4 点のずれの平均を、長い方の胴（肩の中点〜腰の中点）で割った値。
+    kps は正規化座標なので、x に aspect（幅 / 高さ）を掛けて縦横の縮尺をそろえる"""
+    def pts(k):
+        return [(k[i][0] * aspect, k[i][1]) for i in TORSO_KPS]
+
+    def torso_len(ps):
+        sx, sy = (ps[0][0] + ps[1][0]) / 2, (ps[0][1] + ps[1][1]) / 2
+        hx, hy = (ps[2][0] + ps[3][0]) / 2, (ps[2][1] + ps[3][1]) / 2
+        return math.hypot(sx - hx, sy - hy)
+
+    a, b = pts(p["kps"]), pts(q["kps"])
+    size = max(torso_len(a), torso_len(b), 1e-6)
+    return sum(math.hypot(u[0] - v[0], u[1] - v[1]) for u, v in zip(a, b)) / len(a) / size
+
+
+def suppress_duplicates(persons, aspect=1.0):
+    """同じ人への二重検出を 1 つにまとめる。信頼度の高い順に残し、残したものと
+    bbox IoU ≥ DEDUP_IOU かつ 胴のずれ < DEDUP_TORSO のものを捨てる。戻り値: (残す, 捨てる)
+    （DEDUP_DUPLICATES に関わらず見つける。使うかどうかは呼び出し側が決める）"""
+    if len(persons) < 2:
+        return persons, []
+    order = sorted(persons, key=lambda p: p.get("conf", 0.0), reverse=True)
+    kept, dropped = [], []
+    for p in order:
+        if any(bbox_iou(p["bbox"], q["bbox"]) >= DEDUP_IOU and torso_distance(p, q, aspect) < DEDUP_TORSO
+               for q in kept):
+            dropped.append(p)
+        else:
+            kept.append(p)
+    return [p for p in persons if any(p is k for k in kept)], dropped
+
+
 def pick_main_pair(persons):
     """検出候補から bbox 面積の大きい上位2人（＝カメラ手前のダンサーペア）を選ぶ。
 
@@ -395,6 +444,11 @@ def fix_identity_segments(draw_frames, anchor):
         return
     print("identity segments swapped: " + ", ".join(
         f"{draw_frames[a]['t']:.1f}-{draw_frames[b]['t']:.1f}" for a, b, s in decisions if s), file=sys.stderr)
+    _apply_segment_flips(draw_frames, decisions)
+
+
+def _apply_segment_flips(draw_frames, decisions):
+    """decisions = [(最初のコマ, 最後のコマ, 入れ替えるか)]。区間の外のコマは前後の区間に従う（食い違えば近い方）"""
     for i, df in enumerate(draw_frames):
         inside = next((d for d in decisions if d[0] <= i <= d[1]), None)
         if inside is not None:
@@ -413,11 +467,227 @@ def fix_identity_segments(draw_frames, anchor):
                     p["pid"] = 1 - p["pid"]
 
 
+# 区間ごとの ID の見直しを、全区間まとめて決める版（resolve_identity_joint）。fix_identity_segments の代わりに使う。
+# 正解表 6 本（YOLO から回した tracks の検出に外見を付け直して採点、docs/salsa-knowledge/README.md 反映済み 19）:
+# 服の手がかり（素足 / 黒いズボン等）で男女が決まるコマの ID の誤り 111 → 10 / 2706 コマ、
+# 検出の小さな揺れ（枠 ±1.5%・2% のコマ落ち・二重検出の除去）での出来事の食い違い 119 → 48 件
+IDENTITY_JOINT = True
+JOINT_REGIONS = ("hist", "upper", "lower", "shin", "head", "arms")
+JOINT_GEOM_WEIGHT = 0.3   # 体の寸法（bbox の高さ・胴の長さ・肩幅・SHR、標準化）の重み
+JOINT_SHRINK = 0.3        # 判別の共分散を対角へ縮める割合
+JOINT_KAPPA = 0.5         # コマごとの対数尤度比の割引（隣のコマは独立でない）
+JOINT_EMIT_CAP = 8.0      # 1 コマの対数尤度比の上限
+JOINT_BLOCK_SEC = 4.0     # この長さごとに、自分の前後を除いて判別を学び直す
+JOINT_GUARD_SEC = 1.0
+JOINT_SWITCH_COST = 2.0   # 隣の区間と入れ替えの有無が変わるコスト（2〜12 で結果はほぼ同じ）
+JOINT_TRAIN_IOU = 0.3     # 判別の学習に使うのは 2 人の bbox がこれ未満しか重ならないコマ
+JOINT_ITERS = 3
+
+
+def _region_hist(frame, x0, y0, x1, y1):
+    """正規化座標の矩形の HSV ヒストグラム（torso_hist と同じ 8×4×4 = 128 次元、L1 正規化）。小さすぎれば None"""
+    h, w = frame.shape[:2]
+    x0, x1 = int(max(0.0, min(x0, x1)) * w), int(min(1.0, max(x0, x1)) * w)
+    y0, y1 = int(max(0.0, min(y0, y1)) * h), int(min(1.0, max(y0, y1)) * h)
+    if x1 - x0 < 3 or y1 - y0 < 3:
+        return None
+    hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1, 2], None, [8, 4, 4], [0, 180, 0, 256, 0, 256])
+    cv2.normalize(hist, hist, 1.0, 0.0, cv2.NORM_L1)
+    return hist.flatten().astype(np.float32)
+
+
+def appearance_regions(frame, p, aspect):
+    """骨格に合わせた部位ごとの色（胴・腿・脛・頭・腕）と体の寸法。resolve_identity_joint 用。
+    2 人とも黒白の服でも、脚（素足 / 黒いズボン）・腕（袖 / 素肌）・髪のように部位で分けると違いが出る。
+    肩・腰の 4 点は measure_person が信頼度を保証している。戻り値: {部位: hist or None, "torsoLen", "shW"}"""
+    def kp(i):
+        k = p["kps"][i]
+        return (k[0], k[1]) if k[2] >= KP_CONF else None
+    sl, sr, hl, hr = (p["kps"][i][:2] for i in (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP))
+    sy, hy = (sl[1] + sr[1]) / 2, (hl[1] + hr[1]) / 2
+    torso = max(hy - sy, 1e-3)
+    xs = [sl[0], sr[0], hl[0], hr[0]]
+    out = {"upper": _region_hist(frame, min(xs), sy, max(xs), hy), "torsoLen": torso, "shW": abs(sl[0] - sr[0]) * aspect}
+    kl, kr, al, ar = kp(13), kp(14), kp(15), kp(16)
+    ky = max([k[1] for k in (kl, kr) if k] or [hy + 0.9 * torso])
+    lx = [hl[0], hr[0]] + [k[0] for k in (kl, kr) if k]
+    pad = 0.15 * (max(lx) - min(lx) + 1e-3)
+    out["lower"] = _region_hist(frame, min(lx) - pad, hy, max(lx) + pad, ky)
+    out["shin"] = None
+    if (kl or kr) and (al or ar):
+        ay = max(a[1] for a in (al, ar) if a)
+        sx = [k[0] for k in (kl, kr, al, ar) if k]
+        pad = 0.2 * (max(sx) - min(sx) + 1e-3)
+        out["shin"] = _region_hist(frame, min(sx) - pad, ky, max(sx) + pad, ay)
+    heads = [k for k in (kp(i) for i in range(5)) if k]
+    cx = float(np.mean([k[0] for k in heads])) if heads else (sl[0] + sr[0]) / 2
+    half = max(0.5 * torso, out["shW"]) * 0.45 / aspect
+    out["head"] = _region_hist(frame, cx - half, max(p["bbox"][1], sy - 0.7 * torso), cx + half, sy)
+    arms = []
+    for ids in ((LEFT_SHOULDER, 7, LEFT_WRIST), (RIGHT_SHOULDER, 8, RIGHT_WRIST)):
+        pts = [q for q in (kp(i) for i in ids) if q]
+        if len(pts) >= 2:
+            ax, ay_ = [q[0] for q in pts], [q[1] for q in pts]
+            pd = 0.08 * torso
+            hh = _region_hist(frame, min(ax) - pd / aspect, min(ay_) - pd, max(ax) + pd / aspect, max(ay_) + pd)
+            if hh is not None:
+                arms.append(hh)
+    out["arms"] = np.mean(arms, axis=0).astype(np.float32) if arms else None
+    return out
+
+
+def _identity_geom(p):
+    app = p.get("app") or {}
+    tl, sw = app.get("torsoLen"), app.get("shW")
+    return np.array([math.log(max(p["bboxHpx"], 1.0)), math.log(tl) if tl else np.nan,
+                     math.log(sw) if sw else np.nan, p["shr2d"]], dtype=float)
+
+
+def _identity_vector(p, means, geo_mu, geo_sd):
+    parts = []
+    for r in JOINT_REGIONS:
+        h = p.get("hist") if r == "hist" else (p.get("app") or {}).get(r)
+        parts.append(np.sqrt(h) if h is not None else means[r])
+    g = (_identity_geom(p) - geo_mu) / geo_sd
+    return np.concatenate(parts + [JOINT_GEOM_WEIGHT * np.nan_to_num(g)])
+
+
+def _shrunk_lda(D):
+    """2 人の差ベクトル D（行 = コマ、0 番 − 1 番）から、差の向きの対数尤度比を出す重み（共分散を対角へ縮める Fisher 判別）"""
+    mu = D.mean(axis=0)
+    C = np.cov((D - mu).T)
+    C = (1 - JOINT_SHRINK) * C + JOINT_SHRINK * np.eye(len(C)) * (np.trace(C) / len(C))
+    w = np.linalg.solve(C, mu)
+    return w * (2 * float(w @ mu) / max(float(w @ C @ w), 1e-9))
+
+
+def resolve_identity_joint(draw_frames):
+    """区間（2 人がそろい重ならないコマの連なり。区間の中は位置で同一人物と言える）ごとの ID の入れ替えを、全区間まとめて決める。
+
+    fix_identity_segments（錨との色の距離を区間ごとに見て、閾値で 1 つずつ入れ替える）は、黒白の服の 2 人では差がわずかで、
+    ROI のわずかな変化で入れ替える区間が変わり、撮影の寄りが変わった後の正しい区間まで入れ替えていた（8c312c6d 26.8〜27.7）。ここでは
+      1. 外見を部位ごとの色（bbox 上部・胴・腿・脛・頭・腕）と体の寸法のベクトルにし、
+      2. 区間ごとの 2 人の差の平均を、区間の中の揺れで白色化した空間の第 1 主成分に射影した符号で、まず全区間の向きをそろえる
+         （追跡の結果に頼らない。2% のコマ落ちで追跡が半分近く間違えた 8c312c6d も戻せる）、
+      3. そのラベルで「2 人の差 → どちらが 0 番か」の判別（縮小 Fisher 判別）を学び、区間ごとの証拠（コマごとの対数尤度比の和）を出す。
+         判別は JOINT_BLOCK_SEC 秒ごとに、その前後 JOINT_GUARD_SEC 秒を除いたコマで学び直す（自分のラベルで自分を確かめない。
+         全部で学ぶと間違った区間のラベルまで覚えて、どの区間も「そのまま」と出る）、
+      4. 区間の並びに沿った 2 状態の Viterbi（そのまま / 入れ替え、隣と変わるたびに JOINT_SWITCH_COST）で全区間を決め、
+         3〜4 を数回くり返す。区間の外のコマ（重なり・1 人だけ）は fix_identity_segments と同じく前後の区間に従う"""
+    segs, cur, prev = [], [], None
+
+    def two(df):
+        ks = [p for p in df["kept"] if p.get("pid") in (0, 1) and p.get("hist") is not None]
+        if len(ks) != 2 or ks[0]["pid"] == ks[1]["pid"] or bbox_iou(ks[0]["bbox"], ks[1]["bbox"]) >= SEGMENT_IOU:
+            return None
+        return {p["pid"]: p for p in ks}
+
+    for i, df in enumerate(draw_frames):
+        by = two(df)
+        if by is None:
+            if cur:
+                segs.append(cur)
+            cur, prev = [], None
+            continue
+        if prev is not None and any(abs(by[k]["hipX"] - prev[k]["hipX"]) > SEGMENT_MOVE for k in (0, 1)):
+            segs.append(cur)
+            cur = []
+        cur.append(i)
+        prev = by
+    if cur:
+        segs.append(cur)
+    if len(segs) < 2:
+        return
+    ps = [p for s in segs for i in s for p in two(draw_frames[i]).values()]
+    means = {}
+    for r in JOINT_REGIONS:
+        hs = [np.sqrt(h) for h in ((p.get("hist") if r == "hist" else (p.get("app") or {}).get(r)) for p in ps)
+              if h is not None]
+        means[r] = np.mean(hs, axis=0) if hs else np.zeros(128)
+    G = np.array([_identity_geom(p) for p in ps])
+    ok = np.isfinite(G)
+    cnt = np.maximum(ok.sum(axis=0), 1)
+    geo_mu = np.where(ok, G, 0.0).sum(axis=0) / cnt
+    geo_sd = np.sqrt(np.where(ok, (G - geo_mu) ** 2, 0.0).sum(axis=0) / cnt)
+    geo_sd = np.where(geo_sd < 1e-6, 1.0, geo_sd)
+    # 区間のコマごとの差ベクトル（追跡のラベルのまま: 0 番 − 1 番）
+    D, T, IOU, seg_of = [], [], [], []
+    for k, s in enumerate(segs):
+        for i in s:
+            by = two(draw_frames[i])
+            D.append(_identity_vector(by[0], means, geo_mu, geo_sd) - _identity_vector(by[1], means, geo_mu, geo_sd))
+            T.append(draw_frames[i]["t"])
+            IOU.append(bbox_iou(by[0]["bbox"], by[1]["bbox"]))
+            seg_of.append(k)
+    D, T, IOU, seg_of = np.array(D), np.array(T), np.array(IOU), np.array(seg_of)
+    n_frames = np.array([len(s) for s in segs])
+
+    def orient(flip):
+        # 0 番 / 1 番の向きは任意なので、入れ替えるコマが少ない方にそろえる
+        return [not f for f in flip] if n_frames[np.array(flip, bool)].sum() > n_frames.sum() / 2 else flip
+
+    # 2. 白色化した空間の第 1 主成分で初期の向きをそろえる
+    dim = D.shape[1]
+    M = np.array([D[seg_of == k].mean(axis=0) for k in range(len(segs))])
+    R = D - M[seg_of]
+    Sw = R.T @ R / len(D)
+    Sw = (1 - JOINT_SHRINK) * Sw + JOINT_SHRINK * np.eye(dim) * (np.trace(Sw) / dim) + 1e-9 * np.eye(dim)
+    ev, U = np.linalg.eigh(Sw)
+    Mw = M @ (U / np.sqrt(ev))
+    _, V = np.linalg.eigh((Mw * n_frames[:, None]).T @ Mw)
+    flip = orient([float(x) < 0 for x in Mw @ V[:, -1]])
+    t0, t1 = float(T.min()), float(T.max())
+    train = IOU < JOINT_TRAIN_IOU
+    if train.sum() < 10:
+        return
+    for _ in range(JOINT_ITERS):
+        Dl = D * np.where(np.array(flip)[seg_of], -1.0, 1.0)[:, None]  # 今のラベルでの 0 番 − 1 番
+        llr = np.zeros(len(D))
+        b0 = t0
+        while b0 <= t1:
+            inb = (T >= b0) & (T < b0 + JOINT_BLOCK_SEC)
+            if inb.any():
+                mask = train & ((T < b0 - JOINT_GUARD_SEC) | (T >= b0 + JOINT_BLOCK_SEC + JOINT_GUARD_SEC))
+                w = _shrunk_lda(Dl[mask] if mask.sum() >= 10 else Dl[train])
+                llr[inb] = np.clip(JOINT_KAPPA * (D[inb] @ w), -JOINT_EMIT_CAP, JOINT_EMIT_CAP)
+            b0 += JOINT_BLOCK_SEC
+        keep = np.bincount(seg_of, weights=llr, minlength=len(segs))  # 追跡のラベルのままを支持する証拠
+        # 4. Viterbi（状態: 0 = そのまま, 1 = 入れ替え）
+        cost = [-keep[0] / 2, keep[0] / 2]
+        back = []
+        for k in range(1, len(segs)):
+            nc, bk = [], []
+            for z in (0, 1):
+                c = [cost[zp] + (JOINT_SWITCH_COST if zp != z else 0.0) for zp in (0, 1)]
+                zp = 0 if c[0] <= c[1] else 1
+                nc.append(c[zp] + (-keep[k] / 2 if z == 0 else keep[k] / 2))
+                bk.append(zp)
+            cost = nc
+            back.append(bk)
+        z = 0 if cost[0] <= cost[1] else 1
+        new = [False] * len(segs)
+        for k in range(len(segs) - 1, -1, -1):
+            new[k] = bool(z)
+            if k > 0:
+                z = back[k - 1][z]
+        new = orient(new)
+        if new == flip:
+            break
+        flip = new
+    decisions = [(s[0], s[-1], f) for s, f in zip(segs, flip)]
+    if any(flip):
+        print("identity segments swapped (joint): " + ", ".join(
+            f"{draw_frames[a]['t']:.1f}-{draw_frames[b]['t']:.1f}" for a, b, f in decisions if f), file=sys.stderr)
+        _apply_segment_flips(draw_frames, decisions)
+
+
 def assign_appearance_ids(draw_frames):
     """外見（色ヒストグラム）で全検出を2人分のクラスタに分け、Leader クラスタを決める。
 
     - 1回目: EMA リファレンスだけで追跡し、冒頭のきれいなコマから錨リファレンスを作る
     - 2回目: 錨を混ぜたコストで追跡し直す（密着交差での取り違えから戻れるように）
+    - 区間ごとの入れ替えを全区間まとめて見直す（resolve_identity_joint。IDENTITY_JOINT = False なら旧 fix_identity_segments）
     - Leader は「クラスタ単位の SHR 平均」が高い方（フレーム単位の勝負ではないので
       横向きの一瞬に色が乗っ取られない）
     - 各 kept エントリに "pid" を書き込み、Leader の pid を返す（判定不能なら None）
@@ -426,8 +696,10 @@ def assign_appearance_ids(draw_frames):
     anchor = anchor_refs(draw_frames)
     if anchor is not None:
         track_appearance(draw_frames, anchor, ANCHOR_WEIGHT)
-        if SEGMENT_REID:
-            fix_identity_segments(draw_frames, anchor)
+    if IDENTITY_JOINT:
+        resolve_identity_joint(draw_frames)
+    elif anchor is not None and SEGMENT_REID:
+        fix_identity_segments(draw_frames, anchor)
 
     # Leader クラスタの選択: フレーム毎のペア比較（pid0 - pid1）の中央値による多数決。
     # SHR差（重み2）+ 身長差 + 肩幅差。かつて「SHR平均が高い方」で選んでいたが、
@@ -454,6 +726,53 @@ def assign_appearance_ids(draw_frames):
     print(f"leader cluster vote: medSHRdiff={med(d_shr):.3f} medHdiff={med(d_h):.1f} "
           f"medSWdiff={med(d_sw):.1f} score={score} pairs={len(d_shr)}", file=sys.stderr)
     return 0 if score > 0 else 1
+
+
+HINT_SIZE_RATIO = 0.7  # ヒントを当てるコマ: 2 人とも本人の bbox 高さの中央値のこの割合以上（観客・背景の人を拾ったコマを除く）
+HINT_MAX_SEC = 2.0     # ヒントの時刻からこの秒数以内のコマが無ければ使わない
+
+
+def leader_from_hint(draw_frames, leader_pid, leader_hint):
+    """Claude アンカー（例: right@5.00）で Leader の pid を決める。使えなければ leader_pid のまま。
+
+    ヒントの時刻にいちばん近い「きれいな」コマ（2 人とも本人の背丈で写り、bbox が SEGMENT_IOU 未満しか重ならない）で、
+    指定の側にいる pid を Leader とする。以前は単に一番近いコマを使っていたので、screenrec（cb822fe5）の 0 秒のように
+    女性と背景の小さな人が 2 人として写ったコマで右の人（背景）を Leader にし、全編の男女が逆になっていた。
+    窓の多数決（ヒントから 2 秒）にすると、1230b3d5 のように 0.3 秒で 2 人が入れ替わる動画で逆になる"""
+    try:
+        side, t_str = leader_hint.split("@")
+        t_hint = float(t_str)
+    except ValueError as e:
+        print(f"leader hint ignored: {e}", file=sys.stderr)
+        return leader_pid
+    if side not in ("left", "right"):
+        print(f"leader hint ignored: side={side}", file=sys.stderr)
+        return leader_pid
+    pairs = []
+    for df in draw_frames:
+        by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
+        if 0 in by_pid and 1 in by_pid:
+            pairs.append((abs(df["t"] - t_hint), by_pid))
+    if not pairs:
+        print(f"leader hint unusable (no pair frame near t={t_hint})", file=sys.stderr)
+        return leader_pid
+
+    def height(p):
+        return p["bbox"][3] - p["bbox"][1]
+    med = {k: sorted(height(bp[k]) for _, bp in pairs)[len(pairs) // 2] for k in (0, 1)}
+    clean = [x for x in pairs if all(height(x[1][k]) >= HINT_SIZE_RATIO * med[k] for k in (0, 1))
+             and bbox_iou(x[1][0]["bbox"], x[1][1]["bbox"]) < SEGMENT_IOU]
+    d, by_pid = min(clean or pairs, key=lambda x: x[0])
+    if d > HINT_MAX_SEC:
+        print(f"leader hint unusable (no pair frame near t={t_hint})", file=sys.stderr)
+        return leader_pid
+    right_pid = 0 if by_pid[0]["hipX"] >= by_pid[1]["hipX"] else 1
+    anchored = right_pid if side == "right" else 1 - right_pid
+    if anchored != leader_pid:
+        print(f"leader anchor override: {leader_pid} -> {anchored} (hint={leader_hint})", file=sys.stderr)
+    else:
+        print(f"leader anchor agrees with CV vote (hint={leader_hint})", file=sys.stderr)
+    return anchored
 
 
 # --- 技イベント検出（ロードマップ②: Turn / CBL のタイムスタンプ候補） ---
@@ -496,7 +815,7 @@ LEADER_TURN_COOLDOWN_SEC = 1.5   # 男のターン同士の最小間隔（1.0〜
 LEADER_FACE_FLIP_CHECK = True
 LEADER_FACE_SEEN = 0.4
 LEADER_FACE_FLIP_BOTH = False
-EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔
+EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔（冷却を縮める・終わりから測る等は README 20 で試して不採用）
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
 # 往復ジッタは CBL_MIN_SEP / CBL_WINDOW_SEC の分離条件で弾けるので、ここは短くてよい
 CBL_COOLDOWN_SEC = 0.6
@@ -534,9 +853,61 @@ SPIN_KP_MIN = 0.3
 TURN_FAST_MIN_FLIPS = 5
 TURN_FAST_MAX_FLIPS = 6
 TURN_FAST_TAIL_FLIPS = 2
+# 半回転の取り込み: 冷却が明けた所で拾ったターンが、2つ目の反転でちょうど速い連続回転の始まりに乗っているだけ
+# （遅い反転ペア = 歩き込み・CBL の通過の半回転）のとき、上の「それ以外と重なるときは何もしない」に当たって
+# 連続回転が冷却に隠れていた。8c312c6d 27.41（半回転、1.27 秒かけた反転ペア）が 28.68〜30.05 の
+# 5 反転の右 2 回転（正解 29.6）を塞いでいたのがこれ。そこでその半回転は捨てて連続回転に置き換える。
+# 10/4、正解表 6 本（tracks モード、保存した YOLO の検出）: 女性のターン P/R .914/.865 → .917/.892（tp 32 → 33）、
+# 向き 36/38 → 37/39、回転数の誤差 .329 → .295、CBL・男のターン・通る側は不変（screenrec 29.0 も 28.42 の
+# 1 回転 → 29.17 の 2 回転に）。半回転を残して連続回転を足す版は fp +1。README 20
+TURN_FAST_ABSORB_LEAD = True
+# 頭上の手の下での連続回転: 相手（男）の手首が頭より上にある間の反転の連なりは、TURN_FAST_MAX_FLIPS を超えても
+# 連続回転として扱う。男が手を頭上に上げて女性を回している間は女性が速く何回も回れるが、入れ替わりの前後の揺れ
+# （bb0efcb9 21〜23.5 の 8 反転など）では手は下がっている。8c312c6d 13.9（13.70〜15.76 の 7 反転、頭上で手をつないで
+# 左回り）がこれで、12.82 のターンの冷却に隠れていた。手は左右どちらでもよい（内側/外側は回る向きで決まり、手では決まらない）。
+# 連なりの終わりは手が上がっていた最後の反転で切る（15.37〜15.76 は 15.9 の CBL の通過の半回転）。
+# 手前で終わるターン（12.82、正解 12.6 の 1 回転）は、上の取り込み（半回転の歩き込み）と違って本物なので残す。
+# 10/4、正解表 6 本（tracks モード）: 女性のターン P/R .917/.892 → .919/.919（tp 33 → 34）。README 21
+TURN_RAISED_MAX_FLIPS = 12    # 0 = 無効。7〜99 で結果は同じ（ほかに手が頭上の長い連なりは無い）
+TURN_RAISED_MIN_RATIO = 0.5   # 連なりの間、相手の手首が頭より上にあったコマの割合（13.9 は 0.59。0.6 では外れる）
+TURN_RAISED_WHO = "partner"   # partner / self / either（0.5 ならどれも同じ。0.4 にすると self / either は男のターンを落とす）
+TURN_RAISED_TRIM = True       # 連なりの終わりを、手が上がっていた最後の反転で切る（回転数 3 → 2、正解 1½）
+TURN_RAISED_KEEP_LEAD = True  # 手前で終わるターンを残す（False だと 12.6 を落として R は変わらない）
 
 
-def detect_turns(draw_frames, pid):
+def wrist_over_head(p):
+    """左右どちらかの手首が本人の頭（鼻。鼻が読めなければ肩の上 0.05）より上か。読めなければ None"""
+    k = p.get("kps") if p else None
+    if not k:
+        return None
+    if k[0][2] >= SPIN_KP_MIN:
+        head_y = k[0][1]
+    else:
+        sh = [k[i][1] for i in (LEFT_SHOULDER, RIGHT_SHOULDER) if k[i][2] >= SPIN_KP_MIN]
+        if not sh:
+            return None
+        head_y = min(sh) - 0.05
+    ws = [k[i][1] for i in (LEFT_WRIST, RIGHT_WRIST) if k[i][2] >= SPIN_KP_MIN]
+    return bool(ws) and min(ws) < head_y
+
+
+def raised_samples(draw_frames, pid, who="partner"):
+    """[(t, 手が頭上か)]（読めたコマのみ）。who: partner = 相手の手、self = 本人、either = どちらか"""
+    out = []
+    for df in draw_frames:
+        ps = {p.get("pid"): p for p in df["kept"] if p.get("pid") in (0, 1)}
+        vals = []
+        if who in ("partner", "either"):
+            vals.append(wrist_over_head(ps.get(1 - pid)))
+        if who in ("self", "either"):
+            vals.append(wrist_over_head(ps.get(pid)))
+        vals = [v for v in vals if v is not None]
+        if vals:
+            out.append((df["t"], any(vals)))
+    return out
+
+
+def detect_turns(draw_frames, pid, with_span=False):
     """指定人物のターン候補時刻を返す。
 
     COCO キーポイントは左肩(5)と右肩(6)を区別するため、画面上での左右肩の
@@ -601,26 +972,76 @@ def detect_turns(draw_frames, pid):
 
     # 速い連続回転（反転 TURN_FAST_MIN_FLIPS〜TURN_FAST_MAX_FLIPS 個の連なり）: 冷却で落ちたものを足し、
     # 回転の終わりの方（最後の TURN_FAST_TAIL_FLIPS 個の反転）から始まっていたターンはこの回転に置き換える
+    raised = raised_samples(draw_frames, pid, TURN_RAISED_WHO) if TURN_RAISED_MAX_FLIPS else []
+
+    def raised_end(t_from, t_to):
+        """区間内で手が頭上だったコマの割合が足りれば、手が上がっていた最後の時刻。足りなければ None"""
+        vals = [(t, r) for t, r in raised if t_from <= t <= t_to]
+        if len(vals) < 3 or sum(r for _, r in vals) < TURN_RAISED_MIN_RATIO * len(vals):
+            return None
+        return max(t for t, r in vals if r)
+
     i = 0
     while i + 1 < len(flips):
-        j = chain_end(i)
-        if TURN_FAST_MIN_FLIPS <= j - i + 1 <= TURN_FAST_MAX_FLIPS and pair_ok(i):
+        j_chain = j = chain_end(i)
+        raised_run = False
+        if TURN_RAISED_MAX_FLIPS and TURN_FAST_MAX_FLIPS < j - i + 1 <= TURN_RAISED_MAX_FLIPS:
+            t_up = raised_end(flips[i][0], flips[j][0])
+            if t_up is not None:
+                raised_run = True
+                if TURN_RAISED_TRIM:
+                    j = max(k for k in range(i, j + 1) if k == i or flips[k][0] <= t_up + 0.1)
+                    j = max(j, i + TURN_FAST_MIN_FLIPS - 1)
+                ok_n = True
+            else:
+                ok_n = False
+        else:
+            ok_n = TURN_FAST_MIN_FLIPS <= j - i + 1 <= TURN_FAST_MAX_FLIPS
+        if ok_n and pair_ok(i):
             # 既存のターンの範囲は2つ目の反転までは含む（間隔が空いて連なりの直前で終わるものも重なりとみなす）
             over = [s for s in spans if s[0] <= j and max(s[1], s[0] + 1) >= i]
-            if all(i < s[0] and s[0] > j - TURN_FAST_TAIL_FLIPS for s in over):
-                spans = [s for s in spans if s not in over] + [[i, max([j] + [s[1] for s in over]), flips[i][0]]]
-        i = j + 1
+            # 連なりの前で始まり、2つ目の反転が連なりの最初の反転になっているだけのターン（半回転の歩き込み）
+            lead = [s for s in over if s[0] < i and s[1] < i] if TURN_FAST_ABSORB_LEAD else []
+            rest = [s for s in over if s not in lead]
+            if all(i < s[0] and s[0] > j - TURN_FAST_TAIL_FLIPS for s in rest):
+                drop = rest if (raised_run and TURN_RAISED_KEEP_LEAD) else over
+                spans = [s for s in spans if s not in drop] + [[i, max([j] + [s[1] for s in rest]), flips[i][0]]]
+        i = j_chain + 1
     spans.sort()
     # 回転数 = 範囲内の反転の数 / 2（切り捨て）。10fps の骨格では速い連続回転は1周3〜4コマしかなく、
     # 反転ペアの連結（振り幅条件つき）では途中のペアが条件を外して少なく数えるので、連結はターンの区切りにだけ使い、
     # 回転数は反転の総数から数える（正解表2本の回転数 MAE 0.43 → 0.29）。
     # ½ 刻み（反転の数 / 2 をそのまま）は正解表 5 本で誤差 .36 → .38 と悪くなるので切り捨てのまま
+    if with_span:
+        return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2)), flips[a][0], flips[b][0])
+                for a, b, t in spans]
     return [(round(t, 2), max(1, min(TURN_COUNT_MAX, (b - a + 1) // 2))) for a, b, t in spans]
 
 
-def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times):
+# 頭上で女性を回している間の男の反転は随伴回転: 女性のターンの範囲（最初〜最後の反転）の中で、2 人のどちらかの手首が
+# 頭より上にあったコマが LEADER_IN_SPIN_RAISED 以上なら、その範囲の男のターンは捨てる。男が手を上げて女性を回すと、
+# 男の上体も女性について回る（2fda2815 12.00 は女性の 10.86〜12.38 の連続回転の中、screenrec 17.61 は 16.68〜19.29 の中）。
+# ±CBL_PIVOT_SUPPRESS_SEC の窓は女性のターンの始まりからしか測らないので、長い連続回転の後半を拾えていなかった。
+# 10/4、正解表 6 本（tracks モード）: 男のターン F1 .600 → .667（fp 4 → 2）、ほかは不変。手の条件を外す（範囲だけ）と
+# bb0efcb9 12.73（optional の正解に当たっていた男の左回り）も落ちて向きが 37/39 → 36/38。0.4〜0.6 で結果は同じ。README 21
+LEADER_IN_SPIN_SUPPRESS = True
+LEADER_IN_SPIN_RAISED = 0.5       # >0 なら、その範囲で手が頭上（どちらかの人）だったコマの割合がこれ以上のときだけ捨てる
+LEADER_IN_SPIN_MARGIN = 0.0       # 範囲の前後に足す秒数（0.3 でも同じ）
+
+
+def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follower_spans=()):
     """男のターン: 向きの反転ペア（= 1 回転）を1つずつ見て、2つの反転が同じ向き（RR / LL）に読めたものだけ残す。
+    follower_spans: 女性のターンの [(最初の反転, 最後の反転)]
     戻り値: [(時刻, 回転数, spin)]"""
+    in_spin = []
+    if LEADER_IN_SPIN_SUPPRESS:
+        raised = raised_samples(draw_frames, pid, "either") if LEADER_IN_SPIN_RAISED > 0 else []
+        for a, b in follower_spans:
+            if LEADER_IN_SPIN_RAISED > 0:
+                vals = [r for t, r in raised if a <= t <= b]
+                if not vals or sum(vals) < LEADER_IN_SPIN_RAISED * len(vals):
+                    continue
+            in_spin.append((a - LEADER_IN_SPIN_MARGIN, b + LEADER_IN_SPIN_MARGIN))
     series = []
     for df in draw_frames:
         for p in df["kept"]:
@@ -667,6 +1088,7 @@ def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times):
         tm = (t1 + t2) / 2
         if (t2 - t1 <= TURN_FLIP_WINDOW and sweep_ok(t1 - TURN_PRE_SEC, t1, s) and sweep_ok(t1, t2, -s)
                 and r1 == r2 and r1 != "?" and not near(tm, cbl_times) and not near(tm, follower_turn_times)
+                and not any(a <= tm <= b for a, b in in_spin)
                 and (not LEADER_FACE_FLIP_CHECK or second_flip_turns(i))):
             pairs.append((i, tm, r1))
             i += 2
@@ -1189,11 +1611,13 @@ def detect_events(draw_frames, leader_pid):
                "handRaise": detect_hand_raise(draw_frames, t, leader_pid)}
               for t in cbl_times]
 
-    turns = {0: detect_turns(draw_frames, 0), 1: detect_turns(draw_frames, 1)}
+    spans = {pid: detect_turns(draw_frames, pid, with_span=True) for pid in (0, 1)}
+    turns = {pid: [(t, r) for t, r, _, _ in spans[pid]] for pid in (0, 1)}
     leader_spins = {}
     if leader_pid is not None:
         follower_turn_times = [t for t, _ in turns[1 - leader_pid]]
-        lt = detect_leader_turns(draw_frames, leader_pid, cbl_times, follower_turn_times)
+        lt = detect_leader_turns(draw_frames, leader_pid, cbl_times, follower_turn_times,
+                                 [(a, b) for _, _, a, b in spans[1 - leader_pid]])
         turns[leader_pid] = [(t, r) for t, r, _ in lt]
         leader_spins = {t: s for t, _, s in lt}
 
@@ -1432,6 +1856,7 @@ def main():
     roi_resets = 0
     edge_clipped_frames = 0  # 見切れにより verdict から除外したペアフレーム数
     typical_area = None  # ペアの典型bbox面積（観客フィルタの基準。小さい方のダンサーのEMA）
+    duplicate_frames = 0  # 同じ人への二重検出が見つかったコマ数
     draw_frames = []    # デバッグ動画用の描画データ（2パス目で色を塗る）
 
     while True:
@@ -1451,6 +1876,13 @@ def main():
             roi_masked_frames += 1
 
         candidates = detect_persons(model, work)
+        # 同じ人への二重検出（面積上位 2 人を 1 人が占めて相手が外れる）。既定では数えるだけ
+        deduped, duplicates = suppress_duplicates(candidates, frame.shape[1] / frame.shape[0])
+        duplicate_frames += 1 if duplicates else 0
+        if DEDUP_DUPLICATES:
+            candidates = deduped
+        else:
+            duplicates = []
         # 観客フィルタ: ペアの典型体格より明らかに小さい人物は候補にすら入れない。
         # 片方のダンサーが完全に隠れた瞬間に、面積上位2人ルールで鏡の撮影者等が
         # 「2人目」に昇格してしまう問題への対策（骨格人形動画に観客が急に出現した実測）
@@ -1460,7 +1892,7 @@ def main():
         else:
             spectators = []
         persons = pick_main_pair(candidates)  # 背景の第三者を弾く（ROI内に紛れた場合の保険）
-        rejected = spectators + [c for c in candidates if c not in persons]
+        rejected = spectators + duplicates + [c for c in candidates if c not in persons]
         if len(persons) == 2:
             smaller = min(p["bboxArea"] for p in persons)
             typical_area = smaller if typical_area is None \
@@ -1499,7 +1931,9 @@ def main():
                       "shDx": p["shDx"], "wrists": p["wrists"], "edgeClipped": p["edgeClipped"],
                       "shoulderW": p["shoulderW"], "bboxHpx": p["bboxHpx"],  # リーダークラスタ判定用
                       "kps": p["kps"],  # 骨格人形レンダリング用
-                      "hist": torso_hist(frame, p["bbox"])}  # 外見ID用（マスク前の生フレームから）
+                      "hist": torso_hist(frame, p["bbox"]),  # 外見ID用（マスク前の生フレームから）
+                      # 部位ごとの色・体の寸法（resolve_identity_joint 用。tracks.json には書かない）
+                      "app": appearance_regions(frame, p, frame.shape[1] / frame.shape[0]) if IDENTITY_JOINT else None}
                      for p in persons],
             "rejected": [{"bbox": p["bbox"], "shr2d": p["shr2d"]} for p in rejected],
         })
@@ -1569,29 +2003,7 @@ def main():
     # Claude が先に1回だけ行い、CVはそれを基準に計測する。ヒントが無い/壊れている場合は
     # 上の中央値多数決がそのまま使われる）
     if leader_hint and draw_frames:
-        try:
-            side, t_str = leader_hint.split("@")
-            t_hint = float(t_str)
-            best = None  # (時刻差, {pid: person})
-            for df in draw_frames:
-                by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
-                if 0 in by_pid and 1 in by_pid:
-                    d = abs(df["t"] - t_hint)
-                    if best is None or d < best[0]:
-                        best = (d, by_pid)
-            if best is not None and best[0] <= 2.0 and side in ("left", "right"):
-                by_pid = best[1]
-                right_pid = 0 if by_pid[0]["hipX"] >= by_pid[1]["hipX"] else 1
-                anchored = right_pid if side == "right" else 1 - right_pid
-                if anchored != leader_pid:
-                    print(f"leader anchor override: {leader_pid} -> {anchored} (hint={leader_hint})", file=sys.stderr)
-                else:
-                    print(f"leader anchor agrees with CV vote (hint={leader_hint})", file=sys.stderr)
-                leader_pid = anchored
-            else:
-                print(f"leader hint unusable (no pair frame near t={t_hint})", file=sys.stderr)
-        except (ValueError, KeyError) as e:
-            print(f"leader hint ignored: {e}", file=sys.stderr)
+        leader_pid = leader_from_hint(draw_frames, leader_pid, leader_hint)
 
     events = detect_events(draw_frames, leader_pid) if draw_frames else []
     if events:
@@ -1663,6 +2075,7 @@ def main():
         "roiMaskedFrames": roi_masked_frames,
         "roiResets": roi_resets,
         "edgeClippedPairFrames": edge_clipped_frames,
+        "duplicateFrames": duplicate_frames,  # 同じ人への二重検出が見つかったコマ数（DEDUP_DUPLICATES で除く）
     }
 
     contested, dropped = extract_contested(contest_frames, effective_fps)
@@ -1691,7 +2104,7 @@ def main():
             "holdTimeline": hold_timeline,
             "frames": [
                 {k: v for k, v in df.items() if k != "kept"} | {
-                    "kept": [{k: v for k, v in p.items() if k != "hist"} for p in df["kept"]],
+                    "kept": [{k: v for k, v in p.items() if k not in ("hist", "app")} for p in df["kept"]],
                 }
                 for df in draw_frames
             ],

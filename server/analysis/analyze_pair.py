@@ -1913,6 +1913,53 @@ def extract_contested(frames, effective_fps):
     return kept, dropped
 
 
+# コマの時刻は動画のタイムスタンプ（PTS、cap.get(CAP_PROP_POS_MSEC)）で取る（2026-10-05）。以前は frame_idx / fps で、
+# 可変フレームレート（画面録画・SNS から落とした動画）では本当の時刻から最大 1 秒ずれていた。正解表 6 本のうち 5 本が可変で、
+# 「コマ番号 / 平均 fps − PTS」は 1230b3d5 で 0 → +1.0 秒（20〜40 秒）→ 0（140 秒）、2fda2815 で +0.25 → −0.5、
+# 8c312c6d で +0.2 → −0.7、bb0efcb9 で +0.34 → −0.8、screenrec で +0.35 → +0.1（img1884 の .mov だけ等間隔）。
+# 正解表（再生した時刻）・音声の拍・キーフレームの切り出し・refine_turns_dense（どれも PTS）と食い違い、1230b3d5 の
+# 「CV の入れ替わりが正解より約 1 秒遅れる」の正体がこれだった。README 26
+FRAME_TIME_PTS = True
+# 画面録画は 60fps の時間軸にコマが 1〜3 枠おきに不規則に並ぶので、4 コマおきに間引いたコマの PTS の間隔は 0.067〜0.2 秒と
+# ばらつく。検出の秒の閾値（反転の連なりの間隔・冷却など）は等間隔の時刻で合わせてあるので、PTS そのものではなく
+# 「コマ番号 / fps」に、前後 FRAME_TIME_SMOOTH_SEC 秒の（PTS − コマ番号 / fps）の中央値を足した時刻を使う
+# （ゆっくり溜まるずれだけ直し、コマごとの揺れは入れない）。0 = PTS そのもの
+FRAME_TIME_SMOOTH_SEC = 1.0
+
+
+def pts_offsets(pts, fps, smooth_sec=None):
+    """コマごとの PTS（秒）の並び → コマごとの時刻（秒）。smooth_sec > 0 なら「コマ番号 / fps + 前後 smooth_sec 秒の
+    (PTS − コマ番号 / fps) の中央値」、0 なら PTS そのもの。PTS が使えない（空・単調でない）なら None"""
+    smooth_sec = FRAME_TIME_SMOOTH_SEC if smooth_sec is None else smooth_sec
+    if not pts or any(not math.isfinite(p) for p in pts) or any(b < a for a, b in zip(pts, pts[1:])):
+        return None
+    if smooth_sec <= 0:
+        return list(pts)
+    off = [p - i / fps for i, p in enumerate(pts)]
+    half = max(1, int(round(smooth_sec * fps)))
+    out = []
+    for i in range(len(pts)):
+        w = sorted(off[max(0, i - half):i + half + 1])
+        out.append(i / fps + w[len(w) // 2])
+    return out
+
+
+def frame_time_map(video_path, fps):
+    """動画を 1 回なめてコマごとの時刻（pts_offsets）を返す。FRAME_TIME_PTS が無効・PTS が取れなければ None"""
+    if not FRAME_TIME_PTS:
+        return None
+    cap = cv2.VideoCapture(video_path)
+    pts = []
+    while cap.grab():
+        p = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        if not math.isfinite(p) or (pts and p <= 0):
+            cap.release()
+            return None
+        pts.append(p)
+    cap.release()
+    return pts_offsets(pts, fps)
+
+
 def main():
     # フラグ（--key=value）と位置引数を分離
     positional = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -1937,6 +1984,7 @@ def main():
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_interval = max(1, round(fps / TARGET_FPS))
     effective_fps = fps / frame_interval
+    tmap = frame_time_map(video_path, fps)  # コマごとの時刻（PTS。可変フレームレート対策）
 
     frame_idx = 0
     sampled = 0
@@ -1968,7 +2016,7 @@ def main():
             frame_idx += 1
             continue
 
-        t_sec = frame_idx / fps
+        t_sec = tmap[frame_idx] if tmap and frame_idx < len(tmap) else frame_idx / fps
 
         # ROIマスク: 前フレームのペア位置の外側を塗りつぶして背景人物を視野から排除
         mask_roi = roi  # デバッグ動画の2パス目で同じマスクを再現するために控える

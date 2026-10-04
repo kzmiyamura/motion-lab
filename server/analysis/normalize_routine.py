@@ -74,14 +74,23 @@ LOW_CONF = 0.35
 # 無音の動画で、CV の左右入れ替わり（summary.events の CBL）から格子を当てるときの設定
 SWAP_MIN = 8               # 入れ替わりがこれ未満なら使わない（routine の間隔から推定する従来の方法へ）
 SWAP_MIN_R = 0.2           # 当てた周期での入れ替わりの位相の揃い方（Rayleigh R）がこれ未満なら使わない
-SWAP_MIN_Z = 7.5           # 入れ替わり＋ターンの Rayleigh z = n·R² がこれ未満なら使わない。でたらめな時刻でも
-                           # 周期を ±25% 振れば z の最大は中央値 4.6・95% 点 7.4 くらいになる（50 個・156 秒で試算）
+SWAP_MIN_Z = 4.5           # 入れ替わりの Rayleigh z = n·R² がこれ未満なら使わない（2026-10-05 まで入れ替わり＋ターンで 7.5）。
+                           # でたらめな時刻（51 個・156 秒、60 回）でも周期を振れば z は中央値 4.0・90% 点 5.8 になり、
+                           # 1230b3d5 の本物（5.2）と見分ける力は弱い。「揃わない時刻の山を落とす」程度の門で、
+                           # 偶然との区別は SWAP_MIN 個以上・SWAP_MIN_R に任せる（README 26）
 SWAP_PERIOD_RANGE = 0.25   # 周期を routine の目安の ±25% で探す
 SWAP_PERIOD_STEP = 0.002   # 秒。156 秒で 60 個の 8 カウントなら、0.002 秒の差が終わりで 0.12 拍になる
 SWAP_PRIOR = 0.1           # 目安から離れた周期への小さな罰（同じくらい揃うなら目安に近い方）
 SWAP_DRIFT_MAX = 2.0       # テンポの変化: 終わりまでに等速の格子から最大 2 個分の 8 カウントずれてよい
                            # （周期の当てはめで吸収しきれずに残るずれは drift の ⅛ 程度。¾ 以下なら等速で足りる）
 DRIFT_MIN_GAIN = 0.05      # drift を入れるのは R がこれ以上良くなるときだけ（ノイズへの当てはめすぎを防ぐ）
+SWAP_FIT_TURNS = False     # 周期（と揃っているかの判定）に女性のターンの時刻も使うか。使うと z が門（当時 7.5）すれすれ
+                           # （1230b3d5 で 7.55）になり、ターンが 1 つ増減するだけで格子ごと捨てて従来の方法へ落ちた
+                           # （入れ替わり 1 つ抜き 32/51・ターン 1 つ抜き 17/33・1 つ足し 21/40 通り）。入れ替わりだけなら 0 通り（README 26）
+SWAP_OUTLIER_BEATS = 0.0   # 平均位置からこの拍数より離れた入れ替わりを外して当て直す（0 = 外さない）。2.5 拍・2 回で
+                           # 1230b3d5 が良くなる組み合わせもあるが、2.0 / 3.0 / 1 回では行の一致が 1 つ減る（際どいので既定は外さない）
+SWAP_OUTLIER_ITERS = 2
+SWAP_MIN_INLIERS = 0.5     # 外した後に残る入れ替わりの割合の下限（これ未満になるなら外さない）
 # 区間ごとの局所位相（30〜40 秒おきの区分線形の補正）も試したが入れていない（1230b3d5 で同点か悪化）。
 # 正解の通過が後半ほど遅く数えられるのは、CV の入れ替わりの遅れが 0.9 秒 → 0.2 秒と縮むためで、CV の入れ替わり
 # 自体は今の格子で平らに並ぶ（docs/salsa-knowledge/README.md 反映済み 7）
@@ -280,16 +289,42 @@ def swap_concentration(swaps, period, drift=0.0, span=1.0):
 def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT):
     """CV の入れ替わり時刻に 8 カウントの格子を当てる。CBL なら入れ替わりは毎回 8 カウントの同じ所
     （On2 は 2 で女が男の横を通る）に来るので、周期を目安の ±SWAP_PERIOD_RANGE で振って位相が最も揃う周期を取る。
-    周期（と揃っているかの判定）には女性のターン（turns）も足す。ターンも 8 カウントの決まった所で回るので
-    手がかりが増える（1230b3d5: 入れ替わりだけだと z=5.2 で偶然と見分けられないが、ターンを足すと 8.8）。
-    8 カウントの頭（位相）は入れ替わりだけで決める（ターンは 1-3 で回る技もあり位置が決まらない）。
+    SWAP_FIT_TURNS なら周期（と揃っているかの判定）に女性のターン（turns）も足すが、既定では足さない
+    （ターンを足すと z が門すれすれになり、ターン 1 つの増減で格子ごと捨てていた。README 26）。
+    8 カウントの頭（位相）はいつも入れ替わりだけで決める（ターンは 1-3 で回る技もあり位置が決まらない）。
+    SWAP_OUTLIER_BEATS > 0 なら、平均位置から外れた入れ替わりを外して当て直す（既定は外さない）。
     テンポがゆっくり変わる（drift）ことも許すが、揃い方が DRIFT_MIN_GAIN 以上良くなるときだけ。
     戻り値 {period, drift, span, head0, R, z} か、入れ替わりが少ない・揃わないとき None"""
     if len(swaps) < SWAP_MIN or not unit_guess:
         return None
-    events = sorted(list(swaps) + list(turns or ()))
+    use_turns = list(turns or ()) if SWAP_FIT_TURNS else []
+    events = sorted(list(swaps) + use_turns)
     span = max(duration or 0, events[-1], 1.0)
+    fit = _search_period(events, unit_guess, span)
+    if fit is None:
+        return None
+    period, drift, r_best = fit
+    z = len(events) * r_best ** 2
+    if z < SWAP_MIN_Z:
+        return None
+    used = sorted(swaps)
+    if SWAP_OUTLIER_BEATS > 0:
+        used, refit = reject_swap_outliers(swaps, use_turns, unit_guess, span, period, drift)
+        if refit is not None:
+            period, drift, _ = refit
+    r_swap, mean = swap_concentration(used, period, drift, span)
+    if r_swap < SWAP_MIN_R:
+        return None
+    # 入れ替わりの平均位置が 8 カウントの SWAP_BEAT 拍目に来るように頭を決める
+    head0 = (mean - swap_beat / 8) % 1
+    out = {"period": period, "drift": drift, "span": span, "head0": head0, "R": r_swap, "z": z}
+    if len(used) != len(swaps):
+        out["inliers"] = len(used)
+    return out
 
+
+def _search_period(events, unit_guess, span):
+    """events の位相が最も揃う周期（と drift）を探す。戻り値 (period, drift, R) か None"""
     def score(p, q):
         r, _ = swap_concentration(events, p, q, span)
         return r - SWAP_PRIOR * abs(math.log(p / unit_guess)), r
@@ -318,15 +353,31 @@ def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT
                 r, _ = swap_concentration(events, p, q, span)
                 if r > r_best + 1e-9 and (q == 0 or r >= r0 + DRIFT_MIN_GAIN):
                     r_best, period, drift = r, p, q
-    z = len(events) * r_best ** 2
-    if z < SWAP_MIN_Z:
-        return None
-    r_swap, mean = swap_concentration(swaps, period, drift, span)
-    if r_swap < SWAP_MIN_R:
-        return None
-    # 入れ替わりの平均位置が 8 カウントの SWAP_BEAT 拍目に来るように頭を決める
-    head0 = (mean - swap_beat / 8) % 1
-    return {"period": period, "drift": drift, "span": span, "head0": head0, "R": r_swap, "z": z}
+    return period, drift, r_best
+
+
+def swap_phase_resid(t, period, drift, span, mean):
+    """入れ替わり t の位相の、平均位置 mean（周期の割合）からのずれ（拍、−4〜+4）"""
+    d = (grid_cycles(t, period, drift, span) - mean) % 1
+    return (d - 1 if d > 0.5 else d) * 8
+
+
+def reject_swap_outliers(swaps, turns, unit_guess, span, period, drift):
+    """平均位置から SWAP_OUTLIER_BEATS 拍より離れた入れ替わり（1 行の 2 回目の通過・誤検出・遅れた交差）を外して、
+    周期と位相を当て直す（SWAP_OUTLIER_ITERS 回まで）。外れが多すぎる（残りが SWAP_MIN_INLIERS 未満）なら外さない。
+    戻り値 (使った入れ替わり, (period, drift, R) か None)"""
+    used, refit = sorted(swaps), None
+    for _ in range(SWAP_OUTLIER_ITERS):
+        _, mean = swap_concentration(used, period, drift, span)
+        keep = [t for t in swaps if abs(swap_phase_resid(t, period, drift, span, mean)) <= SWAP_OUTLIER_BEATS]
+        if len(keep) < max(SWAP_MIN, SWAP_MIN_INLIERS * len(swaps)) or keep == used:
+            break
+        fit = _search_period(sorted(keep + list(turns)), unit_guess, span)
+        if fit is None:
+            break
+        used, refit = keep, fit
+        period, drift = fit[0], fit[1]
+    return used, refit
 
 
 def swap_heads(fit, duration):

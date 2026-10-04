@@ -11,7 +11,10 @@
   dir   正解の女性のターン（向きが分かるもの）を覆う行の turn.direction が正解の主な向きと合うか
         （行にターンが無い・向きが無いものは外れ。ターンの行かどうかは turn で測っている）
   rot   上の行のうち回転数が分かるものの、回転数の誤差の平均（|行の rotations − 正解の合計回転数|）
-  side  正解の入れ替わり（optional でない）を覆う CBL 系の行の sides.followerStart が正解の from と合うか
+  side  正解の入れ替わり（optional でない）を覆う CBL 系の行で、その入れ替わりの前の側が正解の from と合うか。
+        前の側 = sides.followerStart を、同じ行の中でこの入れ替わりより前にある正解の入れ替わり（optional 含む）の数だけ反転したもの
+        （1 行に入れ替わりが 2 回ある行の 2 回目は逆の側から通る。2026-10-05 まではいつも followerStart と比べていて、2 回目は必ず外れていた）
+  sideStart  上の旧い決まり（いつも sides.followerStart と比べる。前後比較用）
   turnPrec  女性のターンのある行のうち、正解の女性のターン（optional 含む）が入っている行の割合（turnsComplete の動画だけ）
 
 Usage: python eval_routine_set.py [--job screenrec=<jobId> ...] [--jobs-dir <dir>] [--db <motionlab.db>] [--json out.json] [--verbose]
@@ -35,6 +38,7 @@ DB_PATH = os.environ.get("MOTION_LAB_DB") or os.path.join(SERVER, "data", "motio
 
 # 正解表の名前 → 動画 ID の先頭（名前が ID の先頭 8 桁でないもの）
 NAME_TO_VIDEO = {"img1884": "d5e96a5b", "screenrec": "cb822fe5"}
+FLIP_SIDE = {"left": "right", "right": "left"}
 
 
 def main_dir(runs):
@@ -87,6 +91,7 @@ def extra_checks(moves, gt, beat, verbose):
         if verbose:
             print(f"    turn {tr['t']:6.2f} gt={gdir}/{gt_rot}  row={r[0] if r else None} {r[2].get('move') if r else None}"
                   f" dir={pdir} rot={turn.get('rotations')}")
+    side_start = {"hit": 0, "n": 0}
     for c in gt.get("cbl", []):
         if c.get("optional") or not lo <= c["t"] <= hi or not c.get("from"):
             continue
@@ -94,8 +99,14 @@ def extra_checks(moves, gt, beat, verbose):
         if r is None or not is_cbl(r[2]):
             continue
         fs = (r[2].get("sides") or {}).get("followerStart")
+        side_start["n"] += 1
+        side_start["hit"] += fs == c["from"]
+        # 1 行に入れ替わりが 2 回以上あるとき、k 回目の入れ替わりの前の側は行の始まりの側を k−1 回入れ替えたもの
+        # （行の中の正解の入れ替わり（optional 含む）のうち、この入れ替わりより前のものの数だけ反転する）
+        k = sum(1 for o in gt.get("cbl", []) if o is not c and r[0] <= o["t"] < c["t"])
+        exp = fs if k % 2 == 0 else FLIP_SIDE.get(fs)
         side["n"] += 1
-        side["hit"] += fs == c["from"]
+        side["hit"] += exp == c["from"]
     # turnPrec: 女性のターンのある行のうち、正解の女性のターン（optional 含む）が入っている行の割合。
     # 正解表がターンを全部拾っている動画（turnsComplete が false でない）だけ数える
     tp = {"hit": 0, "n": 0}
@@ -114,6 +125,7 @@ def extra_checks(moves, gt, beat, verbose):
         "dir": {**d, "acc": acc(d)},
         "rot": {"n": len(rot_err), "meanAbsErr": round(sum(rot_err) / len(rot_err), 3) if rot_err else None},
         "side": {**side, "acc": acc(side)},
+        "sideStart": {**side_start, "acc": acc(side_start)},
     }
 
 
@@ -129,7 +141,7 @@ def main():
     db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True) if os.path.exists(args.db) else None
     report = {}
     keys = ("cbl", "swap", "cblRows", "rowAgree", "turn")
-    tot = {k: [0, 0] for k in keys + ("dir", "side", "turnPrec")}
+    tot = {k: [0, 0] for k in keys + ("dir", "side", "sideStart", "turnPrec")}
     rot_all = []
     print(f"{'video':10s} {'job':8s} rows  " + "  ".join(f"{k:>9s}" for k in keys) + "      dir     side  turnPrec  rotErr")
     for path in sorted(glob.glob(os.path.join(GT_DIR, "*.json"))):
@@ -153,7 +165,7 @@ def main():
         ev.update(extra_checks(routine["moves"], gt, beat, args.verbose))
         ev["job"] = jid
         report[name] = ev
-        for k in keys + ("dir", "side", "turnPrec"):
+        for k in keys + ("dir", "side", "sideStart", "turnPrec"):
             tot[k][0] += ev[k]["hit"]
             tot[k][1] += ev[k]["n"]
         if ev["rot"]["meanAbsErr"] is not None:

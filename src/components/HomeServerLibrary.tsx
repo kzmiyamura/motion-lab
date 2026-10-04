@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   listHomeServerVideos, resolveHomeServerUrl, deleteHomeServerVideo, updateHomeServerVideo,
   listHomeServerFolders, createHomeServerFolder, deleteHomeServerFolder,
-  getFolderSpec, listVideoJobs, reanalyzeVideo,
-  type HomeServerVideo, type HomeServerFolder, type AnalysisJob,
+  getFolderSpec, listVideoJobs, reanalyzeVideo, summarizeVideoJobs, staleReportNote,
+  type HomeServerVideo, type HomeServerFolder, type VideoJobSummary,
 } from '../engine/homeServer';
 import { SpecEditorModal } from './SpecEditorModal';
 import { ReportModal } from './ReportModal';
@@ -24,8 +24,8 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
   const [error, setError] = useState('');
   const [specOpen, setSpecOpen] = useState(false);
   const [activeFolderHasSpec, setActiveFolderHasSpec] = useState(false);
-  // 動画IDごとの最新解析ジョブ（フォルダ所属の動画のみ取得）
-  const [latestJobs, setLatestJobs] = useState<Record<string, AnalysisJob | undefined>>({});
+  // 動画IDごとの最新解析ジョブと最新の成功ジョブ（フォルダ所属の動画のみ取得）
+  const [latestJobs, setLatestJobs] = useState<Record<string, VideoJobSummary | undefined>>({});
   // レポートモーダル（✅解析済みバッジのタップで開く）
   const [reportTarget, setReportTarget] = useState<{ jobId: string; title: string; videoUrl: string | null } | null>(null);
 
@@ -38,7 +38,7 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
     const entries = await Promise.all(withFolder.map(async v => {
       try {
         const jobs = await listVideoJobs(HOME_SERVER_URL, v.id);
-        return [v.id, jobs[0]] as const;
+        return [v.id, summarizeVideoJobs(jobs)] as const;
       } catch {
         return [v.id, undefined] as const;
       }
@@ -84,7 +84,7 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
 
   // queued / running のジョブがある間だけ10秒間隔でポーリング
   useEffect(() => {
-    const active = Object.values(latestJobs).some(j => j && (j.status === 'queued' || j.status === 'running'));
+    const active = Object.values(latestJobs).some(s => s && (s.latest.status === 'queued' || s.latest.status === 'running'));
     if (!active) return;
     const timer = setInterval(() => { void loadJobs(videos); }, 10_000);
     return () => clearInterval(timer);
@@ -248,22 +248,33 @@ export function HomeServerLibrary({ onOpenInPlayer }: Props) {
                   <p className={styles.cardError}>{v.errorMessage ?? '変換に失敗しました'}</p>
                 )}
                 {(() => {
-                  const j = latestJobs[v.id];
-                  if (!j) return null;
-                  if (j.status === 'queued') return <p className={styles.jobBadge}>⏳ 解析待ち</p>;
-                  if (j.status === 'running') return <p className={styles.jobBadge}>🔬 解析中…</p>;
-                  if (j.status === 'done') {
+                  const s = latestJobs[v.id];
+                  if (!s) return null;
+                  const j = s.latest;
+                  // 最新が失敗・実行中でも、前回の成功ジョブがあればそのレポートを開けるようにする
+                  const done = s.lastDone;
+                  if (done) {
+                    const note = staleReportNote(j);
                     return (
-                      <p
-                        className={styles.jobBadgeDone}
-                        role="button"
-                        title="解析レポートを開く"
-                        onClick={e => { e.stopPropagation(); setReportTarget({ jobId: j.id, title: v.title, videoUrl: resolveHomeServerUrl(HOME_SERVER_URL, v.hlsUrl) }); }}
-                      >
-                        📋 レポートを見る
-                      </p>
+                      <>
+                        <p
+                          className={styles.jobBadgeDone}
+                          role="button"
+                          title="解析レポートを開く"
+                          onClick={e => { e.stopPropagation(); setReportTarget({ jobId: done.id, title: v.title, videoUrl: resolveHomeServerUrl(HOME_SERVER_URL, v.hlsUrl) }); }}
+                        >
+                          📋 レポートを見る
+                        </p>
+                        {note && (
+                          <p className={j.status === 'error' ? styles.jobBadgeError : styles.jobBadge} title={j.errorMessage ?? undefined}>
+                            {note}
+                          </p>
+                        )}
+                      </>
                     );
                   }
+                  if (j.status === 'queued') return <p className={styles.jobBadge}>⏳ 解析待ち</p>;
+                  if (j.status === 'running') return <p className={styles.jobBadge}>🔬 解析中…</p>;
                   return <p className={styles.jobBadgeError} title={j.errorMessage ?? undefined}>⚠ 解析失敗</p>;
                 })()}
               </div>

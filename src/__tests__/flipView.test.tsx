@@ -343,19 +343,19 @@ describe('ReportModal の めくり / 一覧', () => {
 
   it('一覧のカードを押すと、その技のめくりが開く（動画が無いとき）。選んだ表示を覚える', async () => {
     render(<ReportModal jobId="j" videoTitle="t" baseUrl="https://home.example" onClose={() => {}} />);
-    const rows = await screen.findAllByTestId('choreo-row');
+    const rows = await screen.findAllByTestId('choreo-row', {}, { timeout: 10000 });
     expect(screen.queryByTestId('flip-view')).toBeNull(); // 広い画面（jsdom 1024px）の既定は一覧
     fireEvent.click(rows[2]);
-    await waitFor(() => expect(screen.getByTestId('flip-view')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('flip-view')).toBeInTheDocument(), { timeout: 10000 });
     expect(screen.getByTestId('flip-page')).toHaveTextContent('3 / 3');
     expect(localStorage.getItem(VIEW_STORAGE_KEY)).toBe('flip');
     // flip[] の URL はホームサーバーへ解決される
     await waitFor(() => expect(screen.getByTestId('flipbook').querySelector('img')?.getAttribute('src'))
-      .toBe('https://home.example/m2_0.jpg'));
+      .toBe('https://home.example/m2_0.jpg'), { timeout: 10000 });
     fireEvent.click(within(screen.getByTestId('flip-view')).getByRole('button', { name: '一覧' }));
     expect(screen.queryByTestId('flip-view')).toBeNull();
     expect(localStorage.getItem(VIEW_STORAGE_KEY)).toBe('list');
     fireEvent.click(screen.getByRole('button', { name: 'めくり' }));
     expect(screen.getByTestId('flip-page')).toHaveTextContent('3 / 3');
-  });
+  }, 30000); // 全体で回すと重くて既定の 5 秒を超えることがある（単体では通る）
 });

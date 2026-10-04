@@ -168,8 +168,24 @@ export async function uploadVideoToHomeServer(
   // 表示は後戻りさせない。iOS Safari はチャンクを送信バッファに積んだ時点で全量を報告し、
   // 送り直し（再試行）が入るとそのチャンクの先頭まで戻るため、そのままだとバーが 0 に戻って見える
   let shownLoaded = alreadyLoaded;
+  // iOS Safari はチャンクを送信バッファに積んだ瞬間に loaded=全量を報告し、実送信が終わるまで（50MB で
+  // 1 分以上）何も来ない。報告をそのまま使うとバーが 1 チャンク分先へ飛んで止まって見えるので、
+  // 送信中の量は「実測の速さ × 経過時間」で上限をかけ、タイマーで少しずつ進める
+  let chunkSize_ = 0;
+  let chunkStart = Date.now();
+  let lastInFlight = 0;
+  let sentBytes = 0;   // この回に送り終えたバイト数（速さの実測用）
+  let sentMs = 0;
+  const estimateInFlight = (reported: number) => {
+    const elapsed = Date.now() - chunkStart;
+    const cap = sentMs > 0
+      ? (sentBytes / sentMs) * elapsed                            // 実測の速さで送れたはずの量
+      : chunkSize_ * (1 - Math.exp(-elapsed / 60_000));           // まだ実測が無い: 1 分程度で近づく
+    return Math.min(reported, cap, chunkSize_ * 0.98);
+  };
   const report = (inFlight: number) => {
-    shownLoaded = Math.max(shownLoaded, doneBytes + inFlight);
+    lastInFlight = inFlight;
+    shownLoaded = Math.max(shownLoaded, doneBytes + estimateInFlight(inFlight));
     const loaded = shownLoaded;
     const elapsedSec = (Date.now() - startTime) / 1000;
     const speedBps = elapsedSec > 0 ? (loaded - alreadyLoaded) / elapsedSec : 0;
@@ -182,22 +198,33 @@ export async function uploadVideoToHomeServer(
     });
   };
   report(0);
+  const ticker = setInterval(() => report(lastInFlight), 1000);
 
-  for (let i = 0; i < totalChunks; i++) {
-    if (received.has(i)) continue;
-    const blob = file.slice(i * chunkSize, Math.min(file.size, (i + 1) * chunkSize));
-    for (let attempt = 1; ; attempt++) {
-      try {
-        await putChunk(`${baseUrl}/api/uploads/${uploadId}/chunks/${i}`, blob, report);
-        break;
-      } catch (e) {
-        if (attempt >= CHUNK_MAX_ATTEMPTS) throw e;
-        report(0);
-        await sleep(1000 * 2 ** (attempt - 1));
+  try {
+    for (let i = 0; i < totalChunks; i++) {
+      if (received.has(i)) continue;
+      const blob = file.slice(i * chunkSize, Math.min(file.size, (i + 1) * chunkSize));
+      chunkSize_ = blob.size;
+      for (let attempt = 1; ; attempt++) {
+        chunkStart = Date.now();
+        lastInFlight = 0;
+        try {
+          await putChunk(`${baseUrl}/api/uploads/${uploadId}/chunks/${i}`, blob, report);
+          break;
+        } catch (e) {
+          if (attempt >= CHUNK_MAX_ATTEMPTS) throw e;
+          report(0);
+          await sleep(1000 * 2 ** (attempt - 1));
+        }
       }
+      sentBytes += blob.size;
+      sentMs += Date.now() - chunkStart;
+      doneBytes += blob.size;
+      lastInFlight = 0;
+      report(0);
     }
-    doneBytes += blob.size;
-    report(0);
+  } finally {
+    clearInterval(ticker);
   }
 
   // 3. サーバー側で結合して登録

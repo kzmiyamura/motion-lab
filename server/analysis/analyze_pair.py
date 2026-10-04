@@ -200,6 +200,53 @@ def render_skeleton_video(skeleton_video_path, draw_frames, leader_pid, effectiv
     writer.release()
 
 
+# 同じ人への二重検出: YOLO の NMS（IoU 0.7）をすり抜けた、1 人に重なる 2 つ目の枠（bbox IoU 0.6〜0.7）。
+# 面積上位 2 人を占めて相手を外してしまう（8c312c6d 29.56〜29.76 で女性が外れた）。
+# bbox の重なりだけでは密着ホールド・CBL の交差（IoU 0.5〜0.7 の本物の 2 人）と区別できないので、
+# 肩・腰の位置が胴の長さに比べてほぼ同じ（同じ骨格）ものだけを二重とみなす。
+# 本物の 2 人は 0.3〜3（多くは 1 以上）、二重検出は 0.01〜0.2 だった（正解表 6 本の tracks で実測）
+# 既定で無効（数えて reliability.duplicateFrames に出すだけ）。正解表 6 本を YOLO から回し直して比べると、
+# 二重検出を除いた分は正しく直るが、ROI と外見追跡の連鎖で 8c312c6d の ID の見直しが変わり、合計では
+# CBL F1 .866 → .839 と下がった（docs/salsa-knowledge/README.md 反映済み 18）
+DEDUP_DUPLICATES = False
+DEDUP_IOU = 0.5     # bbox がこれ以上重なっていて
+DEDUP_TORSO = 0.25  # 肩・腰 4 点のずれの平均が 胴の長さ × これ 未満なら同じ人
+TORSO_KPS = (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
+
+
+def torso_distance(p, q, aspect=1.0):
+    """2 つの検出の肩・腰 4 点のずれの平均を、長い方の胴（肩の中点〜腰の中点）で割った値。
+    kps は正規化座標なので、x に aspect（幅 / 高さ）を掛けて縦横の縮尺をそろえる"""
+    def pts(k):
+        return [(k[i][0] * aspect, k[i][1]) for i in TORSO_KPS]
+
+    def torso_len(ps):
+        sx, sy = (ps[0][0] + ps[1][0]) / 2, (ps[0][1] + ps[1][1]) / 2
+        hx, hy = (ps[2][0] + ps[3][0]) / 2, (ps[2][1] + ps[3][1]) / 2
+        return math.hypot(sx - hx, sy - hy)
+
+    a, b = pts(p["kps"]), pts(q["kps"])
+    size = max(torso_len(a), torso_len(b), 1e-6)
+    return sum(math.hypot(u[0] - v[0], u[1] - v[1]) for u, v in zip(a, b)) / len(a) / size
+
+
+def suppress_duplicates(persons, aspect=1.0):
+    """同じ人への二重検出を 1 つにまとめる。信頼度の高い順に残し、残したものと
+    bbox IoU ≥ DEDUP_IOU かつ 胴のずれ < DEDUP_TORSO のものを捨てる。戻り値: (残す, 捨てる)
+    （DEDUP_DUPLICATES に関わらず見つける。使うかどうかは呼び出し側が決める）"""
+    if len(persons) < 2:
+        return persons, []
+    order = sorted(persons, key=lambda p: p.get("conf", 0.0), reverse=True)
+    kept, dropped = [], []
+    for p in order:
+        if any(bbox_iou(p["bbox"], q["bbox"]) >= DEDUP_IOU and torso_distance(p, q, aspect) < DEDUP_TORSO
+               for q in kept):
+            dropped.append(p)
+        else:
+            kept.append(p)
+    return [p for p in persons if any(p is k for k in kept)], dropped
+
+
 def pick_main_pair(persons):
     """検出候補から bbox 面積の大きい上位2人（＝カメラ手前のダンサーペア）を選ぶ。
 
@@ -1432,6 +1479,7 @@ def main():
     roi_resets = 0
     edge_clipped_frames = 0  # 見切れにより verdict から除外したペアフレーム数
     typical_area = None  # ペアの典型bbox面積（観客フィルタの基準。小さい方のダンサーのEMA）
+    duplicate_frames = 0  # 同じ人への二重検出が見つかったコマ数
     draw_frames = []    # デバッグ動画用の描画データ（2パス目で色を塗る）
 
     while True:
@@ -1451,6 +1499,13 @@ def main():
             roi_masked_frames += 1
 
         candidates = detect_persons(model, work)
+        # 同じ人への二重検出（面積上位 2 人を 1 人が占めて相手が外れる）。既定では数えるだけ
+        deduped, duplicates = suppress_duplicates(candidates, frame.shape[1] / frame.shape[0])
+        duplicate_frames += 1 if duplicates else 0
+        if DEDUP_DUPLICATES:
+            candidates = deduped
+        else:
+            duplicates = []
         # 観客フィルタ: ペアの典型体格より明らかに小さい人物は候補にすら入れない。
         # 片方のダンサーが完全に隠れた瞬間に、面積上位2人ルールで鏡の撮影者等が
         # 「2人目」に昇格してしまう問題への対策（骨格人形動画に観客が急に出現した実測）
@@ -1460,7 +1515,7 @@ def main():
         else:
             spectators = []
         persons = pick_main_pair(candidates)  # 背景の第三者を弾く（ROI内に紛れた場合の保険）
-        rejected = spectators + [c for c in candidates if c not in persons]
+        rejected = spectators + duplicates + [c for c in candidates if c not in persons]
         if len(persons) == 2:
             smaller = min(p["bboxArea"] for p in persons)
             typical_area = smaller if typical_area is None \
@@ -1663,6 +1718,7 @@ def main():
         "roiMaskedFrames": roi_masked_frames,
         "roiResets": roi_resets,
         "edgeClippedPairFrames": edge_clipped_frames,
+        "duplicateFrames": duplicate_frames,  # 同じ人への二重検出が見つかったコマ数（DEDUP_DUPLICATES で除く）
     }
 
     contested, dropped = extract_contested(contest_frames, effective_fps)

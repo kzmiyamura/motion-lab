@@ -72,7 +72,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
+  padding:
+    max(1rem, env(safe-area-inset-top, 0px))
+    max(1rem, env(safe-area-inset-right, 0px))
+    max(1rem, env(safe-area-inset-bottom, 0px))
+    max(1rem, env(safe-area-inset-left, 0px));
   animation: overlayIn 0.2s ease-out;
 }
 

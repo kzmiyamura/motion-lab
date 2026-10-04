@@ -6,7 +6,13 @@
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  padding: 1rem;
+  /* ノッチ・ホームバーに掛からないよう、安全領域の内側に置く */
+  --edge: 1rem;
+  padding:
+    max(var(--edge), env(safe-area-inset-top, 0px))
+    max(var(--edge), env(safe-area-inset-right, 0px))
+    max(var(--edge), env(safe-area-inset-bottom, 0px))
+    max(var(--edge), env(safe-area-inset-left, 0px));
 }
 
 .modal {
@@ -15,7 +21,7 @@
   gap: 0.6rem;
   width: 100%;
   max-width: 640px;
-  max-height: 90vh;
+  max-height: min(90vh, 100%);
   background: var(--color-surface);
   border: 1.5px solid var(--color-border);
   border-radius: 12px;
@@ -216,11 +222,11 @@
 
 @media (max-width: 480px) {
   .overlay {
-    padding: 0.4rem;
+    --edge: 0.4rem;
   }
 
   .modal {
-    max-height: 96vh;
+    max-height: min(96vh, 100%);
     padding: 0.7rem;
   }
 }

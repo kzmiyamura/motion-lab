@@ -1,13 +1,18 @@
 .toast {
   position: fixed;
-  top: env(safe-area-inset-top, 0px);
+  top: 0;
   left: 0;
   right: 0;
   z-index: 300;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.65rem 1rem calc(0.65rem + env(safe-area-inset-top, 0px));
+  /* 帯の背景はステータスバーの裏まで伸ばし、文字とボタンは安全領域の内側に置く */
+  padding:
+    calc(0.65rem + env(safe-area-inset-top, 0px))
+    max(1rem, env(safe-area-inset-right, 0px))
+    0.65rem
+    max(1rem, env(safe-area-inset-left, 0px));
   background: var(--color-ui-dark3, #13132a);
   border-bottom: 1px solid var(--color-accent, rgba(124, 107, 255, 0.3));
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);

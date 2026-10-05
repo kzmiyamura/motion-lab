@@ -989,6 +989,9 @@ TURN_CBL_HALF_KEEP_SUPPRESS = True
 # 次のターンとも離れた反転ペアで、本人（女性）の手首が頭上だったコマが TURN_REARM_RATIO 以上なら、冷却の内でもターンとして足す。
 # 8c312c6d 22.7 は拾える（全体 F1 .900）が、揺らし検査の食い違いが 48 → 51 に増える。README 23
 TURN_REARM_RATIO = 0.0
+# 反転の連なり（セグメント）を先に区切る方式（README 35）。False なら従来の冷却だけの流れ
+TURN_SEGMENTS = os.environ.get("MOTION_LAB_TURN_SEGMENTS", "0") == "1"   # 環境変数は比較用
+TURN_SEG_GAP_SEC = float(os.environ.get("MOTION_LAB_TURN_SEG_GAP", "1.0"))   # この秒数以内の間隔で続く反転を同じ連なりとする
 TURN_REARM_GAP = 0.8
 TURN_REARM_WHO = "self"
 TURN_REARM_PRE_SEC = 0.3
@@ -1026,7 +1029,23 @@ def raised_samples(draw_frames, pid, who="partner"):
     return out
 
 
-def detect_turns(draw_frames, pid, with_span=False):
+def segment_flips(times, gap):
+    """反転の時刻列を、隣との間隔が gap 以内で続く連なりに区切る。[(最初の番号, 最後の番号)]（純粋な関数）"""
+    segs, a = [], 0
+    for k in range(1, len(times) + 1):
+        if k == len(times) or times[k] - times[k - 1] > gap:
+            segs.append((a, k - 1))
+            a = k
+    return segs if times else []
+
+
+def cbl_half_segments(segs, times, cbl_times, margin):
+    """連なりのうち、反転が 2 つ以下で、その範囲（± margin）に CBL の腰の交差があるもの（= CBL の通過の半回転）"""
+    return [(a, b) for a, b in segs
+            if b - a + 1 <= 2 and any(times[a] - margin <= c <= times[b] + margin for c in cbl_times)]
+
+
+def detect_turns(draw_frames, pid, with_span=False, cbl_times=None):
     """指定人物のターン候補時刻を返す。
 
     COCO キーポイントは左肩(5)と右肩(6)を区別するため、画面上での左右肩の
@@ -1065,10 +1084,20 @@ def detect_turns(draw_frames, pid, with_span=False):
 
     spans = []  # [最初の反転の番号, 最後の反転の番号, 時刻]（回転数を数える範囲）
     last_event = -1e9
+    seg_half = None
+    if TURN_SEGMENTS and cbl_times:
+        # 連なり（セグメント）への先の区切り: 反転の間隔が TURN_SEG_GAP_SEC 以内で続く反転を1つの連なりにする。
+        # 反転が 2 つだけで、その間に CBL の腰の交差がある連なりは「CBL の通過の半回転」で、後で捨てる候補なので
+        # 冷却を張らない（次の本物のターンを塞がない）。連なりの区切りは過去の採否に依らず決まる
+        seg_half = {a for a, b in cbl_half_segments(segment_flips([f[0] for f in flips], TURN_SEG_GAP_SEC),
+                                                     [f[0] for f in flips], cbl_times, TURN_CBL_HALF_MARGIN)}
     i = 0
     while i + 1 < len(flips):
         (t1, sign_before), (t2, _) = flips[i], flips[i + 1]
-        if t1 - last_event > EVENT_COOLDOWN_SEC and pair_ok(i):
+        if seg_half is not None and i in seg_half and t1 - last_event > EVENT_COOLDOWN_SEC and pair_ok(i):
+            spans.append([i, chain_end(i), t1])   # 半回転は出すが冷却は張らない
+            i += 2
+        elif t1 - last_event > EVENT_COOLDOWN_SEC and pair_ok(i):
             # 連続回転（ダブルターン等）: 「直後（0.6秒以内）に始まり、振り幅条件も満たす」
             # 反転ペアのみ連結する。緩い連結は後続の別ターンやジッタを際限なく飲み込む（実測: rotations=10）
             rotations = 1
@@ -1889,12 +1918,12 @@ def detect_events(draw_frames, leader_pid):
                "handRaise": detect_hand_raise(draw_frames, t, leader_pid)}
               for t in cbl_times]
 
-    spans = {pid: detect_turns(draw_frames, pid, with_span=True) for pid in (0, 1)}
+    spans = {pid: detect_turns(draw_frames, pid, with_span=True, cbl_times=cbl_times) for pid in (0, 1)}
     turns = {pid: [(t, r) for t, r, _, _ in spans[pid]] for pid in (0, 1)}
     half = set()
     if TURN_CBL_HALF_DROP and leader_pid is not None:
         m = TURN_CBL_HALF_MARGIN
-        half = {t for t, _, a, b, n in detect_turns(draw_frames, 1 - leader_pid, with_span="count")
+        half = {t for t, _, a, b, n in detect_turns(draw_frames, 1 - leader_pid, with_span="count", cbl_times=cbl_times)
                 if n <= 2 and any(a - m <= c <= b + m for c in cbl_times)}
         if not TURN_CBL_HALF_KEEP_SUPPRESS:
             spans[1 - leader_pid] = [s for s in spans[1 - leader_pid] if s[0] not in half]
@@ -1904,7 +1933,7 @@ def detect_events(draw_frames, leader_pid):
         follower_turn_times = [t for t, _ in turns[1 - leader_pid]]
         follower_turn_dirs = {}
         if LEADER_COUNTER_ROT_KEEP:
-            ps = detect_turns(draw_frames, 1 - leader_pid, with_span="pair")
+            ps = detect_turns(draw_frames, 1 - leader_pid, with_span="pair", cbl_times=cbl_times)
             for k, (t, _, a, b) in enumerate(ps):
                 if t not in follower_turn_times:
                     continue
@@ -1923,7 +1952,7 @@ def detect_events(draw_frames, leader_pid):
 
     spin_spans = {0: {}, 1: {}}  # pid -> {ターン時刻: spin_hint の span}
     for pid in (0, 1):
-        ps = detect_turns(draw_frames, pid, with_span="pair")
+        ps = detect_turns(draw_frames, pid, with_span="pair", cbl_times=cbl_times)
         if pid not in rot_spans:
             rot_spans[pid] = {t: (a, b) for t, _, a, b in ps}
         if SPIN_USE_TURN_SPAN:

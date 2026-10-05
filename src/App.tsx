@@ -10,7 +10,6 @@ import { SamplesStatus } from './components/SamplesStatus';
 import { InstallPrompt } from './components/InstallPrompt';
 import { UpdateToast } from './components/UpdateToast';
 import { YouTubeControl } from './components/YouTubeControl';
-import { FacebookControl } from './components/FacebookControl';
 import { FilePlayer } from './components/FilePlayer';
 import { StudioPlayer } from './components/StudioPlayer';
 import { HomeServerLibrary } from './components/HomeServerLibrary';
@@ -47,7 +46,7 @@ function App() {
   } = useAudioEngine();
 
   const { bpm: urlBpm, youtubeId: urlVid } = useUrlAnalysis();
-  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio' | 'homeserver' | '3d' | 'capture' | 'facebook'>('youtube');
+  const [mainTab, setMainTab] = useState<'youtube' | 'files' | 'rhythm' | 'studio' | 'homeserver' | '3d' | 'capture'>('youtube');
   const [homeVideoToPlay, setHomeVideoToPlay] = useState<{ id: string; name: string; url: string } | null>(null);
   const [ytViewMode, setYtViewMode] = useState<'audio' | 'video'>('video');
 
@@ -77,12 +76,6 @@ function App() {
             onClick={() => setMainTab('youtube')}
           >
             ▶ YouTube
-          </button>
-          <button
-            className={`${styles.mainTabBtn} ${mainTab === 'facebook' ? styles.mainTabBtnActive : ''}`}
-            onClick={() => setMainTab('facebook')}
-          >
-            f Facebook
           </button>
           <button
             className={`${styles.mainTabBtn} ${mainTab === 'files' ? styles.mainTabBtnActive : ''}`}
@@ -137,13 +130,6 @@ function App() {
             viewMode={ytViewMode}
             onViewModeChange={setYtViewMode}
           />
-        </section>
-      </div>
-
-      {/* ── Facebook タブ（常時マウント：display:none で再生・解析を維持。公開動画のみ・ログインなし） ── */}
-      <div className={mainTab === 'facebook' ? styles.tabPanel : styles.tabPanelHidden}>
-        <section className={styles.section}>
-          <FacebookControl bpm={bpm} />
         </section>
       </div>
 

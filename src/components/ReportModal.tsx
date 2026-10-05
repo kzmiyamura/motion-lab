@@ -7,6 +7,8 @@ import {
   type MoveFrameSet,
 } from '../engine/choreoSheet';
 import { ChoreoSheet } from './ChoreoSheet';
+import { GeneralReport } from './GeneralReport';
+import { isGeneralJob } from '../engine/generalReport';
 import { parseSheetStates } from '../engine/sheetState';
 import { MoveClipPlayer } from './MoveClipPlayer';
 import { PracticeToolbar } from './PracticeBar';
@@ -313,7 +315,16 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
               )}
             </>
           )}
-          {job && !sheet && (
+          {job && !sheet && isGeneralJob(job.preset, job.resultJson) && (
+            <GeneralReport
+              jobId={jobId}
+              baseUrl={baseUrl}
+              resultJson={job.resultJson}
+              videoUrl={videoUrl}
+              body={job.reportMd ? renderMarkdown(job.reportMd, baseUrl) : <p className={styles.hint}>このジョブにはレポート本文がありません</p>}
+            />
+          )}
+          {job && !sheet && !isGeneralJob(job.preset, job.resultJson) && (
             job.reportMd
               ? renderMarkdown(job.reportMd, baseUrl)
               : <p className={styles.hint}>このジョブにはレポートがありません（status: {job.status}{job.errorMessage ? ` / ${job.errorMessage}` : ''}）</p>

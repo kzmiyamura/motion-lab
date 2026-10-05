@@ -183,3 +183,24 @@ class LeaderTurnReadme45Test(unittest.TestCase):
         seg = [(0.1, SIDE, -1), (0.1, -SIDE, -1), (2.3, BACK, 0), (0.1, -SIDE, 1), (0.1, SIDE, 1)]
         f = frames([(1.0, FRONT, F)] + seg + [(1.0, FRONT, F)])
         self.assertEqual(ap.detect_leader_turns(f, 0, [], []), [])
+
+
+class LeaderTurnReadme46Test(unittest.TestCase):
+    """README 46: 回転の始まりの 1 つ目の反転も、前後で顔の見え方が変わることを求める（LEADER_FACE_FLIP_START）"""
+
+    # 肩の符号が負のまま鼻が見えている（= 左右の付け違い）1.5 秒 → 符号が正になっても鼻は見えたまま → 本当に半回転して背中
+    MISLABEL = [(1.5, BACK, 1), (0.8, FRONT, -1), (0.1, -SIDE, -1), (1.0, BACK, 0)]
+
+    def test_isolated_first_flip_without_face_change_is_dropped(self):
+        self.assertEqual(ap.detect_leader_turns(frames(self.MISLABEL), 0, [], []), [])
+
+    def test_without_the_check_it_would_be_a_turn(self):
+        ap.LEADER_FACE_FLIP_START = False
+        try:
+            self.assertEqual(len(ap.detect_leader_turns(frames(self.MISLABEL), 0, [], [])), 1)
+        finally:
+            ap.LEADER_FACE_FLIP_START = True
+
+    def test_real_turn_is_kept(self):
+        f = frames([(1.0, FRONT, F)] + RIGHT_TURN + [(1.0, FRONT, F)])
+        self.assertEqual(len(ap.detect_leader_turns(f, 0, [], [])), 1)

@@ -905,6 +905,7 @@ LEADER_TURN_COOLDOWN_SEC = 0.8   # 男のターン同士の最小間隔（1.5 �
 LEADER_FACE_FLIP_CHECK = True
 LEADER_FACE_SEEN = 0.4
 LEADER_FACE_FLIP_BOTH = False
+LEADER_FACE_FLIP_START = True   # 回転の始まり（直前に反転が無い）の 1 つ目の反転にも顔の見え方の変化を求める（README 46）
 LEADER_FACE_MIN_FRAC = 0.6   # 0 = 従来（|shDx| 最大のコマの鼻）。>0 なら、最大の この倍以上のコマのうち鼻の信頼度の最小（README 32）
 EVENT_COOLDOWN_SEC = 2.5   # ターンの最小間隔（冷却を縮める・終わりから測る等は README 20 で試して不採用）
 # CBL の最小間隔。2.5秒だと 1.3〜2秒間隔で続く CBL を落としていた（9/23 人手校正で2件の取りこぼしを実測）。
@@ -1292,8 +1293,10 @@ def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follow
         t_next = flips[i + 2][0] if i + 2 < len(flips) else float("inf")
         mid = face_seen(t1, t2, -s)
         post = face_seen(t2, min(t2 + TURN_PRE_SEC, t_next), s)
-        if LEADER_FACE_FLIP_BOTH:
-            t_prev = flips[i - 1][0] if i >= 1 else float("-inf")
+        t_prev = flips[i - 1][0] if i >= 1 else float("-inf")
+        # README 46: 1 つ目の反転も、直前 TURN_PRE_SEC 秒に別の反転が無い（= 回転の始まり）なら、反転の前後で顔の見え方が
+        # 変わることを求める。前の回転の続きの 1 つ目は、前後とも正面のままでも本物がある（screenrec 13.3）ので除く
+        if LEADER_FACE_FLIP_BOTH or (LEADER_FACE_FLIP_START and t1 - t_prev > TURN_PRE_SEC):
             pre = face_seen(max(t1 - TURN_PRE_SEC, t_prev), t1, s)
             if pre is not None and mid is not None and pre == mid:
                 return False

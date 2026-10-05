@@ -41,6 +41,9 @@ SIZE_RATIO_MAX = 1.9    # 付け直し: 高さの比がこれを超える相手�
 HIST_MAX = 0.9          # 付け直し: 服の色ヒストグラムの L1 距離（0〜2）がこれを超える相手は別人
 HIST_EMA = 0.05         # 色ヒストグラムの更新の重み（遅く: 隠れている間に相手の色が混ざらないように）
 W_HIST, W_SIZE, W_SHAPE = 6.0, 0.5, 6.0
+W_POS = 2.0             # 付け直し: 位置のコストの重み
+APP_MIN = 0.25          # 付け直し: 見失って 0 コマのときの、色・形の重みの倍率（1.0 = 弱めない）
+APP_FULL_GAP = 2        # 付け直し: 色・形の重みが 1 倍に戻るまでの見失いコマ数（連続するコマ = 1）
 STITCH_MAX_GAP = 60     # 2 パス目: 断片同士をつなぐのは、この数のコマ（6 秒）以内の途切れまで
 STITCH_RADIUS = 0.3
 STITCH_SIZE_RATIO = 1.6
@@ -95,15 +98,18 @@ def match_cost(t, d, gap, max_dist=TRACK_MAX_DIST):
     ratio = max(dh / th, th / dh)
     if ratio > SIZE_RATIO_MAX:
         return None
-    cost = dist / radius + W_SIZE * math.log(ratio)
+    # 直前のコマから続いている（gap が小さい）なら、位置の連続性が一番確か。服の色・形は、2 人が組んで重なると
+    # どちらも似た値でぶれるので、短い途切れでは重みを下げ、途切れが長くなるほど（位置が頼れなくなるほど）上げる
+    app = min(1.0, APP_MIN + (1.0 - APP_MIN) * max(0, gap) / APP_FULL_GAP)
+    cost = W_POS * dist / radius + W_SIZE * math.log(ratio)
     hd = hist_l1(t.get("hist"), d.get("hist"))
     if hd is not None:
         if hd > HIST_MAX:
             return None
-        cost += W_HIST * hd
+        cost += app * W_HIST * hd
     sa, sb = t.get("shape"), d.get("shape")
     if sa and sb:
-        cost += W_SHAPE * (abs(sa[0] - sb[0]) / max(sa[0], sb[0]) + abs(sa[1] - sb[1]) / max(sa[1], sb[1]))
+        cost += app * W_SHAPE * (abs(sa[0] - sb[0]) / max(sa[0], sb[0]) + abs(sa[1] - sb[1]) / max(sa[1], sb[1]))
     return cost
 
 

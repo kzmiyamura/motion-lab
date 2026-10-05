@@ -13,6 +13,14 @@ interface Props {
   playerRef: RefObject<YtPlayerLike | null>;
   /** 切り出し対象の YouTube iframe を返す（見つからなければ null） */
   getIframe: () => HTMLIFrameElement | null;
+  /** 時刻源を差し替える（既定は YouTube 用の makeYouTubeClock）。参照が変わると解析が作り直されるので useMemo すること */
+  clock?: () => number;
+  /** 表示用の配信元名（既定 YouTube） */
+  sourceLabel?: string;
+  /** JSON の videoId（既定は videoId） */
+  exportVideoId?: string;
+  /** 書き出しファイル名に使う部分（既定は videoId） */
+  fileLabel?: string;
 }
 
 const VIZ_OPTIONS: Array<{ mode: Exclude<VizMode, 'off'>; label: string }> = [
@@ -54,7 +62,9 @@ async function cropToElement(track: MediaStreamTrack, el: Element | null): Promi
  * 動画はダウンロードも保存もしない（共有中の映像をブラウザ内で読むだけ）。
  * イベントの時刻は共有映像の currentTime ではなく YouTube の再生位置（スロー・ループでも正しい）。
  */
-export function TabShareAnalyzer({ bpm, videoId, playerRef, getIframe }: Props) {
+export function TabShareAnalyzer({
+  bpm, videoId, playerRef, getIframe, clock: clockProp, sourceLabel = 'YouTube', exportVideoId, fileLabel,
+}: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -67,7 +77,8 @@ export function TabShareAnalyzer({ bpm, videoId, playerRef, getIframe }: Props) 
   const supported = canShareTab();
 
   // YouTube の再生位置を読む時計（getCurrentTime の間欠更新を補間）
-  const clock = useMemo(() => makeYouTubeClock(() => playerRef.current), [playerRef]);
+  const ytClock = useMemo(() => makeYouTubeClock(() => playerRef.current), [playerRef]);
+  const clock = clockProp ?? ytClock;
   const poseOptions = useMemo<PoseEstimationOptions>(
     () => ({ getTime: clock, disableTimeCache: true }),
     [clock],
@@ -159,15 +170,15 @@ export function TabShareAnalyzer({ bpm, videoId, playerRef, getIframe }: Props) 
     try { title = p?.getVideoData?.()?.title || undefined; } catch { /* ignore */ }
     try { playbackRate = p?.getPlaybackRate?.() ?? 1; } catch { /* ignore */ }
     const now = new Date();
-    const data = buildTabShareExport({ videoId, title, playbackRate, createdAt: now, events: sequence });
+    const data = buildTabShareExport({ videoId: exportVideoId ?? videoId, title, playbackRate, createdAt: now, events: sequence });
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = tabShareFileName(videoId, now);
+    a.download = tabShareFileName(fileLabel ?? videoId, now);
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [playerRef, videoId, sequence]);
+  }, [playerRef, videoId, exportVideoId, fileLabel, sequence]);
 
   // タブ全体を共有しているときは、プレビューを出すと共有映像に映り込んで（合わせ鏡）誤検出するので隠す
   const showPreview = sharing && cropped;
@@ -182,7 +193,7 @@ export function TabShareAnalyzer({ bpm, videoId, playerRef, getIframe }: Props) 
               className={styles.primaryBtn}
               onClick={() => void start()}
               disabled={!supported}
-              title={supported ? 'このタブを画面共有して YouTube の映像を骨格解析します（ダウンロードしません）' : UNSUPPORTED_TEXT}
+              title={supported ? `このタブを画面共有して ${sourceLabel} の映像を骨格解析します（ダウンロードしません）` : UNSUPPORTED_TEXT}
             >骨格解析</button>
           ) : (
             <button className={styles.stopBtn} onClick={stop}>停止</button>
@@ -191,7 +202,7 @@ export function TabShareAnalyzer({ bpm, videoId, playerRef, getIframe }: Props) 
             className={styles.segBtn}
             onClick={handleExport}
             disabled={sequence.length === 0}
-            title="検出した技を YouTube の再生位置つきで JSON に書き出します"
+            title={`検出した技を ${sourceLabel} の再生位置つきで JSON に書き出します`}
           >JSON書き出し</button>
         </div>
       </div>
@@ -200,7 +211,7 @@ export function TabShareAnalyzer({ bpm, videoId, playerRef, getIframe }: Props) 
       {supported && !sharing && (
         <p className={styles.note}>
           「骨格解析」を押すとブラウザの共有ダイアログが出るので、<strong>このタブ</strong>を共有してください。
-          YouTube の映像は保存しません。スロー再生・ループ中も時刻は YouTube の再生位置で記録します。
+          {sourceLabel} の映像は保存しません。スロー再生・ループ中も時刻は {sourceLabel} の再生位置で記録します。
         </p>
       )}
       {sharing && !cropped && (

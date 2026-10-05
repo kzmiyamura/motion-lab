@@ -324,5 +324,69 @@ class SpeedTest(unittest.TestCase):
         self.assertAlmostEqual(out[2], 3.0)
 
 
+def spiky(duration, peaks, hz=10, width=0.3):
+    """peaks の時刻に山（幅 width 秒）がある動きの時系列"""
+    ts = [round(i / hz, 2) for i in range(int(duration * hz) + 1)]
+    vs = [1.0 if any(abs(t - p) <= width for p in peaks) else 0.0 for t in ts]
+    return ts, vs
+
+
+class SheetPlanTest(unittest.TestCase):
+    def test_short_video_has_no_sheets(self):
+        ts, vs = spiky(30, [3, 8, 14, 20, 26])
+        singles, sheets = ag.plan_images(30, ts, vs)
+        self.assertEqual(sheets, [])
+        self.assertEqual(singles, ag.select_keyframe_times(30, ts, vs))
+
+    def test_long_video_uses_sheets_within_budget(self):
+        peaks = [3 + 3 * i for i in range(50)]          # 150 秒に 50 の山
+        ts, vs = spiky(155, peaks)
+        singles, sheets = ag.plan_images(155, ts, vs)
+        self.assertTrue(sheets)
+        self.assertLessEqual(len(singles) + len(sheets), ag.MAX_KEYFRAMES)
+        self.assertTrue(all(1 <= len(s) <= ag.SHEET_MAX_ROWS for s in sheets))
+        # 単独だけのときより写る山が増える
+        mts = ag.mountains(ts, vs)
+        before = ag.coverage_count(mts, [t for t, _ in ag.select_keyframe_times(155, ts, vs)])[0]
+        after_times = [t for t, _ in singles] + [x for s in sheets for c in s for x in ag.sheet_frame_times(c, 155)]
+        self.assertGreater(ag.coverage_count(mts, after_times)[0], before)
+
+    def test_sheet_rows_are_in_time_order(self):
+        ts, vs = spiky(155, [3 + 3 * i for i in range(50)])
+        _, sheets = ag.plan_images(155, ts, vs)
+        flat = [c for s in sheets for c in s]
+        self.assertEqual(flat, sorted(flat))
+
+    def test_frame_times_clamped_and_unique(self):
+        self.assertEqual(ag.sheet_frame_times(0.1, 10), [0.0, 0.1, 0.3, 0.5])
+        self.assertEqual(ag.sheet_frame_times(9.9, 10), [9.5, 9.7, 9.9, 10.0])
+        self.assertEqual(ag.sheet_frame_times(5.0, 10), [4.6, 4.8, 5.0, 5.2, 5.4])
+
+    def test_coverage_count(self):
+        mts = [(1.0, 2.0, 1.5, 1.0), (10.0, 11.0, 10.5, 1.0)]
+        self.assertEqual(ag.coverage_count(mts, [1.6]), (1, 2))
+        self.assertEqual(ag.coverage_count(mts, [1.6, 10.2]), (2, 2))
+        self.assertEqual(ag.coverage_count(mts, []), (0, 2))
+
+    def test_empty_and_zero(self):
+        self.assertEqual(ag.plan_images(0, [], []), ([], []))
+        singles, sheets = ag.plan_images(20, [0.0, 0.1], [0.0, 0.0])
+        self.assertEqual(sheets, [])
+
+
+class ImageIndexTest(unittest.TestCase):
+    def test_index_maps_files_to_times(self):
+        kf = [{"t": 5.0, "file": "a.jpg", "reason": "peak"}]
+        sheets = [{"file": "sheet_1.jpg", "rows": [{"center": 2.0, "times": [1.6, 1.8, 2.0, 2.2, 2.4]},
+                                                  {"center": 8.0, "times": [7.6, 7.8, 8.0]}]}]
+        idx = ag.build_image_index(kf, sheets)
+        self.assertEqual([e["file"] for e in idx], ["sheet_1.jpg", "a.jpg"])   # 最初の時刻順
+        s = idx[0]
+        self.assertEqual(s["kind"], "sheet")
+        self.assertEqual(s["ranges"], [[1.6, 2.4], [7.6, 8.0]])
+        self.assertEqual(len(s["times"]), 8)
+        self.assertEqual(idx[1], {"file": "a.jpg", "kind": "single", "times": [5.0], "ranges": [[5.0, 5.0]]})
+
+
 if __name__ == "__main__":
     unittest.main()

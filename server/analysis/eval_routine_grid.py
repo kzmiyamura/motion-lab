@@ -11,6 +11,8 @@ normalize_routine.py が 8 カウントの格子に揃えた行（カード）�
   turn         正解の女性ターンの時刻を覆う行にターンがあるか
   phase        正解の入れ替わりが、覆う行の 8 カウントの何拍目に来たか。On2 の CBL なら 5 前後（女が 5 で通る）
                （in57 = 5〜7 拍目に入った割合、R = 位相の集まり具合 0〜1）
+  countPhase   正解の通過（optional でない）が覆う行のカウント 1.5〜3.5 に来た割合（ok/acc）と bias（平均カウント − 2.5 拍）。
+               On2 は女が 2 で通る。上の phase の「5 前後」は On1 の数え方の古い目安
   cvPhase      CV の入れ替わり（measurements.json の CBL イベント）について同じこと + CBL 系の行に入った数
 
 Usage:
@@ -96,6 +98,39 @@ def phase_stats(rows, times, beat):
     }
 
 
+COUNT_TARGET = 2.5      # 正解の通過（腰が重なる瞬間）が来るカウント。On2 の CBL は女が 2 で通る（横断 1〜3 の中）
+COUNT_HALF_WIDTH = 1.0  # 目標 ± この拍数に入れば「カウント位相が合っている」（[1.5, 3.5) = 2 と 3 の間）
+PASS_GAP_BEATS = (3.0, 5.0)  # 1 行で行って戻る 2 回目の通過は 1 回目の約 4 拍後。その分を引いて数える
+
+
+def count_phase(rows, times, beat, target=COUNT_TARGET, half=COUNT_HALF_WIDTH):
+    """正解の通過（入れ替わり）が覆う行の何カウントに来たか（1 始まり、2.0 = カウント 2 ちょうど）を目標と比べる。
+    ok   カウントが target ± half に入った数（acc = ok / n）。1 行に 2 回通る行の 2 回目は 4 拍引いて数える
+    bias 円周の平均カウント − target（拍。+ なら行の頭が遅い = 通過が行の中で後ろに来る。−4〜+4）
+    R    カウントの集まり具合（0〜1）"""
+    ts = sorted(times)
+    cs = []
+    for t in ts:
+        r = covering(rows, t)
+        if r is None:
+            continue
+        p = (t - r[0]) / beat
+        if any(r[0] <= o < t and PASS_GAP_BEATS[0] <= (t - o) / beat <= PASS_GAP_BEATS[1] for o in ts):
+            p -= 4
+        cs.append((p % 8) + 1)
+    if not cs:
+        return {"n": 0, "ok": 0, "acc": None, "bias": None, "R": None, "counts": []}
+
+    def dist(c):
+        return (c - target + 4) % 8 - 4
+
+    z = sum(cmath.exp(2j * math.pi * c / 8) for c in cs) / len(cs)
+    mean = (cmath.phase(z) / (2 * math.pi) * 8) % 8
+    ok = sum(1 for c in cs if abs(dist(c)) < half)
+    return {"n": len(cs), "ok": ok, "acc": round(ok / len(cs), 3), "bias": round(dist(mean), 2),
+            "R": round(abs(z), 3), "counts": [round(c, 1) for c in cs]}
+
+
 def evaluate(moves, gt, beat, cv_swaps=None):
     lo, hi = gt.get("evalRange") or (float("-inf"), float("inf"))
     rows = rows_with_end(moves, beat)
@@ -126,6 +161,7 @@ def evaluate(moves, gt, beat, cv_swaps=None):
     out = {k: v.as_dict() for k, v in res.items()}
     out["rows"] = sum(1 for s, e, _ in rows if s < hi and e > lo)
     out["phase"] = phase_stats(rows, [c["t"] for c in cbl], beat)
+    out["countPhase"] = count_phase(rows, [c["t"] for c in cbl if not c.get("optional")], beat)
     if cv_swaps is not None:
         cvs = [t for t in cv_swaps if in_range(t)]
         out["cvPhase"] = phase_stats(rows, cvs, beat)
@@ -150,6 +186,9 @@ def fmt(d):
         f"  rowAgree  {r('rowAgree')}",
         f"  turn      {r('turn')}",
     ]
+    cp = d.get("countPhase")
+    if cp:
+        lines.append(f"  countPhase ok={cp['ok']}/{cp['n']} = {cp['acc']} bias={cp['bias']} R={cp['R']} counts={cp['counts']}")
     for k in ("phase", "cvPhase"):
         p = d.get(k)
         if p:

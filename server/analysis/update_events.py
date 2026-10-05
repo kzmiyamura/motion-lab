@@ -143,6 +143,7 @@ def main():
     if events and dense:
         from ultralytics import YOLO
         events = ap.refine_turns_dense(opts["video"], YOLO(opts["model"]), frames, events, leader_pid)
+    events = ap.apply_cbl_pass_half(events)
     holds = ap.build_hold_timeline(frames, leader_pid)
 
     summary = meas.setdefault("summary", {})

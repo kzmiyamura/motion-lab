@@ -29,6 +29,7 @@ def main():
     leader_pid = tracks["leaderPid"]
 
     events = ap.detect_events(draw_frames, leader_pid)
+    events = ap.apply_cbl_pass_half(events)
     holds = ap.build_hold_timeline(draw_frames, leader_pid)
 
     with open(out_path, "w") as f:

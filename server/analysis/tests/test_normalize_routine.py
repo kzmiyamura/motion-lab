@@ -263,9 +263,11 @@ class SwapGridTest(unittest.TestCase):
         for a, b in zip(starts[1:], starts[2:]):   # 先頭は 0 秒に切り詰められることがあるので 2 行目から
             n8 = round((b - a) / 2.6)
             self.assertGreaterEqual(n8, 1)
-            self.assertAlmostEqual(b - a, n8 * 2.6, delta=0.05)
-        # 入れ替わりは各 8 カウントの SWAP_BEAT 拍目付近 = 頭は入れ替わりの SWAP_BEAT 拍前
-        self.assertAlmostEqual((starts[5] - 0.3) / 2.6 % 1 * 8 % 8, 0.0, delta=0.8)
+            # 位相補正（PHASE_ROW_*）で通過を覆うよう行の頭が最大 1 拍ほど動くので、周期の整数倍から 1 拍（0.3 秒）以内
+            self.assertAlmostEqual(b - a, n8 * 2.6, delta=0.3)
+        # 入れ替わりは各 8 カウントの SWAP_BEAT 拍目付近 = 補正前の頭は入れ替わりの SWAP_BEAT 拍前。
+        # 位相補正（README 40）で On2 の期待（通過 1.5 拍 + CV の遅れ 0.4 秒）の位置まで行の頭を SWAP_BEAT − 2.73 ≈ 1.5 拍遅らせる
+        self.assertAlmostEqual((starts[5] - 0.3) / 2.6 % 1 * 8 % 8, SWAP_BEAT - 1.5 - 0.4 / 0.325, delta=0.8)
 
     def test_off_by_one_cbl_rows_are_shifted_onto_swaps(self):
         # 入れ替わりは 2・5・8・… 番目の 8 カウント。Claude の CBL の行はその 1 つ前（1・4・7・…）に書かれている
@@ -845,6 +847,72 @@ class CardFixTest(unittest.TestCase):
         (m,) = res["routine"]["moves"]
         self.assertEqual(m["turn"]["by"], "follower")
         self.assertEqual(m["leaderTurn"], {"direction": "right", "rotations": 1})
+
+
+class PhaseShiftTest(unittest.TestCase):
+    """カウントの位相（README 40）: 行の頭を通過の位置で補正し、通過が行から出ないようにする"""
+
+    BEAT = 0.3
+
+    def test_late_swaps_shift_head_later(self):
+        from normalize_routine import PHASE_CV_DELAY_SEC, PHASE_PASS_BEAT, phase_shift_beats
+        starts = [k * 8 * self.BEAT for k in range(10)]
+        want = PHASE_PASS_BEAT + PHASE_CV_DELAY_SEC / self.BEAT
+        swaps = [s + (want + 1.0) * self.BEAT for s in starts]   # 期待より 1 拍遅く出る → 行の頭を 1 拍遅らせる
+        self.assertAlmostEqual(phase_shift_beats(starts, self.BEAT, swaps), 1.0, places=3)
+        swaps = [s + (want - 1.0) * self.BEAT for s in starts]
+        self.assertAlmostEqual(phase_shift_beats(starts, self.BEAT, swaps), -1.0, places=3)
+
+    def test_needs_concentration_and_several_swaps(self):
+        from normalize_routine import phase_shift_beats
+        starts = [k * 8 * self.BEAT for k in range(10)]
+        self.assertEqual(phase_shift_beats(starts, self.BEAT, [starts[2] + 3 * self.BEAT]), 0.0)   # 1 件では決めない
+        spread = [s + (k * 3 % 8) * self.BEAT for k, s in enumerate(starts)]                        # 散らばり
+        self.assertEqual(phase_shift_beats(starts, self.BEAT, spread), 0.0)
+        self.assertEqual(phase_shift_beats(starts, self.BEAT, []), 0.0)
+
+    def test_shift_is_capped(self):
+        from normalize_routine import PHASE_MAX_SHIFT, phase_shift_beats
+        starts = [k * 8 * self.BEAT for k in range(10)]
+        swaps = [s + 7.5 * self.BEAT for s in starts]
+        self.assertLessEqual(abs(phase_shift_beats(starts, self.BEAT, swaps)), PHASE_MAX_SHIFT)
+
+    def test_rows_keep_their_passes(self):
+        from normalize_routine import PHASE_CV_DELAY_SEC, PHASE_ROW_AFTER, PHASE_ROW_BEFORE, shift_row_starts
+        starts = [0.0, 2.4, 4.8]
+        # 2 行目の通過が行の頭の 0.5 拍後 → 1 拍遅らせると通過が前の行に出るので、通過の PHASE_ROW_BEFORE 拍前で止める
+        passes = [2.4 + 0.5 * self.BEAT]
+        new = shift_row_starts(starts, self.BEAT, 1.0, [p + PHASE_CV_DELAY_SEC for p in passes])
+        self.assertAlmostEqual(new[1], passes[0] - PHASE_ROW_BEFORE * self.BEAT, places=6)
+        self.assertLessEqual(new[1], passes[0])
+        # 前の行の通過が次の行へ入らない（頭を早める向きでも前の行の通過の後ろまで）
+        passes = [1.8]
+        new = shift_row_starts(starts, self.BEAT, -2.0, [p + PHASE_CV_DELAY_SEC for p in passes])
+        self.assertGreaterEqual(new[1], passes[0] + PHASE_ROW_AFTER * self.BEAT - 1e-9)
+        self.assertTrue(all(b > a for a, b in zip(new, new[1:])))
+
+    def test_normalize_swap_grid_puts_passes_near_count_two(self):
+        # 無音の格子（CV の入れ替わりが 8 件以上）でも、行の頭から見て通過の位置が On2 の期待（カウント 2〜3）に寄る
+        import random as _r
+        rnd = _r.Random(3)
+        period = 8 * self.BEAT
+        swaps, moves = [], []
+        for k in range(14):
+            t0 = 1.0 + k * period
+            moves.append(mv(t0, "cbl", 8))
+            swaps.append(t0 + (1.5 + 1.3) * self.BEAT + rnd.uniform(-0.1, 0.1))   # 通過 + CV の遅れ
+        summary = {"events": [{"t": s - 0.4, "tCross": s, "type": "CBL", "by": "pair"} for s in swaps],
+                   "frameClock": "pts"}
+        res = normalize({"routine": {"moves": moves}}, summary, duration=1.0 + 15 * period)
+        rows = res["routine"]["moves"]
+        counts = []
+        for s in swaps:
+            r = [m for m in rows if m["start"] <= s - 0.4 + 0.05]
+            if r:
+                counts.append(((s - 0.4 - r[-1]["start"]) / self.BEAT) % 8 + 1)
+        self.assertTrue(counts)
+        mean = sum(counts) / len(counts)
+        self.assertTrue(1.5 <= mean <= 3.5, mean)
 
 
 if __name__ == "__main__":

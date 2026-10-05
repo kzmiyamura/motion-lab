@@ -1903,15 +1903,17 @@ def smooth_facing(draw_frames, pid):
     return out
 
 
-def nearest_hold_pair(df, leader_pid, facing=None):
+def nearest_hold_pair(df, leader_pid, facing=None, wrists=None):
     """1フレームの最近接手首ペアを返す: ("L-R"等, 距離) or None。
-    facing: {pid: 平滑化済みの向き}（省略ならコマごとに読む）"""
+    facing: {pid: 平滑化済みの向き}（省略ならコマごとに読む）
+    wrists: {pid: {"L","R"}} 追跡済みの手首（省略なら hold_wrists で決める）"""
     by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
     if leader_pid not in by_pid or (1 - leader_pid) not in by_pid:
         return None
     facing = facing or {}
-    lw = hold_wrists(by_pid[leader_pid], facing.get(leader_pid))
-    fw = hold_wrists(by_pid[1 - leader_pid], facing.get(1 - leader_pid))
+    wrists = wrists or {}
+    lw = wrists.get(leader_pid) or hold_wrists(by_pid[leader_pid], facing.get(leader_pid))
+    fw = wrists.get(1 - leader_pid) or hold_wrists(by_pid[1 - leader_pid], facing.get(1 - leader_pid))
     best, best_rank = None, None
     for lk in ("L", "R"):
         for fk in ("L", "R"):
@@ -1942,6 +1944,167 @@ def _facing_at(tables, i):
     return None if tables is None else {pid: t.get(i) for pid, t in tables.items()}
 
 
+# (2) 手首の追跡: 手首は 1 コマで飛ばない。前のコマの左手首／右手首に近い方を同じ手として、
+# COCO のラベルが一時的に入れ替わっても追跡側のラベルを信じる（位置＋速度の予測との距離で割り当て）
+HOLD_TRACK_WRISTS = False
+HOLD_TRACK_MAX_GAP = 4     # 手首を見失ってからこのコマ数を超えたら追跡を捨てて hold_wrists から付け直す
+HOLD_TRACK_GATE = 0.25     # 予測位置からこれ以上離れた点は同じ手と見なさない
+HOLD_TRACK_SWAP_RATIO = 0.7  # 入れ替えた割り当ての距離和が、そのままの 0.7 倍未満のときだけ入れ替える
+
+
+def _tracked_wrists(draw_frames, pid, facing_tab):
+    """pid の手首を追跡して [{"L","R"} or None] をコマごとに返す"""
+    out = []
+    state = {"L": None, "R": None}  # 各手: (pos, vel, last_i)
+    for i, df in enumerate(draw_frames):
+        p = next((q for q in df["kept"] if q.get("pid") == pid), None)
+        if p is None:
+            out.append(None)
+            continue
+        base = hold_wrists(p, None if facing_tab is None else facing_tab.get(i))
+        raw = p["wrists"]  # COCO のまま
+        pts = [raw["L"], raw["R"]]
+        # 予測位置（速度で線形外挿。見失い期間が長いものは捨てる）
+        pred = {}
+        for k in ("L", "R"):
+            s = state[k]
+            if s is not None and i - s[2] <= HOLD_TRACK_MAX_GAP:
+                gap = i - s[2]
+                pred[k] = (s[0][0] + s[1][0] * gap, s[0][1] + s[1][1] * gap)
+        cur = [q for q in pts if q is not None]
+        res = {"L": None, "R": None}
+        if len(pred) == 0 or not cur:
+            res = dict(base)
+        elif len(pred) == 2 and len(cur) == 2:
+            a, b = pts[0], pts[1]  # COCO L, R
+            keep = math.hypot(a[0] - pred["L"][0], a[1] - pred["L"][1]) + math.hypot(b[0] - pred["R"][0], b[1] - pred["R"][1])
+            swap = math.hypot(a[0] - pred["R"][0], a[1] - pred["R"][1]) + math.hypot(b[0] - pred["L"][0], b[1] - pred["L"][1])
+            # 追跡ラベルの割り当て（そのまま／入れ替え）を距離和で比べる。基準は hold_wrists の割り当て
+            base_is_keep = base["L"] is raw["L"]
+            if base_is_keep:
+                use_swap = swap < keep * HOLD_TRACK_SWAP_RATIO
+            else:
+                use_swap = not (keep < swap * HOLD_TRACK_SWAP_RATIO)
+                # base が入れ替え済みのとき、use_swap=True は「COCO を入れ替えた割り当て」
+            res = {"L": b, "R": a} if use_swap else {"L": a, "R": b}
+        else:
+            # 点が 1 つ、または予測が 1 つ: 近い方の追跡ラベルに付ける（ゲート内のみ）
+            if len(cur) == 1:
+                q = cur[0]
+                best = min(pred, key=lambda k: math.hypot(q[0] - pred[k][0], q[1] - pred[k][1]))
+                if math.hypot(q[0] - pred[best][0], q[1] - pred[best][1]) <= HOLD_TRACK_GATE:
+                    res[best] = q
+                else:
+                    res = dict(base)
+            else:
+                k0 = next(iter(pred))
+                near = min(pts, key=lambda q: math.hypot(q[0] - pred[k0][0], q[1] - pred[k0][1]))
+                other = pts[1] if near is pts[0] else pts[0]
+                res[k0] = near
+                res["R" if k0 == "L" else "L"] = other
+        # 状態更新
+        for k in ("L", "R"):
+            q = res[k]
+            if q is None:
+                continue
+            s = state[k]
+            if s is not None and i - s[2] <= HOLD_TRACK_MAX_GAP:
+                g = max(1, i - s[2])
+                vel = ((q[0] - s[0][0]) / g, (q[1] - s[0][1]) / g)
+            else:
+                vel = (0.0, 0.0)
+            state[k] = ((q[0], q[1]), vel, i)
+        out.append(res)
+    return out
+
+
+# (3) つないだ手はターン中も同じ手: 向かい合って顔が見え、手首が近いコマ（読めるコマ）で決まった hold を、
+# 手首が近いまま続く限り前後のコマへ引き継ぐ。引き継いだコマは自分の投票を使わない
+HOLD_CARRY = False
+HOLD_CARRY_DIST = 0.10      # 引き継ぎ中、握っている組の手首間距離がこれ未満なら続いていると見なす
+HOLD_CARRY_MAX_GAP = 3      # 引き継ぎ中に許す連続の取りこぼしコマ数
+HOLD_CARRY_NEED_OPPOSITE = True  # 読めるコマの条件: 2 人の向きが正面×背中（向かい合っている）
+
+
+def _pair_dist(wl, wf, pair):
+    lk, fk = pair.split("-")
+    if wl is None or wf is None or wl[lk] is None or wf[fk] is None:
+        return None
+    return math.hypot(wl[lk][0] - wf[fk][0], wl[lk][1] - wf[fk][1])
+
+
+_HOLD_CACHE = {}
+
+
+def hold_frame_table(draw_frames, leader_pid):
+    """コマごとの hold ラベル（"L-R" 等 or None）の表。追跡・引き継ぎの設定を反映（draw_frames ごとに 1 回）"""
+    key = (id(draw_frames), len(draw_frames), leader_pid, HOLD_SIDE_BY_FACING, HOLD_FACING_WINDOW,
+           HOLD_TRACK_WRISTS, HOLD_CARRY, HOLD_TRACK_GATE, HOLD_TRACK_SWAP_RATIO, HOLD_CARRY_DIST,
+           HOLD_CARRY_NEED_OPPOSITE, HOLD_CARRY_MAX_GAP, HOLD_TRACK_MAX_GAP,
+           draw_frames[0]["kept"][0].get("pid") if draw_frames and draw_frames[0]["kept"] else None)
+    if key in _HOLD_CACHE:
+        return _HOLD_CACHE[key]
+    fac = _facing_tables(draw_frames, leader_pid)
+    n = len(draw_frames)
+    fpid = 1 - leader_pid
+    tracked = None
+    if HOLD_TRACK_WRISTS:
+        tracked = {pid: _tracked_wrists(draw_frames, pid, None if fac is None else fac.get(pid)) for pid in (leader_pid, fpid)}
+    best = []     # (pair, dist) or None
+    readable = []
+    wr = []
+    for i, df in enumerate(draw_frames):
+        w = None if tracked is None else {pid: tracked[pid][i] for pid in tracked}
+        if w is not None and (w[leader_pid] is None or w[fpid] is None):
+            w = None
+        wr.append(w)
+        b = nearest_hold_pair(df, leader_pid, _facing_at(fac, i), w)
+        best.append(b)
+        ok = b is not None and b[1] < HOLD_DIST
+        if ok and HOLD_CARRY:
+            by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
+            fl = person_facing(by_pid[leader_pid])
+            ff = person_facing(by_pid[fpid])
+            if fl is None or ff is None:
+                ok = False
+            elif HOLD_CARRY_NEED_OPPOSITE and fl == ff:
+                ok = False
+        readable.append(ok)
+    labels = [b[0] if b is not None and b[1] < HOLD_DIST else None for b in best]
+    if HOLD_CARRY:
+        # 読めるコマの label を、手首が近いまま続く限り前後へ引き継ぐ
+        def wrists_at(i):
+            if wr[i] is not None:
+                return wr[i][leader_pid], wr[i][fpid]
+            by_pid = {p.get("pid"): p for p in draw_frames[i]["kept"] if p.get("pid") is not None}
+            if leader_pid not in by_pid or fpid not in by_pid:
+                return None, None
+            return (hold_wrists(by_pid[leader_pid], None if fac is None else fac[leader_pid].get(i)),
+                    hold_wrists(by_pid[fpid], None if fac is None else fac[fpid].get(i)))
+        carried = list(labels)
+        for rng in (range(n), range(n - 1, -1, -1)):
+            cur, miss = None, 0
+            for i in rng:
+                if readable[i]:
+                    cur, miss = labels[i], 0
+                    continue
+                if cur is None:
+                    continue
+                wl, wf = wrists_at(i)
+                d = _pair_dist(wl, wf, cur)
+                if d is not None and d < HOLD_CARRY_DIST:
+                    carried[i] = cur  # 読めないコマ自身の投票は使わない
+                    miss = 0
+                else:
+                    miss += 1
+                    if miss > HOLD_CARRY_MAX_GAP:
+                        cur = None
+        labels = carried
+    _HOLD_CACHE.clear()
+    _HOLD_CACHE[key] = labels
+    return labels
+
+
 def hold_label_jp(pair):
     jp = {"L": "左手", "R": "右手"}
     lk, fk = pair.split("-")
@@ -1957,10 +2120,9 @@ def build_hold_timeline(draw_frames, leader_pid):
     if leader_pid is None:
         return []
     samples = []  # (t, pair or None)
-    fac = _facing_tables(draw_frames, leader_pid)
+    table = hold_frame_table(draw_frames, leader_pid)
     for i, df in enumerate(draw_frames):
-        best = nearest_hold_pair(df, leader_pid, _facing_at(fac, i))
-        samples.append((df["t"], best[0] if best is not None and best[1] < HOLD_DIST else None))
+        samples.append((df["t"], table[i]))
 
     segs = []
     cur, start, last_t, miss = None, None, None, 0
@@ -1990,13 +2152,12 @@ def detect_hold(draw_frames, t_center, leader_pid):
     if leader_pid is None:
         return None
     votes = {}
-    fac = _facing_tables(draw_frames, leader_pid)
+    table = hold_frame_table(draw_frames, leader_pid)
     for i, df in enumerate(draw_frames):
         if abs(df["t"] - t_center) > HOLD_WINDOW_SEC:
             continue
-        best = nearest_hold_pair(df, leader_pid, _facing_at(fac, i))
-        if best is not None and best[1] < HOLD_DIST:
-            votes[best[0]] = votes.get(best[0], 0) + 1
+        if table[i] is not None:
+            votes[table[i]] = votes.get(table[i], 0) + 1
     if not votes:
         return None
     return hold_label_jp(max(votes, key=lambda k: votes[k]))

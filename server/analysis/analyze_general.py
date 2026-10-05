@@ -13,7 +13,10 @@ Usage: python analyze_general.py <video_path> <model_path> <measurements_json_pa
    summary: {personCount, persons: [{id, frames, firstT, lastT, meanSpeed, maxSpeed}],
              mainPersons: [{id, coverage, meanHeight, firstT, lastT, gaps: [{from, to}]}], minorPersonIds: [id],
              motion: {mean, max, peaks: [{t, v}], mountains: [{from, to, peakT}]},
-             keyframes: [{t, file, reason}], events: []},
+             keyframes: [{t, file, reason}], events: [],
+             sheets: [{file, rows: [{center, times}]}],           # 一覧画像（長い動画のみ。1 行 = 1 つの山、左から時刻順）
+             imageIndex: [{file, kind: "single"|"sheet", times, ranges}],  # どの画像がどの時刻を覆うか
+             mountainCoverage: {covered, total}},
    motion: [{t, v}],                      # 全員の動きの大きさ（胴の長さ/秒、フレームごと）
    persons: [{id, track: [{t, bbox: [x0,y0,x1,y1], kps: [[x,y,conf]*17], speed}]}]}  # 座標は 0〜1 に正規化
 `summary.events` は analyze_beats.py が読むので空配列で置く。
@@ -41,6 +44,9 @@ SIZE_RATIO_MAX = 1.9    # 付け直し: 高さの比がこれを超える相手�
 HIST_MAX = 0.9          # 付け直し: 服の色ヒストグラムの L1 距離（0〜2）がこれを超える相手は別人
 HIST_EMA = 0.05         # 色ヒストグラムの更新の重み（遅く: 隠れている間に相手の色が混ざらないように）
 W_HIST, W_SIZE, W_SHAPE = 6.0, 0.5, 6.0
+W_POS = 2.0             # 付け直し: 位置のコストの重み
+APP_MIN = 0.25          # 付け直し: 見失って 0 コマのときの、色・形の重みの倍率（1.0 = 弱めない）
+APP_FULL_GAP = 2        # 付け直し: 色・形の重みが 1 倍に戻るまでの見失いコマ数（連続するコマ = 1）
 STITCH_MAX_GAP = 60     # 2 パス目: 断片同士をつなぐのは、この数のコマ（6 秒）以内の途切れまで
 STITCH_RADIUS = 0.3
 STITCH_SIZE_RATIO = 1.6
@@ -95,15 +101,18 @@ def match_cost(t, d, gap, max_dist=TRACK_MAX_DIST):
     ratio = max(dh / th, th / dh)
     if ratio > SIZE_RATIO_MAX:
         return None
-    cost = dist / radius + W_SIZE * math.log(ratio)
+    # 直前のコマから続いている（gap が小さい）なら、位置の連続性が一番確か。服の色・形は、2 人が組んで重なると
+    # どちらも似た値でぶれるので、短い途切れでは重みを下げ、途切れが長くなるほど（位置が頼れなくなるほど）上げる
+    app = min(1.0, APP_MIN + (1.0 - APP_MIN) * max(0, gap) / APP_FULL_GAP)
+    cost = W_POS * dist / radius + W_SIZE * math.log(ratio)
     hd = hist_l1(t.get("hist"), d.get("hist"))
     if hd is not None:
         if hd > HIST_MAX:
             return None
-        cost += W_HIST * hd
+        cost += app * W_HIST * hd
     sa, sb = t.get("shape"), d.get("shape")
     if sa and sb:
-        cost += W_SHAPE * (abs(sa[0] - sb[0]) / max(sa[0], sb[0]) + abs(sa[1] - sb[1]) / max(sa[1], sb[1]))
+        cost += app * W_SHAPE * (abs(sa[0] - sb[0]) / max(sa[0], sb[0]) + abs(sa[1] - sb[1]) / max(sa[1], sb[1]))
     return cost
 
 
@@ -343,6 +352,94 @@ def select_keyframe_times(duration, times, values, max_n=None, peak_share=PEAK_S
     return sorted((t, r) for t, r in picks.items() if 0 <= t <= duration)
 
 
+# ---- 一覧画像（コンタクトシート）----
+# 長い動画は山が多く、単独のキーフレームだけでは覆いきれない。山ごとに前後数コマを横に並べた一覧画像を足し、
+# 画像の総枚数（MAX_KEYFRAMES）を保ったまま、1 枚で複数の山の「その瞬間の動き」が分かるようにする。
+
+SHEET_OFFSETS = (-0.4, -0.2, 0.0, 0.2, 0.4)   # 山の頂上からの相対時刻（秒）。1 行 = 1 つの山、左から時刻順
+SHEET_MAX_ROWS = 4         # 1 枚に入れる山（行）の最大数
+SHEET_TILE_LONG = 224      # 1 コマの長辺（px）。5 列 × 4 行でも 1 枚の画素数はキーフレーム（長辺 960）の 1.3 倍以内
+SHEET_JPEG_QUALITY = 65    # コマが小さく細部は求めないので、キーフレーム（85）より下げてファイルを小さくする
+SHEET_SINGLE_SHARE = 0.3   # 一覧画像を使うとき、単独キーフレームに残す枚数の割合
+SHEET_TRIGGER = 0.1        # 単独だけでは山の覆えない割合がこれを超えたら一覧画像を使う（短い動画は超えない）
+COVER_NEAR = 0.6           # 画像の時刻が山の頂上からこの秒数以内、または山の区間（±COVER_PAD）の中なら、その山は写っている
+COVER_PAD = 0.2
+
+
+def mountain_covered(m, times):
+    """山 m = (from, to, peakT, peakV) が、画像の時刻 times のどれかに写っているか"""
+    lo, hi, pt = m[0], m[1], m[2]
+    return any(lo - COVER_PAD <= t <= hi + COVER_PAD or abs(pt - t) <= COVER_NEAR for t in times)
+
+
+def coverage_count(mts, times):
+    """(写っている山の数, 山の数)"""
+    return sum(1 for m in mts if mountain_covered(m, times)), len(mts)
+
+
+def sheet_frame_times(center, duration, offsets=SHEET_OFFSETS):
+    """山の頂上 center の前後のコマの時刻（0〜duration に収め、重複なし。左から時刻順）"""
+    out = []
+    for o in offsets:
+        t = round(min(max(center + o, 0.0), duration), 2)
+        if t not in out:
+            out.append(t)
+    return out
+
+
+def plan_images(duration, times, values, max_n=None):
+    """画像の配分を決める。戻り値 (singles, sheets)。
+    singles: [(t, "peak"|"even")] 単独のキーフレーム。sheets: [[center, ...]] 一覧画像 1 枚ごとの山の頂上の時刻（行の順 = 時刻順）。
+    画像の総数 len(singles) + len(sheets) は max_n（既定は keyframe_budget）以下。
+    1. 単独だけで山の SHEET_TRIGGER 超が覆えないときだけ一覧画像を使う（短い動画は従来どおり単独のみ）
+    2. 使うときは、単独を max_n × SHEET_SINGLE_SHARE 枚（山の頂上＋空いた区間）に絞り、残りを一覧画像にする。
+       単独で写らない山を動きの大きい順に選び、近い山は同じ行にまとめ、1 枚の行数は必要なだけ（最大 SHEET_MAX_ROWS）。
+       余った枚数は単独に戻す"""
+    if duration <= 0:
+        return [], []
+    if max_n is None:
+        max_n = keyframe_budget(duration)
+    if max_n <= 0:
+        return [], []
+    mts = mountains(times, values)
+    singles = select_keyframe_times(duration, times, values, max_n)
+    cov, tot = coverage_count(mts, [t for t, _ in singles])
+    if tot == 0 or (tot - cov) <= SHEET_TRIGGER * tot:
+        return singles, []
+    n_single = max(1, math.ceil(max_n * SHEET_SINGLE_SHARE))
+    singles = select_keyframe_times(duration, times, values, n_single)
+    n_sheet = max_n - len(singles)
+    # 単独で写らない山を、動きの大きい順に。すでに選んだ行の一覧のコマに写る山は飛ばす
+    rows, row_times = [], []
+    for m in sorted(mts, key=lambda m: -m[3]):
+        if mountain_covered(m, [t for t, _ in singles] + row_times):
+            continue
+        rows.append(m[2])
+        row_times += sheet_frame_times(m[2], duration)
+    if not rows or n_sheet <= 0:
+        return select_keyframe_times(duration, times, values, max_n), []
+    per = min(SHEET_MAX_ROWS, math.ceil(len(rows) / n_sheet))
+    rows = sorted(rows[:n_sheet * per])
+    sheets = [rows[i:i + per] for i in range(0, len(rows), per)]
+    # 行が少なくて一覧画像が余ったら、その枚数を単独に戻す
+    spare = n_sheet - len(sheets)
+    if spare > 0:
+        singles = select_keyframe_times(duration, times, values, len(singles) + spare)
+    return singles, sheets
+
+
+def build_image_index(keyframes, sheets):
+    """どの画像がどの時刻を覆うかの索引。keyframes: [{t, file, reason}]、sheets: [{file, rows: [{center, times}]}]
+    戻り値 [{file, kind: "single"|"sheet", times: [秒...], ranges: [[from, to]...]}]（時刻順）。
+    sheet の times は左上から読む順（行ごと、左から時刻順）、ranges は行ごとの [最初のコマ, 最後のコマ]"""
+    out = [{"file": k["file"], "kind": "single", "times": [k["t"]], "ranges": [[k["t"], k["t"]]]} for k in keyframes]
+    for s in sheets:
+        out.append({"file": s["file"], "kind": "sheet",
+                    "times": [t for r in s["rows"] for t in r["times"]],
+                    "ranges": [[r["times"][0], r["times"][-1]] for r in s["rows"]]})
+    return sorted(out, key=lambda e: e["times"][0])
+
+
 # ---- 計測本体 ----
 
 def keypoint_rows(kps_xy, kps_conf, w, h):
@@ -433,6 +530,52 @@ def write_keyframes(video_path, out_dir, picks):
     return written
 
 
+def write_sheets(video_path, out_dir, sheets, duration):
+    """一覧画像を書く。sheets: [[center, ...]]。1 行 = 1 つの山（頂上の前後 SHEET_OFFSETS を左から時刻順）、各コマに時刻のラベル。
+    戻り値 [{file, rows: [{center, times}]}]（画像が作れなかったコマは空白）"""
+    import cv2
+    import numpy as np
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from frame_time import grab_at
+    os.makedirs(out_dir, exist_ok=True)
+    cap = cv2.VideoCapture(video_path)
+    cols = len(SHEET_OFFSETS)
+    written = []
+    for centers in sheets:
+        rows_t = [sheet_frame_times(c, duration) for c in centers]
+        tiles = []
+        for ts in rows_t:
+            row = []
+            for t in ts:
+                frame, _ = grab_at(cap, t)
+                if frame is None:
+                    row.append(None)
+                    continue
+                h, w = frame.shape[:2]
+                s = SHEET_TILE_LONG / max(h, w)
+                tile = cv2.resize(frame, (max(1, int(w * s)), max(1, int(h * s))))
+                cv2.rectangle(tile, (0, 0), (60, 16), (0, 0, 0), -1)
+                cv2.putText(tile, f"{t:.1f}s", (3, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 235, 255), 1, cv2.LINE_AA)
+                row.append(tile)
+            tiles.append(row)
+        first = next((x for r in tiles for x in r if x is not None), None)
+        if first is None:
+            continue
+        th, tw = first.shape[:2]
+        sheet = np.full((len(tiles) * th, cols * tw, 3), 255, np.uint8)
+        for ri, row in enumerate(tiles):
+            for ci, tile in enumerate(row):
+                if tile is not None:
+                    sheet[ri * th:(ri + 1) * th, ci * tw:ci * tw + tile.shape[1]] = tile[:th, :tw]
+            if ri:
+                cv2.line(sheet, (0, ri * th), (cols * tw, ri * th), (0, 0, 255), 2)
+        name = f"sheet_{centers[0]:08.1f}.jpg".replace(" ", "0")
+        cv2.imwrite(os.path.join(out_dir, name), sheet, [cv2.IMWRITE_JPEG_QUALITY, SHEET_JPEG_QUALITY])
+        written.append({"file": name, "rows": [{"center": c, "times": ts} for c, ts in zip(centers, rows_t)]})
+    cap.release()
+    return written
+
+
 def main():
     if len(sys.argv) != 5:
         print("Usage: analyze_general.py <video_path> <model_path> <measurements_json_path> <keyframes_dir>", file=sys.stderr)
@@ -513,8 +656,12 @@ def main():
 
     duration = last_t
     motion_v = smooth(motion_raw)
-    picks = select_keyframe_times(duration, motion_t, motion_v)
+    picks, sheet_plan = plan_images(duration, motion_t, motion_v)
     keyframes = write_keyframes(video_path, kf_dir, picks)
+    sheets = write_sheets(video_path, kf_dir, sheet_plan, duration) if sheet_plan else []
+    image_index = build_image_index(keyframes, sheets)
+    mts = mountains(motion_t, motion_v)
+    cov, cov_total = coverage_count(mts, [t for e in image_index for t in e["times"]])
     # 動きの山（peaks）= 静止画を撮った山の頂上。summary.motion.peaks の時刻には必ず keyframes がある
     vmap = dict(zip(motion_t, motion_v))
     peaks = [(t, vmap.get(t, 0.0)) for t, r in picks if r == "peak"]
@@ -547,6 +694,9 @@ def main():
                 "mountains": segs,
             },
             "keyframes": keyframes,
+            "sheets": sheets,
+            "imageIndex": image_index,
+            "mountainCoverage": {"covered": cov, "total": cov_total},
             "events": [],
         },
         "motion": [{"t": t, "v": round(v, 3)} for t, v in zip(motion_t, motion_v)],
@@ -555,7 +705,7 @@ def main():
     with open(out_path, "w") as f:
         json.dump(out, f)
     print(f"general: {sampled} frames, {len(series)} persons (online {online_ids}), main {[p['id'] for p in main_persons]}, "
-          f"{len(keyframes)} keyframes", file=sys.stderr)
+          f"{len(keyframes)} keyframes + {len(sheets)} sheets, mountains covered {cov}/{cov_total}", file=sys.stderr)
 
 
 if __name__ == "__main__":

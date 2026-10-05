@@ -15,6 +15,8 @@
         前の側 = sides.followerStart を、同じ行の中でこの入れ替わりより前にある正解の入れ替わり（optional 含む）の数だけ反転したもの
         （1 行に入れ替わりが 2 回ある行の 2 回目は逆の側から通る。2026-10-05 まではいつも followerStart と比べていて、2 回目は必ず外れていた）
   sideStart  上の旧い決まり（いつも sides.followerStart と比べる。前後比較用）
+  count     正解の通過（入れ替わり）が覆う行のカウント 1.5〜3.5 に来た割合（カウント位相。eval_routine_grid.count_phase。
+            bias = 通過の平均カウント − 2.5 の拍数。+ なら行の頭が遅い）
   turnPrec  女性のターンのある行のうち、正解の女性のターン（optional 含む）が入っている行の割合（turnsComplete の動画だけ）
 
 Usage: python eval_routine_set.py [--job screenrec=<jobId> ...] [--jobs-dir <dir>] [--db <motionlab.db>] [--json out.json] [--verbose]
@@ -31,7 +33,7 @@ sys.path.insert(0, HERE)
 from eval_routine_grid import evaluate, cv_swaps_from, rows_with_end, covering, is_cbl, has_turn, _num  # noqa: E402
 
 SERVER = os.path.join(HERE, "..")
-JOBS_DIR = os.path.join(SERVER, "storage", "analysis-jobs")
+JOBS_DIR = os.path.join(os.environ.get("MOTION_LAB_STORAGE") or os.path.join(SERVER, "storage"), "analysis-jobs")
 GT_DIR = os.path.join(HERE, "ground_truth")
 # MOTION_LAB_DB: 別の場所の DB を読む（worktree から本体の DB を引く等。--db でも指定できる）
 DB_PATH = os.environ.get("MOTION_LAB_DB") or os.path.join(SERVER, "data", "motionlab.db")
@@ -141,7 +143,7 @@ def main():
     db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True) if os.path.exists(args.db) else None
     report = {}
     keys = ("cbl", "swap", "cblRows", "rowAgree", "turn")
-    tot = {k: [0, 0] for k in keys + ("dir", "side", "sideStart", "turnPrec")}
+    tot = {k: [0, 0] for k in keys + ("dir", "side", "sideStart", "turnPrec", "count")}
     rot_all = []
     print(f"{'video':10s} {'job':8s} rows  " + "  ".join(f"{k:>9s}" for k in keys) + "      dir     side  turnPrec  rotErr")
     for path in sorted(glob.glob(os.path.join(GT_DIR, "*.json"))):
@@ -165,14 +167,16 @@ def main():
         ev.update(extra_checks(routine["moves"], gt, beat, args.verbose))
         ev["job"] = jid
         report[name] = ev
-        for k in keys + ("dir", "side", "sideStart", "turnPrec"):
+        cp = ev["countPhase"]
+        ev["count"] = {"hit": cp["ok"], "n": cp["n"], "acc": cp["acc"]}
+        for k in keys + ("dir", "side", "sideStart", "turnPrec", "count"):
             tot[k][0] += ev[k]["hit"]
             tot[k][1] += ev[k]["n"]
         if ev["rot"]["meanAbsErr"] is not None:
             rot_all += [ev["rot"]["meanAbsErr"]] * ev["rot"]["n"]
         cell = lambda x: f"{x['hit']:>2}/{x['n']:<2}={x['acc'] if x['acc'] is not None else '-':<5}"  # noqa: E731
         print(f"{name:10s} {jid[:8]} {ev['rows']:4d}  " + " ".join(cell(ev[k]) for k in keys)
-              + f" {cell(ev['dir'])} {cell(ev['side'])} {cell(ev['turnPrec'])} {ev['rot']['meanAbsErr']} (n={ev['rot']['n']})")
+              + f" {cell(ev['dir'])} {cell(ev['side'])} {cell(ev['turnPrec'])} {cell(ev['count'])} bias={cp['bias']} {ev['rot']['meanAbsErr']} (n={ev['rot']['n']})")
     total = {k: {"hit": h, "n": n, "acc": round(h / n, 3) if n else None} for k, (h, n) in tot.items()}
     total["rot"] = {"n": len(rot_all), "meanAbsErr": round(sum(rot_all) / len(rot_all), 3) if rot_all else None}
     report["total"] = total

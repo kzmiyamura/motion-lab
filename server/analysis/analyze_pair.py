@@ -1792,6 +1792,7 @@ def detect_hand_raise(draw_frames, t_cross, leader_pid):
 
 HOLD_DIST = 0.07       # 手首間の正規化距離がこれ未満なら「つないでいる」
 HOLD_WINDOW_SEC = 0.35  # イベント時刻の前後この範囲でホールドを判定
+HOLD_SAME_SIDE_PENALTY = 1.5  # 向かい合う2人の握手は男の左×女の右・男の右×女の左（クロス）。同じ側同士は交差握手のときだけなので、近さを比べるときに距離を割り増す
 HOLD_SEG_MIN_SEC = 0.5  # ホールドタイムラインに載せる区間の最小長
 HOLD_MISS_TOLERANCE = 3  # 区間を切らずに許容する連続取りこぼしサンプル数（10fpsで0.3秒）
 
@@ -1803,14 +1804,15 @@ def nearest_hold_pair(df, leader_pid):
         return None
     lw = by_pid[leader_pid]["wrists"]
     fw = by_pid[1 - leader_pid]["wrists"]
-    best = None
+    best, best_rank = None, None
     for lk in ("L", "R"):
         for fk in ("L", "R"):
             if lw[lk] is None or fw[fk] is None:
                 continue
             d = math.hypot(lw[lk][0] - fw[fk][0], lw[lk][1] - fw[fk][1])
-            if best is None or d < best[1]:
-                best = (f"{lk}-{fk}", d)
+            rank = d * (HOLD_SAME_SIDE_PENALTY if lk == fk else 1.0)
+            if best is None or rank < best_rank:
+                best, best_rank = (f"{lk}-{fk}", d), rank
     return best
 
 

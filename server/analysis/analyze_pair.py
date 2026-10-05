@@ -1764,6 +1764,7 @@ RAISE_WINDOW_AFTER_SEC = 1.2
 # 頭上に来たフレームがこの数以上なら「手を上げた」。手を頭上に通すのは一瞬（0.2〜0.5 秒）なので
 # 窓内の割合では薄まる（旧: 割合 0.25 以上）
 RAISE_MIN_FRAMES = 3
+RAISE_NOSE_DROP = 0.25  # 鼻から肩へ向かって、この割合だけ下げた線より手首が上なら「頭の高さより上」
 
 
 def detect_hand_raise(draw_frames, t_cross, leader_pid):
@@ -1790,7 +1791,8 @@ def detect_hand_raise(draw_frames, t_cross, leader_pid):
         if not k:
             continue
         if k[0][2] >= SPIN_KP_MIN:
-            head_y = k[0][1]
+            sh_ = [k[i][1] for i in (5, 6) if k[i][2] >= SPIN_KP_MIN]
+            head_y = k[0][1] + (RAISE_NOSE_DROP * (min(sh_) - k[0][1]) if sh_ and min(sh_) > k[0][1] else 0.0)
         else:
             sh = [k[i][1] for i in (5, 6) if k[i][2] >= SPIN_KP_MIN]
             if not sh:

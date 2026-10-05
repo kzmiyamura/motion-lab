@@ -251,6 +251,8 @@ def evaluate(gt, stored, verbose, events_dir=None, name=None):
         if g.get("leaderHandRaised") is not None:
             hr = p.get("handRaise") or {}
             res["handRaise"].add(bool(hr.get("raised")) == g["leaderHandRaised"])
+            if bool(hr.get("raised")) != g["leaderHandRaised"]:
+                log.append(f"  HR外れ gt {g['t']:5.1f} 正解={g['leaderHandRaised']} 予測={hr}")
         log.append(f"  CBL  gt {g['t']:5.1f} ↔ {p['t']:5.2f}  depth {g.get('depth')}/{ps.get('followerDepth')}"
                    f"  from {g.get('from')}/{ps.get('followerFrom')}  side {gt_side(g)}/{ps.get('side')}")
     log += [f"  CBL  見逃し {g['t']:5.1f} {g.get('memo', '')}" for gi, g in enumerate(gt["cbl"])

@@ -404,6 +404,67 @@ def reject_swap_outliers(swaps, turns, unit_guess, span, period, drift):
     return used, refit
 
 
+PHASE_FIX = True           # 行の頭の位相を通過の位置で補正する（phase_shift_beats。行の割り当ては補正前の格子のまま）
+PHASE_PASS_BEAT = 1.5      # On2 は女が 2 で男の横を通り、腰が重なる瞬間はカウント 2.5（頭から 1.5 拍）
+PHASE_CV_DELAY_SEC = 0.4   # CV の入れ替わり（tCross）は本当の通過より遅れる（正解表で中央値 +0.40 秒。refine_events.py の説明）
+PHASE_MIN_Z = 3.0          # 通過の位置の揃い方 z = n·R²（Rayleigh）の下限。これ未満（偶然と区別できない）なら補正しない。
+                           # 通過が 1 件だけでは z = 1 なので補正されない（1 件の位置では位相は決められない）
+PHASE_MAX_SHIFT = 2.0      # 補正の最大（拍。4.0 だと count は少し上がるが img1884 で cbl が 1 つ落ちる）
+
+
+def phase_shift_beats(starts, beat, swaps):
+    """行の頭（starts、8 カウントの頭の時刻）から見た CV の入れ替わりの位置（8 拍周期の円周平均）が、On2 の期待の位置
+    （頭から PHASE_PASS_BEAT 拍 + CV の遅れ）に来るようにするための、行の頭を遅らせる拍数（−4〜+4）。
+    入れ替わりが 8 カウントの同じ所に集まっていない（z < PHASE_MIN_Z）ときは補正できないので 0"""
+    if not PHASE_FIX or not swaps or not starts or not beat:
+        return 0.0
+    cs = []
+    for t in swaps:
+        i = bisect.bisect_right(starts, t) - 1
+        if i < 0:
+            continue
+        cs.append(((t - starts[i]) / beat) % 8)
+    if not cs:
+        return 0.0
+    z = sum(complex(math.cos(2 * math.pi * c / 8), math.sin(2 * math.pi * c / 8)) for c in cs) / len(cs)
+    if len(cs) * abs(z) ** 2 < PHASE_MIN_Z:
+        return 0.0
+    mean = (math.atan2(z.imag, z.real) / (2 * math.pi) * 8) % 8
+    target = (PHASE_PASS_BEAT + PHASE_CV_DELAY_SEC / beat) % 8
+    d = (mean - target + 4) % 8 - 4
+    return max(-PHASE_MAX_SHIFT, min(PHASE_MAX_SHIFT, d))
+
+
+PHASE_ROW_BEFORE = 1.0     # 行の頭は、その行の通過（CV の入れ替わりから遅れを引いた時刻）の少なくともこの拍数前
+PHASE_ROW_AFTER = 1.5      # (0.5 だと img1884 で cbl が 1 つ落ちる） 行の頭は、前の行の通過の少なくともこの拍数後
+
+
+def shift_row_starts(starts, beat, shift, swaps):
+    """行の頭を shift 拍遅らせた時刻。ただし通過がその行から出ないよう、各行の頭は
+    ・その行の最初の通過の PHASE_ROW_BEFORE 拍前より後にならず、
+    ・前の行の最後の通過の PHASE_ROW_AFTER 拍後より前にならない
+    （技はその通過が入る行に属する。補正前の格子で各通過がどの行にあるかで決める）。通過 = 入れ替わりの時刻 − CV の遅れ"""
+    est = [t - PHASE_CV_DELAY_SEC for t in swaps]
+    per = [[] for _ in starts]
+    for t in est:
+        i = bisect.bisect_right(starts, t + PHASE_CV_DELAY_SEC) - 1
+        if i >= 0:
+            per[i].append(t)
+    new = []
+    for k, s in enumerate(starts):
+        v = s + shift * beat
+        if per[k]:
+            v = min(v, min(per[k]) - PHASE_ROW_BEFORE * beat)
+        if k > 0 and per[k - 1]:
+            v = max(v, max(per[k - 1]) + PHASE_ROW_AFTER * beat)
+        if per[k]:
+            v = min(v, min(per[k]) - PHASE_ROW_BEFORE * beat)
+        new.append(v)
+    for k in range(1, len(new)):
+        new[k] = max(new[k], new[k - 1] + 0.01)
+    return new
+
+
 def swap_heads(fit, duration):
     """当てた格子の 8 カウントの頭の時刻（0 秒の手前 1 つから duration の後ろ 1 つまで）"""
     period, drift, span, head0 = fit["period"], fit["drift"], fit["span"], fit["head0"]
@@ -1660,6 +1721,18 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
     if GHOST_CBL_BACK:
         fixes += move_ghost_cbl_back(out, summary, timing, beat)
     fixes += check_inside_turns(out, beat, timing, summary)
+
+    # カウントの位相: 行の割り当て・行の中身の判定は上の格子のままにして、行の頭の時刻だけを通過の位置で補正する。
+    # 音（audio / audio+dance の downbeat）で頭を決めたものは音が正しいので触らない
+    phase_fix = 0.0
+    if not (downbeat and downbeat.get("source") in ("audio", "audio+dance")):
+        old = [m["start"] for m in out]
+        sw_t = swap_times(summary)
+        phase_fix = phase_shift_beats(old, beat, sw_t)
+        if phase_fix:
+            for mv, s in zip(out, shift_row_starts(old, beat, phase_fix, sw_t)):
+                mv["start"] = round(s, 2)
+            phase += phase_fix * beat
 
     routine["rawMoves"] = raw
     routine["moves"] = out

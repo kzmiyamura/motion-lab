@@ -334,6 +334,41 @@ describe('FlipView', () => {
     expect(screen.getByTestId('flip-caption')).toHaveTextContent(/^2$/);
   });
 
+  it('再生中のコマで止めると、同じコマ・同じ画像・同じ見出しのまま（スライダーの値も同じ）', async () => {
+    // 1/4 拍刻み 32 コマ（1・1/4・1&・3/4 …）
+    const idx = { moves: [{ index: 0, start: 0, flip: Array.from({ length: 32 }, (_, k) => {
+      const q = k % 4;
+      return {
+        t: Math.round((k * BEAT) / 4 * 1000) / 1000, url: `/q${k}.jpg`, count: Math.floor(k / 4) + 1,
+        label: q === 2 ? '&' : '', ...(q ? { half: true } : {}),
+      };
+    }) }] };
+    const shown = () => {
+      const on = Array.from(screen.getByTestId('flipbook').querySelectorAll('div[aria-hidden="false"] > img, div[aria-hidden="false"] img'));
+      return on.map(i => i.getAttribute('src'));
+    };
+    render(<FlipView sheet={sheetData()} frames={new Map()} framesIndex={idx} />);
+    fireEvent.click(screen.getByRole('button', { name: '1×' }));
+    for (const ms of [250, 130, 410, 90]) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+      const src = shown();
+      const frameNo = screen.getByText(/^\d+\/32$/).textContent;
+      const caption = screen.getByTestId('flip-caption').textContent;
+      expect(src).toHaveLength(1);
+      fireEvent.click(screen.getByTestId('flipbook'));
+      expect(shown()).toEqual(src);
+      expect(screen.getByText(/^\d+\/32$/).textContent).toBe(frameNo);
+      expect(screen.getByTestId('flip-caption').textContent).toBe(caption);
+      const k = Number(frameNo!.split('/')[0]) - 1;
+      expect((screen.getByTestId('flip-scrubber') as HTMLInputElement).value).toBe(String(k));
+      expect(src[0]).toBe(`/q${k}.jpg`);
+      // 時間が経っても動かない
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(shown()).toEqual(src);
+      fireEvent.click(screen.getByTestId('flipbook')); // 再開
+    }
+  });
+
   it('← → キーで前後の技へ。上のコマも替わる。端で止まる', async () => {
     const onIndex = vi.fn();
     render(<FlipView sheet={sheetData()} frames={new Map()} framesIndex={INDEX} onIndexChange={onIndex} />);

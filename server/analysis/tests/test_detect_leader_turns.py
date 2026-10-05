@@ -94,6 +94,60 @@ class DetectLeaderTurnsTest(unittest.TestCase):
         self.assertEqual(len(ap.detect_leader_turns(f, 0, [], [-5.0], [(1.8, 2.5)])), 1)
 
 
+class LeaderTurnReadme32Test(unittest.TestCase):
+    """README 32: 逆向きの連れ回し・1 コマの付け違い・背中の瞬間の鼻"""
+
+    def turns(self, f, ft, dirs):
+        return ap.detect_leader_turns(f, 0, [], ft, follower_turn_dirs=dirs)
+
+    def test_counter_rotation_next_to_follower_turn_is_kept(self):
+        # 男は右回り（R）。0.3 秒前に始まった女性のターンは左回り = 連れ回りではない
+        f = frames([(1.0, FRONT, F)] + RIGHT_TURN + [(1.0, FRONT, F)])
+        self.assertEqual(len(self.turns(f, [1.0], {1.0: -1})), 1)
+
+    def test_same_direction_next_to_follower_turn_is_dropped(self):
+        f = frames([(1.0, FRONT, F)] + RIGHT_TURN + [(1.0, FRONT, F)])
+        self.assertEqual(self.turns(f, [1.0], {1.0: 1}), [])
+
+    def test_unknown_direction_next_to_follower_turn_is_dropped(self):
+        f = frames([(1.0, FRONT, F)] + RIGHT_TURN + [(1.0, FRONT, F)])
+        self.assertEqual(self.turns(f, [1.0], {1.0: 0}), [])
+        self.assertEqual(self.turns(f, [1.0], {}), [])
+
+    def test_counter_rotation_can_be_disabled(self):
+        f = frames([(1.0, FRONT, F)] + RIGHT_TURN + [(1.0, FRONT, F)])
+        old = ap.LEADER_COUNTER_ROT_KEEP
+        ap.LEADER_COUNTER_ROT_KEEP = False
+        try:
+            self.assertEqual(self.turns(f, [1.0], {1.0: -1}), [])
+        finally:
+            ap.LEADER_COUNTER_ROT_KEEP = old
+
+    def test_turns_a_second_apart_in_opposite_directions_are_both_found(self):
+        # 左回りの 0.9 秒後にもう一度、逆の右回り（冷却 0.8 秒）
+        left = [(d, s, -fc if fc in (-1, 1) else fc) for d, s, fc in RIGHT_TURN]  # 肩の符号は同じ、顔の側だけ逆
+        f = frames([(1.0, FRONT, F)] + left + [(0.45, FRONT, F)] + RIGHT_TURN + [(1.0, FRONT, F)])
+        turns = ap.detect_leader_turns(f, 0, [], [])
+        self.assertEqual([spin["seq"] for _, _, spin in turns], ["LL", "RR"])
+
+    def test_single_frame_sign_glitch_is_not_a_turn(self):
+        # 同符号に挟まれた 1 コマだけ逆の肩は付け違い。前後に正面・背中が付いていても回転にしない
+        seg = [(0.3, FRONT, F), (0.1, BACK, -1), (0.3, FRONT, F), (0.1, BACK, 1), (0.3, FRONT, F)]
+        self.assertEqual(ap.detect_leader_turns(frames(seg), 0, [], []), [])
+
+    def test_back_view_frame_with_visible_nose_still_counts_as_back(self):
+        # 背中向きの瞬間が 1 コマで、肩の分離が最大のコマだけ帽子のつばで鼻が読めた: 最小で見れば背中のままのコマがある
+        turn = [(0.1, SIDE, -1), (0.1, -SIDE, -1), (0.1, BACK, 0), (0.1, -0.17, F), (0.1, -SIDE, 1), (0.1, SIDE, 1)]
+        f = frames([(1.0, FRONT, F)] + turn + [(1.0, FRONT, F)])
+        self.assertEqual(len(ap.detect_leader_turns(f, 0, [], [])), 1)
+        old = ap.LEADER_FACE_MIN_FRAC
+        ap.LEADER_FACE_MIN_FRAC = 0.0
+        try:
+            self.assertEqual(ap.detect_leader_turns(f, 0, [], []), [])
+        finally:
+            ap.LEADER_FACE_MIN_FRAC = old
+
+
 def with_follower(fr, raised, pid=1):
     """各コマに女性（pid）を足す。raised なら左右の手首が頭（鼻）より上"""
     k = [[0.5, 0.3, 0.9] for _ in range(17)]

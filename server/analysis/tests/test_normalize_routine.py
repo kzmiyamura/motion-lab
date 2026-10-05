@@ -945,5 +945,50 @@ class PhaseShiftTest(unittest.TestCase):
         self.assertTrue(1.5 <= mean <= 3.5, mean)
 
 
+class PhaseLocalTest(unittest.TestCase):
+    """通過ごとの局所補正（README 42。既定 off）"""
+
+    BEAT = 0.3
+
+    def setUp(self):
+        import normalize_routine as nr
+        self.nr = nr
+        self._old = nr.PHASE_LOCAL
+        nr.PHASE_LOCAL = True
+
+    def tearDown(self):
+        self.nr.PHASE_LOCAL = self._old
+
+    def test_default_off(self):
+        self.nr.PHASE_LOCAL = False
+        starts = [k * 8 * self.BEAT for k in range(4)]
+        self.assertIsNone(self.nr.phase_local_shifts(starts, self.BEAT, [starts[1] + 1.0]))
+
+    def test_per_row_shift_and_interpolation(self):
+        nr, b = self.nr, self.BEAT
+        starts = [k * 8 * b for k in range(5)]
+        want = nr.PHASE_PASS_BEAT * b + nr.PHASE_CV_DELAY_SEC
+        # 行 0 は 1 拍遅い、行 4 は 1 拍早い。間の行は通過なしで内挿
+        swaps = [starts[0] + want + 1.0 * b, starts[4] + want - 1.0 * b]
+        out = nr.phase_local_shifts(starts, b, swaps)
+        self.assertAlmostEqual(out[0], 1.0, places=3)
+        self.assertAlmostEqual(out[4], -1.0, places=3)
+        self.assertAlmostEqual(out[2], 0.0, places=3)
+
+    def test_clamped_and_none_without_swaps(self):
+        nr, b = self.nr, self.BEAT
+        starts = [k * 8 * b for k in range(3)]
+        self.assertIsNone(nr.phase_local_shifts(starts, b, []))
+        out = nr.phase_local_shifts(starts, b, [starts[1] + (nr.PHASE_PASS_BEAT + 3.5) * b + nr.PHASE_CV_DELAY_SEC])
+        self.assertLessEqual(max(out), nr.PHASE_LOCAL_MAX)
+
+    def test_shift_row_starts_accepts_list(self):
+        nr, b = self.nr, self.BEAT
+        starts = [k * 8 * b for k in range(3)]
+        new = nr.shift_row_starts(starts, b, [0.5, 0.5, 0.5], [])
+        for s, n in zip(starts, new):
+            self.assertAlmostEqual(n - s, 0.5 * b, places=3)
+
+
 if __name__ == "__main__":
     unittest.main()

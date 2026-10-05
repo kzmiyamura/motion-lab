@@ -504,7 +504,7 @@ def shift_row_starts(starts, beat, shift, swaps, delay=None):
             per[i].append(t)
     new = []
     for k, s in enumerate(starts):
-        v = s + shift * beat
+        v = s + (shift[k] if isinstance(shift, (list, tuple)) else shift) * beat
         if per[k]:
             v = min(v, min(per[k]) - PHASE_ROW_BEFORE * beat)
         if k > 0 and per[k - 1]:
@@ -515,6 +515,53 @@ def shift_row_starts(starts, beat, shift, swaps, delay=None):
     for k in range(1, len(new)):
         new[k] = max(new[k], new[k - 1] + 0.01)
     return new
+
+
+PHASE_LOCAL = False        # 動画全体の位相が決まらないとき、行ごとに通過の位置で行の頭を補正する（phase_local_shifts）
+PHASE_LOCAL_MAX = 2.0      # 局所補正の最大（拍）
+
+
+def phase_local_shifts(starts, beat, swaps, delay=None):
+    """行ごとの補正（拍）。その行の通過（入れ替わり − 遅れ）が行の頭から PHASE_PASS_BEAT 拍に来るように動かす量。
+    1 行に通過が 2 つあれば 4 拍周期で円周平均（CBL×2 は 4 拍ずれて通る）。通過の無い行は前後の補正のある行から行番号で内挿
+    （端は最寄りの値）。通過が 1 つも無ければ None"""
+    if delay is None:
+        delay = PHASE_CV_DELAY_SEC
+    if not PHASE_LOCAL or not swaps or not starts or not beat:
+        return None
+    per = [[] for _ in starts]
+    for t in swaps:
+        i = bisect.bisect_right(starts, t) - 1
+        if i >= 0:
+            per[i].append((t - delay - starts[i]) / beat)
+    raw = [None] * len(starts)
+    for k, ps in enumerate(per):
+        if not ps:
+            continue
+        per_len = 4.0 if len(ps) >= 2 else 8.0
+        zc = sum(complex(math.cos(2 * math.pi * p / per_len), math.sin(2 * math.pi * p / per_len)) for p in ps) / len(ps)
+        if abs(zc) < 1e-6:
+            continue
+        mean = (math.atan2(zc.imag, zc.real) / (2 * math.pi) * per_len) % per_len
+        d = (mean - PHASE_PASS_BEAT + per_len / 2) % per_len - per_len / 2
+        raw[k] = max(-PHASE_LOCAL_MAX, min(PHASE_LOCAL_MAX, d))
+    known = [k for k, v in enumerate(raw) if v is not None]
+    if not known:
+        return None
+    out = []
+    for k in range(len(starts)):
+        if raw[k] is not None:
+            out.append(raw[k])
+            continue
+        lo = max((j for j in known if j < k), default=None)
+        hi = min((j for j in known if j > k), default=None)
+        if lo is None:
+            out.append(raw[hi])
+        elif hi is None:
+            out.append(raw[lo])
+        else:
+            out.append(raw[lo] + (raw[hi] - raw[lo]) * (k - lo) / (hi - lo))
+    return out
 
 
 def swap_heads(fit, duration):
@@ -1790,6 +1837,12 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
             for mv, s in zip(out, shift_row_starts(old, beat, phase_fix, sw_t, delay)):
                 mv["start"] = round(s, 2)
             phase += phase_fix * beat
+        else:
+            local = phase_local_shifts(old, beat, sw_t, delay)
+            if local:
+                for mv, s in zip(out, shift_row_starts(old, beat, local, sw_t, delay)):
+                    mv["start"] = round(s, 2)
+                routine["phaseLocal"] = [round(x, 2) for x in local]
 
     routine["phaseDelay"] = {"sec": round(delay, 3), "n": n_est, "source": "estimate" if n_est and delay != PHASE_CV_DELAY_SEC else "default"} if phase_ran else None
     routine["rawMoves"] = raw

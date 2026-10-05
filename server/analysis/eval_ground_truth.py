@@ -127,7 +127,8 @@ def load_events(gt, stored, events_dir=None, name=None):
         m = json.load(open(os.path.join(out, "measurements.json"), encoding="utf-8"))
         return [e for e in m["summary"]["events"] if in_range(gt, e["t"])], None
     data = load_tracks(gt)
-    return [e for e in ap.detect_events(data["frames"], data["leaderPid"]) if in_range(gt, e["t"])], data
+    events = ap.apply_cbl_pass_half(ap.detect_events(data["frames"], data["leaderPid"]))
+    return [e for e in events if in_range(gt, e["t"])], data
 
 
 def match(gt_items, preds, key=None):

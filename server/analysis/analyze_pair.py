@@ -1980,6 +1980,40 @@ def detect_events(draw_frames, leader_pid):
     return events
 
 
+PASS_HALF_MIN_SEC = 0.25   # CBL の通過からターンの回り始め（span.from）までがこれ未満なら、通過は回転の範囲に入っている
+PASS_HALF_MAX_SEC = 0.65   # これより空くと別の技（CBL のあと一拍置いてから回る）。ほぼ 1 拍 = 通過してから回り出すまで
+
+
+def apply_cbl_pass_half(events):
+    """CBL に続いて回るフォロワーのターンへ、通過の½回転を足す（回転数の決まり。docs/salsa-knowledge/on2-timing-and-terms.md
+    §5・§8-4、正解表 README の「回転数の決まり」: CBL＋インサイド = 1½）。
+
+    ターンの回転の範囲（span）は最初の向きの反転から始まるので、通過の½は範囲に入らず、CBL の通過から 0.25〜0.65 秒後に
+    回り出すターンは全て½少なく数えていた（README 34）。足すのは rotations と spin の最初の run。何度呼んでも足すのは 1 回
+    （passHalf が付く）。refine_turns_dense が span を取り直したあとでも呼べる（spin を作り直すと passHalf は外れる）"""
+    cbls = [e.get("tCross", e["t"]) for e in events if e.get("type") == "CBL"]
+    for e in events:
+        if e.get("type") != "Turn" or e.get("by") != "follower" or e.get("passHalf"):
+            continue
+        sp = e.get("span") if isinstance(e.get("span"), dict) else None
+        start = sp["from"] if sp else e["t"]
+        if not any(PASS_HALF_MIN_SEC <= start - c <= PASS_HALF_MAX_SEC for c in cbls):
+            continue
+        e["passHalf"] = 0.5
+        e["rotations"] = (e.get("rotations") or 1) + 0.5
+        spin = e.get("spin")
+        if isinstance(spin, dict):
+            if spin.get("runs"):
+                spin["runs"] = [dict(r) for r in spin["runs"]]
+                spin["runs"][0]["turns"] += 0.5
+            elif spin.get("seq"):
+                runs = _spin_runs(spin["seq"])
+                if runs:
+                    runs[0]["turns"] += 0.5
+                    spin["runs"] = runs
+    return events
+
+
 def set_turn_span(e, t_from, t_to, source):
     """ターンのイベントに回転の範囲（最初〜最後の向きの反転）と、その真ん中 tMid を書く。
     t は回り始め（女性: 最初の反転、男: 最初の 1 回転の中点）のまま。振付シートの行の割り当て・カードはカウントの
@@ -2402,6 +2436,7 @@ def main():
     events = detect_events(draw_frames, leader_pid) if draw_frames else []
     if events:
         events = refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock=clock)
+    events = apply_cbl_pass_half(events)
     hold_timeline = build_hold_timeline(draw_frames, leader_pid) if draw_frames else []
 
     # デバッグ動画（2パス目）: 全編の計測を踏まえたロールで色を塗り、イベントラベルを焼き込む

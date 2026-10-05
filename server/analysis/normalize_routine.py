@@ -1176,6 +1176,43 @@ def apply_rotation_prior(mv, spin, beat):
     return f"rotations:{r}->{new}({src})"
 
 
+SPILLED_TURN = True         # ターンの無いベーシック・持ち替えの行の終わりに溢れた女性のターンを、その行のターンにする
+SPILLED_MOVES = {"basic", "hand_change"}
+
+
+def spilled_turn(mv, summary, t0, t1, t2, beat):
+    """行の終わり（TURN_SPILL_BEATS 拍目以降）に回り始めた女性の CV のターンは次の行のものとして扱う（turn_window）が、
+    次の行がもっと大きいターンを持っていて選ばれなかったとき、そのターンはどの行にも入らず消える。
+    ターンの無いベーシック・持ち替えの行なら、そのターンをこの行のターンにする（向きが 1 方向で決まるときだけ。
+    回転数は CV の数、½ でもよい）。t2 は次の行の終わり。戻り値は直した印（変えなければ None）。
+    正解表では 8c312c6d 12.7（左 ½ の直後に右 2½ が続き、後ろの行が右 2½ を取って前の行は「ベーシック」になっていた）"""
+    if not SPILLED_TURN or mv.get("move") not in SPILLED_MOVES or mv.get("turn") or not (beat and beat > 0) \
+            or TURN_SPILL_BEATS is None:
+        return None
+    lo = t1 - max(0.3, (8 - TURN_SPILL_BEATS) * beat)
+    nxt = cv_turn_pick(summary, t1, t2, beat) if t2 is not None else None
+    best = None
+    for e in (summary or {}).get("events") or []:
+        if not isinstance(e, dict) or e.get("type") != "Turn" or e.get("by") != "follower":
+            continue
+        s = spin_summary(e)
+        if not _num(s["a"]) or not (lo <= s["a"] < t1) or s["dir"] not in DIR_SHORT or not _num(s["turns"]) \
+                or s["turns"] <= 0:
+            continue
+        if nxt and _num(nxt.get("a")) and abs(nxt["a"] - s["a"]) < 1e-6:
+            continue   # 次の行が取ったターン
+        if best is None or s["turns"] > best["turns"]:
+            best = s
+    if not best:
+        return None
+    d = best["dir"]
+    mv["turn"] = {"by": "follower", "direction": d, "rotations": max(0.5, min(MAX_ROT, round_half(best["turns"]))),
+                  "directionSource": "cv", "rotationSource": "cv"}
+    mv["move"] = f"{d}_turn"
+    mv["name"] = DEFAULT_NAME[mv["move"]]
+    return f"spilledTurn:{d}"
+
+
 FOLLOWER_FIRST_MOVES = {"basic", "hand_change", "leader_turn"}   # 女性の CV のターンがあれば女性のターンを付ける行
 
 
@@ -1557,6 +1594,10 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
                 mv["swapEarly"] = early
         t1 = out[k + 1]["start"] if k + 1 < len(out) else t0 + mv["counts"] * beat
         ft = prefer_follower_turn(mv, cv_spin_info(summary, t0, t1, beat=beat))
+        if not ft:
+            t2 = (out[k + 2]["start"] if k + 2 < len(out) else t1 + (out[k + 1].get("counts") or 8) * beat) \
+                if k + 1 < len(out) else None
+            ft = spilled_turn(mv, summary, t0, t1, t2, beat)
         if ft:
             mv["turnCheck"] = ft
             mark_uncertain(mv)

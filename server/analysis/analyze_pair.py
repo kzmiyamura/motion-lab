@@ -895,6 +895,7 @@ CBL_PIVOT_SUPPRESS_SEC = 0.8  # CBL・女性のターンの±この秒数内の�
 # （29.45 の候補が 31.2 のターンを含んで CBL 29.99 の近くで捨てられる、2fda2815 7.0 が 5.91 になる等）。
 # 10/4、正解表 5 本（tracks モード）: 男のターン P/R/F1 .333/.222/.267 → .462/.667/.545（tp 2→6、fp 4→7）、
 # CBL・女性のターンは不変。向きは対応した男のターン 7 件中 6 件（外れは向きを決めきれない bb0efcb9 16.6）
+LEADER_FLIP_WINDOW = 2.0   # 男のターンの反転の間隔の上限（1.5 → 2.0 秒、README 45）
 LEADER_TURN_COOLDOWN_SEC = 0.8   # 男のターン同士の最小間隔（1.5 → 0.8、README 32。33.9 の左の 1 秒弱後に逆へもう 1 回回る bb0efcb9 34.9 のため。冷却なしは fp +1）
 # 男の振り返りの誤検出（img1884 の背中側から撮った男が正面を見せて戻る等）: 肩の左右（shDx の符号）の反転は、
 # YOLO が背中向きの人の左右の肩を付け違えたときにも起きる。本当に回ったなら反転のたびに正面 ↔ 背中が入れ替わり、
@@ -1303,8 +1304,11 @@ def detect_leader_turns(draw_frames, pid, cbl_times, follower_turn_times, follow
     while i + 1 < len(flips):
         (t1, s, r1), (t2, _, r2) = flips[i], flips[i + 1]
         tm = (t1 + t2) / 2
-        if (t2 - t1 <= TURN_FLIP_WINDOW and sweep_ok(t1 - TURN_PRE_SEC, t1, s) and sweep_ok(t1, t2, -s)
-                and r1 == r2 and r1 != "?" and not near(tm, cbl_times) and not near(tm, companion_times(r1))
+        # README 45: 反転の間隔は男だけ 2.0 秒まで。TURN_FLIP_WINDOW（1.5 秒）を超える遅い回転は、女性を回すときの
+        # 上体のひねり（随伴）が女性のターンの長さ（≦1.5 秒）に収まることから、随伴フィルタを当てない
+        if (t2 - t1 <= LEADER_FLIP_WINDOW and sweep_ok(t1 - TURN_PRE_SEC, t1, s) and sweep_ok(t1, t2, -s)
+                and r1 == r2 and r1 != "?" and not near(tm, cbl_times)
+                and (t2 - t1 > TURN_FLIP_WINDOW or not near(tm, companion_times(r1)))
                 and not any(a <= tm <= b for a, b in in_spin)
                 and (not LEADER_FACE_FLIP_CHECK or second_flip_turns(i))):
             pairs.append((i, tm, r1))

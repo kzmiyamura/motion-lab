@@ -567,9 +567,17 @@ export async function getJobDetail(baseUrl: string, jobId: string): Promise<Anal
 
 ### 13.2 general が行うこと
 
-1. `analysis/analyze_general.py`（YOLOv8s-pose、約 10fps）— 映っている人ごとの骨格の時系列（画面上の近さによる簡単な追跡）、
-   動きの大きさの時系列（胴の長さ/秒）、等間隔 + 動きのピークで最大 12 枚のキーフレーム JPEG（`out/keyframes/`）を書く。
-   結果は `out/measurements.json`（`summary` に人ごとの要約・動きのピーク・キーフレーム一覧）。サルサ専用の判定は入っていない
+1. `analysis/analyze_general.py`（YOLOv8s-pose、約 10fps）— 映っている人ごとの骨格の時系列、
+   動きの大きさの時系列（胴の長さ/秒）、動きの山を優先したキーフレーム JPEG（`out/keyframes/`）を書く。
+   - **追跡**: 位置・大きさ・服の色ヒストグラム・骨格の形（肩幅/胴の長さ÷bbox 高さ）でコストを付け、見失った人を 2 秒（20 コマ）覚えて付け直す（1 パス目）。
+     その後、追跡の断片を平均の色・形・大きさ・位置が合い、同時に映っていないものどうしで 6 秒までの途切れをつなぎ直す（2 パス目 `stitch_tracklets`）。
+     試験動画（31 秒）で id は 19 → 10、主な 2 人は全編で同じ id
+   - **主な人物**: `summary.mainPersons[]`（`{id, coverage, meanHeight, firstT, lastT, gaps}`）。映っていた割合 25% 以上かつ最大の人の 55% 以上の高さ。
+     画面端の小さい人・鏡の像・通りすがりは `summary.minorPersonIds`。`gaps` は 1 秒以上映っていなかった区間
+   - **キーフレーム**: 枚数は動画の長さに比例（30 秒で 18 枚、8〜24 枚）。動きの山（局所最大、1.2 秒以内の山はまとめる）を優先し、
+     山（平均 + 0.5σ を超える連続区間）には必ず 1 枚、残りは山の無い区間の真ん中を等間隔で埋める。`summary.motion.peaks` の時刻には必ず静止画がある。
+     `summary.motion.mountains[]` に山の区間。1 枚の大きさは従来と同じ（長辺 960px・JPEG 85）
+   結果は `out/measurements.json`（`summary` に人ごとの要約・主な人物・動きのピーク/山・キーフレーム一覧）。サルサ専用の判定は入っていない
 2. 動画に音声があれば `analyze_beats.py` で `summary.beatGrid` を足す（無音・不明瞭なら `null`）
 3. Claude（`prompts/general-prompt.md`）— 指示書が何を見てどう書くかの唯一の指示。measurements.json とキーフレームを見て
    `out/report.md` と `out/result.json`（`{summary, findings: [{t, title, detail}], limitations}`）を書く

@@ -157,6 +157,23 @@ class ReidTest(unittest.TestCase):
         ids, nid = ag.assign_tracks(tracks, [cbox(0.43, 0.5, None, shape=(0.4, 0.5))], 1, nid)
         self.assertEqual(ids, [1])
 
+    def test_consecutive_frames_trust_position_over_similar_clothes(self):
+        # 同じ黒い服の 2 人が組んで踊る: 色が似ていて、検出の色がぶれて逆の人寄りに見えても、連続するコマでは位置で付ける
+        a, b = [0.5, 0.5, 0.0, 0.0], [0.4, 0.4, 0.1, 0.1]
+        tracks, nid = {}, 0
+        _, nid = ag.assign_tracks(tracks, [cbox(0.40, 0.5, a), cbox(0.55, 0.5, b)], 0, nid)
+        near_b, near_a = [0.42, 0.42, 0.08, 0.08], [0.48, 0.48, 0.02, 0.02]
+        ids, nid = ag.assign_tracks(tracks, [cbox(0.41, 0.5, near_b), cbox(0.56, 0.5, near_a)], 1, nid)
+        self.assertEqual(ids, [0, 1])
+
+    def test_after_a_long_loss_appearance_counts_fully(self):
+        a, b = [0.5, 0.5, 0.0, 0.0], [0.4, 0.4, 0.1, 0.1]
+        tracks, nid = {}, 0
+        _, nid = ag.assign_tracks(tracks, [cbox(0.40, 0.5, a), cbox(0.55, 0.5, b)], 0, nid)
+        near_b, near_a = [0.42, 0.42, 0.08, 0.08], [0.48, 0.48, 0.02, 0.02]
+        ids, nid = ag.assign_tracks(tracks, [cbox(0.41, 0.5, near_b), cbox(0.56, 0.5, near_a)], 8, nid)
+        self.assertEqual(ids, [1, 0])
+
     def test_works_without_color_or_shape(self):
         tracks, nid = {}, 0
         _, nid = ag.assign_tracks(tracks, [box(0.5, 0.5)], 0, nid)

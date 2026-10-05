@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "test": "tsx --test src/claudeUsage.test.ts",
     "capture:login": "tsx src/captureCli.ts login",
     "capture:test": "tsx src/captureCli.ts test"
   },

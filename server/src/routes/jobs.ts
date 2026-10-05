@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { getJob, type AnalysisJobRow } from '../db.js';
+import { jobDirOf } from '../jobWorker.js';
+import { readClaudeUsageTotal } from '../claudeUsage.js';
 
 export function toPublicJob(row: AnalysisJobRow) {
   return {
@@ -24,5 +26,6 @@ jobsRouter.get('/:id', (req, res) => {
     reportMd: row.report_md,
     resultJson: row.result_json,
     specSnapshot: row.spec_snapshot,
+    claudeUsage: readClaudeUsageTotal(jobDirOf(row.id)),
   });
 });

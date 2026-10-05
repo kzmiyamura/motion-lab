@@ -14,8 +14,15 @@ import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { recordClaudeUsageFromStdout } from './claudeUsage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** 使用量の記録先（<jobDir>/out）とジョブ ID。anchor / turn_judge は <jobDir>/out/<sub> が cwd */
+function usageTargetOfSub(subDir: string): { outDir: string; jobId: string } {
+  const outDir = path.dirname(subDir);
+  return { outDir, jobId: path.basename(path.dirname(outDir)) };
+}
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? 'claude';
 const PROMPT_PATH = path.resolve(__dirname, '../prompts/runner-prompt.md');
@@ -86,6 +93,8 @@ export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise
     proc.stdin.end();
     proc.on('error', () => resolve(null));
     proc.on('exit', code => {
+      const u = usageTargetOfSub(anchorDir);
+      recordClaudeUsageFromStdout(u.outDir, u.jobId, 'anchor', stdout);
       if (code !== 0) return resolve(null);
       try {
         // --output-format json のエンベロープから結果テキストを取り出し、その中の JSON を拾う
@@ -155,6 +164,8 @@ export function runClaudeTurnJudge(stripDir: string, items: TurnJudgeItem[], sig
     proc.on('error', err => reject(new ClaudeAuthError(`claude CLI を起動できません: ${err.message}`)));
     proc.on('exit', code => {
       const elapsedMs = Date.now() - started;
+      const u = usageTargetOfSub(stripDir);
+      recordClaudeUsageFromStdout(u.outDir, u.jobId, 'turnJudge', stdout);
       const combined = `${stdout}\n${stderr}`;
       let resultText = '';
       try {
@@ -229,6 +240,8 @@ export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSig
     });
 
     proc.on('exit', code => {
+      // リトライでも 1 回ずつ記録する（失敗終了でもエンベロープが読めれば残す）
+      recordClaudeUsageFromStdout(path.join(jobDir, 'out'), path.basename(jobDir), 'main', stdout);
       const combined = `${stdout}\n${stderr}`;
       const tail = tailOf(stdout, stderr);
 

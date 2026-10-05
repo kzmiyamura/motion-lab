@@ -1825,6 +1825,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
     # 音（audio / audio+dance の downbeat）で頭を決めたものは音が正しいので触らない
     phase_fix = 0.0
     phase_ran = False
+    old_starts = [m["start"] for m in out]
     if not (downbeat and downbeat.get("source") in ("audio", "audio+dance")):
         old = [m["start"] for m in out]
         phase_ran = True
@@ -1843,6 +1844,15 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
                 for mv, s in zip(out, shift_row_starts(old, beat, local, sw_t, delay)):
                     mv["start"] = round(s, 2)
                 routine["phaseLocal"] = [round(x, 2) for x in local]
+
+    # 行の頭を動かしたら、行の始まり・終わりの立ち位置も動かした後の窓で読み直す（README 50）。
+    # 上の sides は動かす前の窓で読んでいて、頭が 0.5 秒動くと、行の頭のすぐ後ろの入れ替わりを
+    # 「入れ替わった後」の側として拾い、その入れ替わりの前の側（正解の from）と食い違う。
+    # swapAt（行の中の入れ替わり）は触らない
+    if runs and any(round(o, 2) != mv["start"] for o, mv in zip(old_starts, out)):
+        for mv, sides in zip(out, move_sides(out, runs, crosses, beat, duration, swap_times_any(summary))):
+            mv["sides"]["followerStart"] = sides["followerStart"]
+            mv["sides"]["followerEnd"] = sides["followerEnd"]
 
     routine["phaseDelay"] = {"sec": round(delay, 3), "n": n_est, "source": "estimate" if n_est and delay != PHASE_CV_DELAY_SEC else "default"} if phase_ran else None
     routine["rawMoves"] = raw

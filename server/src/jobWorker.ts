@@ -138,7 +138,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
   // 写真を見れば間違えようがない意味判断を先に固定し、CVはそれを基準に色分け・帰属を行う。
   // claude 不在・判定不能なら null（CV の中央値多数決にフォールバック — 挙動は従来どおり）
   let leaderHint: string | null = null;
-  if (preset.useClaude && preset.cvSteps.length > 0) {
+  if (preset.stages.leaderAnchor && preset.useClaude && preset.cvSteps.length > 0) {
     try {
       const anchorDir = path.join(outDir, 'anchor');
       mkdirSync(anchorDir, { recursive: true });
@@ -175,7 +175,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     // 左右の入れ替わり（CBL）とターンの前後だけ 25〜30fps で骨格を取り直し、イベントの時刻・回転を決め直す
     // （refine_events.py。10fps の入れ替わりは本当の通過から 0〜1 秒遅れて揺れ、無音の動画のカウントがずれる）。
     // REFINE_EVENTS=1 のときだけ。追加時間は REFINE_BUDGET_SEC で打ち切る。失敗しても 10fps の値のまま続ける
-    if (REFINE_EVENTS && preset.cvSteps.some(s => s.script === 'analyze_pair.py') && existsSync(ctx.measurementsPath)) {
+    if (preset.stages.refineEvents && REFINE_EVENTS && preset.cvSteps.some(s => s.script === 'analyze_pair.py') && existsSync(ctx.measurementsPath)) {
       try {
         await runPython([
           path.resolve(__dirname, '../analysis/refine_events.py'),
@@ -189,7 +189,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     // ターンの回る向き・回転数を Claude に一覧画像で判定させ、自信 medium 以上なら CV の値を上書きする
     // （CV は右回りを左回りと読む誤りが片寄って出る。docs/salsa-knowledge/README.md 反映済み 11）。
     // 失敗・レート制限でも CV の値のまま続ける（レート制限なら後の裁定でも当たり、ジョブごと再試行される）
-    if (TURN_JUDGE && preset.useClaude && preset.cvSteps.some(s => s.script === 'analyze_pair.py') && existsSync(ctx.measurementsPath)) {
+    if (preset.stages.turnJudge && TURN_JUDGE && preset.useClaude && preset.cvSteps.some(s => s.script === 'analyze_pair.py') && existsSync(ctx.measurementsPath)) {
       try {
         const r = await judgeTurns({
           pythonBin: PYTHON_BIN,
@@ -208,7 +208,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     // ビート格子（ロードマップ③）: 音声を WAV 化して BPM・拍時刻を推定し、
     // measurements.json に beatGrid と各イベントの拍情報を書き加える。
     // 無音・リズム不明瞭でも解析全体は止めない（beatGrid: null になるだけ）
-    if (ffmpegPath && existsSync(ctx.measurementsPath)) {
+    if (preset.stages.beats && ffmpegPath && existsSync(ctx.measurementsPath)) {
       const audioPath = path.join(outDir, 'audio.wav');
       try {
         await new Promise<void>((resolve, reject) => {
@@ -222,8 +222,10 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
         // On1/On2 材料（ロードマップ⑥）: beatGrid にリーダーのブレークを畳み込んで
         // summary.onBeat（拍ヒストグラム・規則性）を書き足す。tracks.json 原盤から腰Xを読む。
         // beatGrid が無い/リズム不明瞭なら onBeat: null になるだけ（解析は止めない）
-        const tracksPath = ctx.measurementsPath.replace(/\.json$/, '.tracks.json');
-        await runPython([path.resolve(__dirname, '../analysis/analyze_onbeat.py'), tracksPath, ctx.measurementsPath], signal);
+        if (preset.stages.onBeat) {
+          const tracksPath = ctx.measurementsPath.replace(/\.json$/, '.tracks.json');
+          await runPython([path.resolve(__dirname, '../analysis/analyze_onbeat.py'), tracksPath, ctx.measurementsPath], signal);
+        }
       } catch (e) {
         console.warn(`[jobWorker] beat grid / onBeat skipped: ${e instanceof Error ? e.message : e}`);
       } finally {
@@ -234,7 +236,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     const extractScript = path.resolve(__dirname, '../analysis/extract_keyframes.py');
     // contested 区間があれば各区間の {始点・中間・終点} のキーフレームを書き出す（Claude 裁定用）
     const contested = readContested(ctx.measurementsPath);
-    if (contested.length > 0) {
+    if (preset.stages.contestedFrames && contested.length > 0) {
       const times = contested.flatMap(seg => [seg.from, (seg.from + seg.to) / 2, seg.to]);
       await runPython([extractScript, ctx.videoPath, keyframesDir, 'contested', ...times.map(t => t.toFixed(2))], signal);
     }
@@ -246,7 +248,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     if (events.length > capped.length) {
       console.log(`[jobWorker] event strips sampled: ${capped.length}/${events.length}`);
     }
-    if (capped.length > 0) {
+    if (preset.stages.eventStrips && capped.length > 0) {
       const stripScript = path.resolve(__dirname, '../analysis/make_strips.py');
       // 全フレーム再計測で回転の区間（spin.from〜to）が分かっていれば、その前後まで広げて切り出す
       const specs = capped.map(e => {
@@ -258,8 +260,10 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
       await runPython([stripScript, ctx.videoPath, keyframesDir, ...specs], signal);
     }
     // ROIデバッグ動画・骨格人形動画（mp4v）をブラウザ再生可能な H.264 へ変換
-    await transcodeDebugVideo(ctx.debugVideoRawPath, path.join(outDir, 'debug_roi.mp4'), signal);
-    await transcodeDebugVideo(ctx.skeletonVideoRawPath, path.join(outDir, 'skeleton.mp4'), signal);
+    if (preset.stages.debugVideos) {
+      await transcodeDebugVideo(ctx.debugVideoRawPath, path.join(outDir, 'debug_roi.mp4'), signal);
+      await transcodeDebugVideo(ctx.skeletonVideoRawPath, path.join(outDir, 'skeleton.mp4'), signal);
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     markJobError(job.id, signal.aborted ? `[TIMEOUT] CVパスがタイムアウトしました` : `[CV] ${msg}`);
@@ -269,13 +273,16 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
   // 4. Claude 判断（詳細設計 §6。CV計測を踏まえて contested を裁定しレポートを書く）
   if (preset.useClaude) {
     try {
-      const r = await runClaude(jobDir, job.spec_snapshot, signal);
+      const r = await runClaude(jobDir, job.spec_snapshot, signal, {
+        promptFile: preset.promptFile, copySalsaKnowledge: preset.copySalsaKnowledge,
+      });
       let normalized: string | null = null;
       if (r.resultJson) {
-        normalized = await normalizeRoutine(job.id, ctx, signal, preset.defaultOnBeat);
-        await makeMoveFrames(job.id, ctx, signal);
+        if (preset.stages.normalizeRoutine) normalized = await normalizeRoutine(job.id, ctx, signal, preset.defaultOnBeat);
+        if (preset.stages.moveFrames) await makeMoveFrames(job.id, ctx, signal);
       }
-      const reportMd = (await withSceneFrames(job.id, ctx, r.reportMd, signal)) + debugVideoSection(job.id);
+      const reportBody = preset.stages.sceneFrames ? await withSceneFrames(job.id, ctx, r.reportMd, signal) : r.reportMd;
+      const reportMd = reportBody + debugVideoSection(job.id);
       const resultJson = normalized ?? r.resultJson
         ?? JSON.stringify({ pipeline: 'p2-claude', preset: job.preset, note: 'result.json 未生成（report.md のみ）' });
       markJobDone(job.id, resultJson, reportMd);

@@ -1835,13 +1835,83 @@ HOLD_SEG_MIN_SEC = 0.5  # ホールドタイムラインに載せる区間の最
 HOLD_MISS_TOLERANCE = 3  # 区間を切らずに許容する連続取りこぼしサンプル数（10fpsで0.3秒）
 
 
-def nearest_hold_pair(df, leader_pid):
-    """1フレームの最近接手首ペアを返す: ("L-R"等, 距離) or None"""
+# 手の左右を、COCO のラベルでなく本人の向き（顔が見えるか）から決める。
+# カメラを向いている人は画面の左の手が本人の右手、背中を向けている人は画面の左の手が本人の左手。
+# YOLOv8-pose は背中向きのとき左右が逆に付くことがある。向きは鼻・両目（kp0〜2）の信頼度で読み、
+# 読めない（横向き・どちらとも言えない）ときは COCO のラベルのまま
+HOLD_SIDE_BY_FACING = True
+HOLD_FACE_SEEN = 0.5   # 鼻・両目の全部がこれ以上なら「顔が見える＝正面」
+HOLD_FACE_HIDDEN = 0.3  # 鼻・両目の全部がこれ未満なら「顔が見えない＝背中」
+# 向きの時間平滑化: 前後 HOLD_FACING_WINDOW 個のコマの多数決（0 = コマごと）。
+# 向きは連続的にしか変わらないので、窓の中で顔の見え方が割れたら窓の多数派に寄せる
+HOLD_FACING_WINDOW = 0
+
+
+def person_facing(p):
+    """"front" / "back" / None（横向き・読めない）"""
+    k = p.get("kps")
+    if not k or len(k) < 3 or any(len(k[i]) < 3 for i in (0, 1, 2)):
+        return None
+    c = [k[i][2] for i in (0, 1, 2)]
+    if min(c) >= HOLD_FACE_SEEN:
+        return "front"
+    if max(c) < HOLD_FACE_HIDDEN:
+        return "back"
+    return None
+
+
+def hold_wrists(p, facing=None):
+    """本人の左右で見た手首 {"L","R"}。向きが読めて COCO と食い違うときだけ入れ替える"""
+    w = p["wrists"]
+    if not HOLD_SIDE_BY_FACING:
+        return w
+    if facing is None:
+        facing = person_facing(p)
+    if facing is None:
+        return w
+    # 画面の左にある手首を決める（両方取れたら x の小さい方。片方だけなら肩の中心より左か）
+    if w["L"] is not None and w["R"] is not None:
+        screen_left = "L" if w["L"][0] <= w["R"][0] else "R"
+    else:
+        k = p.get("kps")
+        one = "L" if w["L"] is not None else "R" if w["R"] is not None else None
+        if one is None or not k or len(k) < 7:
+            return w
+        cx = (k[5][0] + k[6][0]) / 2
+        screen_left = one if w[one][0] <= cx else ("R" if one == "L" else "L")
+    # 正面: 画面の左 = 本人の右手 / 背中: 画面の左 = 本人の左手
+    if (facing == "back") == (screen_left == "L"):
+        return w
+    return {"L": w["R"], "R": w["L"]}
+
+
+def smooth_facing(draw_frames, pid):
+    """pid の向きを前後の窓の多数決で平滑化して {フレーム位置: facing} を返す（読めないコマは窓の多数派）"""
+    raw = []
+    for df in draw_frames:
+        q = next((p for p in df["kept"] if p.get("pid") == pid), None)
+        raw.append(person_facing(q) if q is not None else None)
+    n, w = len(raw), HOLD_FACING_WINDOW
+    out = {}
+    for i in range(n):
+        seg = [x for x in raw[max(0, i - w):i + w + 1] if x is not None]
+        if not seg:
+            out[i] = None
+            continue
+        f, b = seg.count("front"), seg.count("back")
+        out[i] = "front" if f > b else "back" if b > f else raw[i]
+    return out
+
+
+def nearest_hold_pair(df, leader_pid, facing=None):
+    """1フレームの最近接手首ペアを返す: ("L-R"等, 距離) or None。
+    facing: {pid: 平滑化済みの向き}（省略ならコマごとに読む）"""
     by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
     if leader_pid not in by_pid or (1 - leader_pid) not in by_pid:
         return None
-    lw = by_pid[leader_pid]["wrists"]
-    fw = by_pid[1 - leader_pid]["wrists"]
+    facing = facing or {}
+    lw = hold_wrists(by_pid[leader_pid], facing.get(leader_pid))
+    fw = hold_wrists(by_pid[1 - leader_pid], facing.get(1 - leader_pid))
     best, best_rank = None, None
     for lk in ("L", "R"):
         for fk in ("L", "R"):
@@ -1852,6 +1922,24 @@ def nearest_hold_pair(df, leader_pid):
             if best is None or rank < best_rank:
                 best, best_rank = (f"{lk}-{fk}", d), rank
     return best
+
+
+_FACING_CACHE = {}
+
+
+def _facing_tables(draw_frames, leader_pid):
+    """平滑化した向きの表（draw_frames ごとに 1 回だけ作る）。窓 0 なら None（コマごと）"""
+    if not HOLD_SIDE_BY_FACING or HOLD_FACING_WINDOW <= 0:
+        return None
+    key = (id(draw_frames), len(draw_frames), HOLD_FACING_WINDOW, leader_pid, draw_frames[0]["kept"][0].get("pid") if draw_frames and draw_frames[0]["kept"] else None)
+    if key not in _FACING_CACHE:
+        _FACING_CACHE.clear()
+        _FACING_CACHE[key] = {pid: smooth_facing(draw_frames, pid) for pid in (0, 1)}
+    return _FACING_CACHE[key]
+
+
+def _facing_at(tables, i):
+    return None if tables is None else {pid: t.get(i) for pid, t in tables.items()}
 
 
 def hold_label_jp(pair):
@@ -1869,8 +1957,9 @@ def build_hold_timeline(draw_frames, leader_pid):
     if leader_pid is None:
         return []
     samples = []  # (t, pair or None)
-    for df in draw_frames:
-        best = nearest_hold_pair(df, leader_pid)
+    fac = _facing_tables(draw_frames, leader_pid)
+    for i, df in enumerate(draw_frames):
+        best = nearest_hold_pair(df, leader_pid, _facing_at(fac, i))
         samples.append((df["t"], best[0] if best is not None and best[1] < HOLD_DIST else None))
 
     segs = []
@@ -1901,10 +1990,11 @@ def detect_hold(draw_frames, t_center, leader_pid):
     if leader_pid is None:
         return None
     votes = {}
-    for df in draw_frames:
+    fac = _facing_tables(draw_frames, leader_pid)
+    for i, df in enumerate(draw_frames):
         if abs(df["t"] - t_center) > HOLD_WINDOW_SEC:
             continue
-        best = nearest_hold_pair(df, leader_pid)
+        best = nearest_hold_pair(df, leader_pid, _facing_at(fac, i))
         if best is not None and best[1] < HOLD_DIST:
             votes[best[0]] = votes.get(best[0], 0) + 1
     if not votes:

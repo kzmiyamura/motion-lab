@@ -40,5 +40,23 @@ class NearestHoldPair(unittest.TestCase):
         self.assertEqual(pair, "L-R")
 
 
+class HoldWristsByFacing(unittest.TestCase):
+    def kps(self, c):
+        return [(0.5, 0.3, c), (0.5, 0.3, c), (0.5, 0.3, c)] + [(0.5, 0.5, 1.0)] * 14
+
+    def test_back_swaps_when_coco_says_front(self):
+        # 背中向きなら画面の左の手 = 本人の左手。COCO が左手首を画面の右に付けていたら入れ替える
+        p = {"kps": self.kps(0.0), "wrists": {"L": (0.6, 0.5), "R": (0.4, 0.5)}}
+        self.assertEqual(ap.hold_wrists(p), {"L": (0.4, 0.5), "R": (0.6, 0.5)})
+
+    def test_front_keeps_coco_when_consistent(self):
+        p = {"kps": self.kps(0.9), "wrists": {"L": (0.6, 0.5), "R": (0.4, 0.5)}}
+        self.assertEqual(ap.hold_wrists(p), p["wrists"])
+
+    def test_unreadable_facing_keeps_coco(self):
+        p = {"kps": self.kps(0.4), "wrists": {"L": (0.6, 0.5), "R": (0.4, 0.5)}}
+        self.assertEqual(ap.hold_wrists(p), p["wrists"])
+
+
 if __name__ == "__main__":
     unittest.main()

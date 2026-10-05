@@ -877,6 +877,36 @@ class PhaseShiftTest(unittest.TestCase):
         swaps = [s + 7.5 * self.BEAT for s in starts]
         self.assertLessEqual(abs(phase_shift_beats(starts, self.BEAT, swaps)), PHASE_MAX_SHIFT)
 
+    def test_explicit_delay_moves_target(self):
+        # delay を渡すと目標が delay / 拍 だけ動く（既定 PHASE_CV_DELAY_SEC と同じ値なら同じ）
+        from normalize_routine import PHASE_CV_DELAY_SEC, PHASE_PASS_BEAT, phase_shift_beats
+        starts = [k * 8 * self.BEAT for k in range(10)]
+        swaps = [s + (PHASE_PASS_BEAT + 1.0) * self.BEAT + 0.2 for s in starts]
+        self.assertAlmostEqual(phase_shift_beats(starts, self.BEAT, swaps, 0.2), 1.0, places=3)
+        self.assertAlmostEqual(phase_shift_beats(starts, self.BEAT, swaps, PHASE_CV_DELAY_SEC),
+                               phase_shift_beats(starts, self.BEAT, swaps), places=6)
+
+    def test_cv_delay_estimate(self):
+        # 腰の X の差が tCross の 0.2 秒前に 0 を横切る合成の tracks から、遅れ 0.2 秒を読む
+        from normalize_routine import PHASE_DELAY_MIN_N, cv_delay_estimate
+        swaps = [2.0 + 3.0 * k for k in range(6)]
+        frames = []
+        for k, tc in enumerate(swaps):
+            z = tc - 0.2            # 本当の通過
+            for dt in (-0.4, -0.3, 0.2, 0.3):   # 通過の前後（直前コマ z-0.3 → 直後コマ z+0.4 = tc+0.2 で 0 を挟む）
+                t = round(z + dt, 3)
+                x = (t - z)
+                frames.append({"t": t, "kept": [{"pid": 0, "hipX": 0.5 + x}, {"pid": 1, "hipX": 0.5}]})
+        tr = {"frames": sorted(frames, key=lambda f: f["t"])}
+        d, n = cv_delay_estimate(tr, swaps)
+        self.assertEqual(n, 6)
+        self.assertIsNotNone(d)
+        self.assertGreaterEqual(n, PHASE_DELAY_MIN_N)
+        self.assertAlmostEqual(d, 0.2, delta=0.06)
+        # 件数が足りない・tracks が無いときは None（呼び出し側は PHASE_CV_DELAY_SEC に戻る）
+        self.assertIsNone(cv_delay_estimate(tr, swaps[:2])[0])
+        self.assertEqual(cv_delay_estimate(None, swaps), (None, 0))
+
     def test_rows_keep_their_passes(self):
         from normalize_routine import PHASE_CV_DELAY_SEC, PHASE_ROW_AFTER, PHASE_ROW_BEFORE, shift_row_starts
         starts = [0.0, 2.4, 4.8]
@@ -913,6 +943,51 @@ class PhaseShiftTest(unittest.TestCase):
         self.assertTrue(counts)
         mean = sum(counts) / len(counts)
         self.assertTrue(1.5 <= mean <= 3.5, mean)
+
+
+class PhaseLocalTest(unittest.TestCase):
+    """通過ごとの局所補正（README 42。既定 off）"""
+
+    BEAT = 0.3
+
+    def setUp(self):
+        import normalize_routine as nr
+        self.nr = nr
+        self._old = nr.PHASE_LOCAL
+        nr.PHASE_LOCAL = True
+
+    def tearDown(self):
+        self.nr.PHASE_LOCAL = self._old
+
+    def test_default_off(self):
+        self.nr.PHASE_LOCAL = False
+        starts = [k * 8 * self.BEAT for k in range(4)]
+        self.assertIsNone(self.nr.phase_local_shifts(starts, self.BEAT, [starts[1] + 1.0]))
+
+    def test_per_row_shift_and_interpolation(self):
+        nr, b = self.nr, self.BEAT
+        starts = [k * 8 * b for k in range(5)]
+        want = nr.PHASE_PASS_BEAT * b + nr.PHASE_CV_DELAY_SEC
+        # 行 0 は 1 拍遅い、行 4 は 1 拍早い。間の行は通過なしで内挿
+        swaps = [starts[0] + want + 1.0 * b, starts[4] + want - 1.0 * b]
+        out = nr.phase_local_shifts(starts, b, swaps)
+        self.assertAlmostEqual(out[0], 1.0, places=3)
+        self.assertAlmostEqual(out[4], -1.0, places=3)
+        self.assertAlmostEqual(out[2], 0.0, places=3)
+
+    def test_clamped_and_none_without_swaps(self):
+        nr, b = self.nr, self.BEAT
+        starts = [k * 8 * b for k in range(3)]
+        self.assertIsNone(nr.phase_local_shifts(starts, b, []))
+        out = nr.phase_local_shifts(starts, b, [starts[1] + (nr.PHASE_PASS_BEAT + 3.5) * b + nr.PHASE_CV_DELAY_SEC])
+        self.assertLessEqual(max(out), nr.PHASE_LOCAL_MAX)
+
+    def test_shift_row_starts_accepts_list(self):
+        nr, b = self.nr, self.BEAT
+        starts = [k * 8 * b for k in range(3)]
+        new = nr.shift_row_starts(starts, b, [0.5, 0.5, 0.5], [])
+        for s, n in zip(starts, new):
+            self.assertAlmostEqual(n - s, 0.5 * b, places=3)
 
 
 if __name__ == "__main__":

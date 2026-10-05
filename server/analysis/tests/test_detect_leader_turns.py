@@ -161,3 +161,25 @@ def with_follower(fr, raised, pid=1):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeaderTurnReadme45Test(unittest.TestCase):
+    """README 45: 反転の間隔 1.5 → 2.0 秒（遅い回転）。1.5 秒を超える回転には随伴フィルタを当てない"""
+
+    SLOW = [(0.1, SIDE, -1), (0.1, -SIDE, -1), (1.7, BACK, 0), (0.1, -SIDE, 1), (0.1, SIDE, 1)]  # 反転の間隔 約 1.9 秒
+
+    def slow(self):
+        return frames([(1.0, FRONT, F)] + self.SLOW + [(1.0, FRONT, F)])
+
+    def test_slow_turn_under_two_seconds_is_found(self):
+        turns = ap.detect_leader_turns(self.slow(), 0, [], [])
+        self.assertEqual([spin["seq"] for _, _, spin in turns], ["RR"])
+
+    def test_slow_turn_is_not_a_companion_rotation(self):
+        # 女性のターン（同じ向き）が近くにあっても、女性のターンより遅い回転は連れ回りではない
+        self.assertEqual(len(ap.detect_leader_turns(self.slow(), 0, [], [2.1], follower_turn_dirs={2.1: 1})), 1)
+
+    def test_turn_over_window_is_still_dropped(self):
+        seg = [(0.1, SIDE, -1), (0.1, -SIDE, -1), (2.3, BACK, 0), (0.1, -SIDE, 1), (0.1, SIDE, 1)]
+        f = frames([(1.0, FRONT, F)] + seg + [(1.0, FRONT, F)])
+        self.assertEqual(ap.detect_leader_turns(f, 0, [], []), [])

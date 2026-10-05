@@ -19,6 +19,8 @@ export type FlipFrame = {
   key?: boolean;
   /** 拍の間（「&」）のコマ（サーバーの flip[].half。count は直前の拍）。古い flip[]（1 拍 1 コマ）には無い */
   half?: boolean;
+  /** 1/4・3/4 拍のコマ（half で label が空）。見出しは出さず直前の拍の字を保つ */
+  quarter?: boolean;
   strip?: { n: number; i: number; tileW: number; gap: number };
 };
 
@@ -55,6 +57,7 @@ function parseShot(raw: unknown, resolve: (u: string) => string): FlipFrame | nu
   if (f.half === true) {
     out.half = true;
     if (out.label === AND_LABEL) delete out.label; // 「&」は字の方（frameCaption）で出す
+    else if (!out.label) out.quarter = true; // 1/4・3/4 のコマ（label 無しの half）。見出しは直前の拍のまま
   }
   return out;
 }
@@ -212,9 +215,16 @@ export function loopTime(m: number, win: MoveWindow): number {
 }
 
 /** コマのカウントの字: 拍の上は「2」、拍の間は「2&」（直前の拍が分からなければ「&」） */
-export function frameCount(f: Pick<FlipFrame, 'count' | 'half'>): string {
-  if (f.half) return `${f.count ?? ''}${AND_LABEL}`;
+export function frameCount(f: Pick<FlipFrame, 'count' | 'half' | 'quarter'>): string {
+  if (f.half && !f.quarter) return `${f.count ?? ''}${AND_LABEL}`;
   return f.count ? String(f.count) : '';
+}
+
+/** 見出しに使うコマの位置。1/4・3/4 のコマ（quarter）は直前の拍・「&」のコマの見出しを保つ（ちらつかせない） */
+export function captionIndex(frames: Pick<FlipFrame, 'quarter'>[], i: number): number {
+  let k = Math.min(Math.max(i, 0), frames.length - 1);
+  while (k > 0 && frames[k].quarter) k--;
+  return k;
 }
 
 /**
@@ -227,7 +237,7 @@ export function frameLabel(f: Pick<FlipFrame, 'label'>, i = -1, startPos: string
 }
 
 /** コマの大きな字（「2 通過」「2&」）。カウントも説明も無ければ空 */
-export function frameCaption(f: Pick<FlipFrame, 'count' | 'label' | 'half'>, i = -1, startPos: string | null = null): string {
+export function frameCaption(f: Pick<FlipFrame, 'count' | 'label' | 'half' | 'quarter'>, i = -1, startPos: string | null = null): string {
   return [frameCount(f), frameLabel(f, i, startPos)].filter(Boolean).join(' ');
 }
 

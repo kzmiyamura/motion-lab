@@ -28,16 +28,16 @@ BEAT = 0.32
 
 
 class FlipTimesTest(unittest.TestCase):
-    def test_one_frame_per_half_beat_for_one_eight(self):
+    def test_one_frame_per_quarter_beat_for_one_eight(self):
         out = flip_times(0.0, 8 * BEAT, BEAT, 8, [])
-        self.assertEqual(len(out), 16)
-        # 1, 1&, 2, 2& … 8, 8&（& は直前の拍・label「&」・half）
-        self.assertEqual([o[1] for o in out], [c for c in range(1, 9) for _ in (0, 1)])
+        self.assertEqual(len(out), 32)
+        # 1, 1(1/4), 1&, 1(3/4), 2 … （1/4・3/4 は直前の拍・label 空・half、& は label「&」・half）
+        self.assertEqual([o[1] for o in out], [c for c in range(1, 9) for _ in range(4)])
         for k, o in enumerate(out):
-            self.assertAlmostEqual(o[0], k * BEAT / 2)
+            self.assertAlmostEqual(o[0], k * BEAT / 4)
             self.assertFalse(o[3])
-            self.assertEqual(o[4], k % 2 == 1)
-            self.assertEqual(o[2], AND_LABEL if k % 2 else "")
+            self.assertEqual(o[4], k % 4 != 0)
+            self.assertEqual(o[2], AND_LABEL if k % 4 == 2 else "")
 
     def test_key_moments_are_merged_and_win_over_close_beats(self):
         keys = [(0.0, 1, "スタート"), (4.1 * BEAT, 5, "通過"), (6.75 * BEAT, 7, "右回り中")]
@@ -47,12 +47,14 @@ class FlipTimesTest(unittest.TestCase):
         # 拍 0（スタートと重なる）と拍 4（通過の 0.1 拍前）は見どころに置き換わる
         self.assertEqual(sum(1 for o in out if abs(o[0]) < 1e-9), 1)
         self.assertFalse(any(not o[3] and abs(o[0] - 4 * BEAT) < 1e-9 for o in out))
-        # 6.75 拍目は 6.5・7 拍目から 0.25 拍離れているので、どちらのコマも残る
+        # 6.75 拍目（1/4 刻みの上）は見どころに置き換わり、6.5・7 拍目のコマは残る
+        self.assertFalse(any(not o[3] and abs(o[0] - 6.75 * BEAT) < 1e-9 for o in out))
         self.assertTrue(any(not o[3] and abs(o[0] - 6.5 * BEAT) < 1e-9 for o in out))
         self.assertTrue(any(not o[3] and abs(o[0] - 7 * BEAT) < 1e-9 for o in out))
         labels = [o[2] for o in out if o[3]]
         self.assertEqual(labels, ["スタート", "通過", "右回り中"])
-        self.assertEqual(len(out), 16 - 2 + 3)
+        # 32 コマのうち 拍 0・拍 4・6.75 の 3 コマが外れ、見どころ 3 が入る
+        self.assertEqual(len(out), 32 - 3 + 3)
         self.assertFalse(any(o[4] for o in out if o[3]))  # 見どころは & にしない
 
     def test_without_beat_only_key_moments(self):
@@ -71,13 +73,13 @@ class FlipTimesTest(unittest.TestCase):
         self.assertEqual(sum(1 for o in out if o[3]), 5)
 
     def test_sixteen_counts_drop_and_frames_before_beats(self):
-        # 24 拍: 半拍で 49 コマ＋見どころ 5 > 上限 → & から間引き、拍のコマは残る
+        # 24 拍: 1/4 拍で 97 コマ＋見どころ 5 > 上限 → 1/4 → & の順に間引き、拍のコマは残る
         keys = [(k * 0.9 + 0.13, None, f"k{k}") for k in range(5)]
         out = flip_times(0.0, 24 * BEAT + 0.05, BEAT, 24, keys)
         self.assertEqual(len(out), FLIP_MAX_FRAMES)
         beats = [o for o in out if not o[3] and not o[4]]
         self.assertGreaterEqual(len(beats), 25 - 5)  # 見どころと重なった拍だけ抜ける
-        self.assertTrue(any(o[4] for o in out))
+        self.assertTrue(any(o[4] and o[2] == AND_LABEL for o in out))
         self.assertEqual(sum(1 for o in out if o[3]), 5)
 
     def test_flip_label_uses_on2_words_for_beat_frames(self):
@@ -145,10 +147,11 @@ class FlipEndToEndTest(unittest.TestCase):
         self.assertEqual(len(idx["moves"]), 2)
         for m in idx["moves"]:
             self.assertEqual(len(m["frames"]), 5)   # 見どころのコマは今までどおり
-            self.assertGreaterEqual(len(m["flip"]), 14)   # 半拍に 1 コマ
+            self.assertGreaterEqual(len(m["flip"]), 28)   # 1/4 拍に 1 コマ
             halves = [s for s in m["flip"] if s.get("half")]
-            self.assertGreaterEqual(len(halves), 6)
-            self.assertTrue(all(s["label"] == "&" for s in halves))
+            self.assertGreaterEqual(len(halves), 12)
+            self.assertTrue(all(s["label"] in ("&", "") for s in halves))
+            self.assertTrue(any(s["label"] == "&" for s in halves))
             ts = [s["t"] for s in m["flip"]]
             self.assertEqual(ts, sorted(ts))
             for s in m["flip"]:

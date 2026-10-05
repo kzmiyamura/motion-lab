@@ -355,45 +355,52 @@ def labeled_frames(mv, t0, t1, beat, series, crosses, events):
 
 # ─── めくり（パラパラ漫画）用の密なコマ ─────────────────────────────────────────
 # アプリの「めくり」表示は、上半分で技のコマをパラパラ漫画のように流す。見どころ 5 コマだけでは
-# 動きが飛ぶので、半拍に 1 コマ（1, &, 2, & … 1×8 なら 16 コマ）＋見どころのコマを、小さめの JPEG で別に作る（flip[]）。
-# 「&」のコマは half=true・count=直前の拍・label="&"（古いフロントでも「1 &」と出る）。
+# 動きが飛ぶので、1/4 拍に 1 コマ（1×8 なら 32 コマ）＋見どころのコマを、小さめの JPEG で別に作る（flip[]）。
+# 「&」のコマは half=true・count=直前の拍・label="&"。1/4・3/4 のコマは half=true・count=直前の拍・label=""。
 # frames[]（見どころ・カード用）はそのまま残す
 FLIP_W, FLIP_H = 360, 540     # 1コマ（2:3）。スマホの上半分に出すには十分で、1枚 20〜40KB 程度
 FLIP_JPEG_QUALITY = 72
-FLIP_MIN_GAP_BEATS = 0.2      # 拍・& のコマと見どころのコマがこれ（拍）より近ければ、拍のコマは取らない
-FLIP_MAX_FRAMES = 40          # 長い技（16 カウント超）でも作りすぎない
+FLIP_MIN_GAP_BEATS = 0.12     # 拍・&・1/4 のコマと見どころのコマがこれ（拍。1/4 刻みの半分弱）より近ければ、拍のコマは取らない
+FLIP_MAX_FRAMES = 80          # 長い技（16 カウント超）でも作りすぎない（8 カウント = 32 コマ）
 AND_LABEL = "&"
 
 
 def flip_times(t0, t1, beat, counts, keys):
     """めくり用のコマの時刻 [(t, count, label, is_key, half)]（時刻順）。
-    - 拍のコマ: 技の頭から半拍ごと（区間の終わりの少し手前まで）。拍の上は On2 の拍の言葉（無ければ空）、
-      拍の間（&）は half=True・count は直前の拍・label は「&」
+    - 拍のコマ: 技の頭から 1/4 拍ごと（区間の終わりの少し手前まで）。拍の上は On2 の拍の言葉（無ければ空）、
+      1/2（&）は half=True・count は直前の拍・label は「&」、
+      1/4 と 3/4 は half=True・count は直前の拍・label は空（見出しは直前の拍のまま保つ）
     - 見どころのコマ: keys = labeled_frames の [(t, count, label)]。拍のコマと近いときは見どころを残す
     beat が無ければ見どころだけ"""
     end = max(t0, t1 - 0.05)
     out = [(float(t), c, label or "", True, False) for t, c, label in keys]
     if beat and beat > 0:
-        half_beat = beat / 2
-        n = int(math.floor((end - t0) / half_beat + 1e-6)) + 1
+        step = beat / 4
+        n = int(math.floor((end - t0) / step + 1e-6)) + 1
         gap = FLIP_MIN_GAP_BEATS * beat
         for k in range(n):
-            t = t0 + k * half_beat
+            t = t0 + k * step
             if t > end + 1e-6:
                 break
             if any(abs(t - kt) < gap for kt, *_ in keys):
                 continue
-            if k % 2 == 0:
+            # 直前の拍（count_of は最寄りの拍なので、拍の頭の時刻で数える）
+            cnt = count_of(t0 + (k // 4) * beat, t0, beat, counts)
+            if k % 4 == 0:
                 out.append((t, count_of(t, t0, beat, counts), "", False, False))
+            elif k % 4 == 2:
+                out.append((t, cnt, AND_LABEL, False, True))
             else:
-                # 直前の拍（count_of は最寄りの拍なので、半拍手前の時刻で数える）
-                out.append((t, count_of(t - half_beat, t0, beat, counts), AND_LABEL, False, True))
+                out.append((t, cnt, "", False, True))
     out.sort(key=lambda x: x[0])
     if len(out) > FLIP_MAX_FRAMES:
-        # 「&」のコマから間引き、まだ多ければ拍のコマを 1 つおきに（見どころは残す）
+        # 1/4 のコマ → 「&」のコマの順に間引き、まだ多ければ拍のコマを 1 つおきに（見どころは残す）
         over = len(out) - FLIP_MAX_FRAMES
-        and_pos = [i for i, o in enumerate(out) if not o[3] and o[4]]
-        drop = set(and_pos[:over])
+        quarter_pos = [i for i, o in enumerate(out) if not o[3] and o[4] and o[2] != AND_LABEL]
+        and_pos = [i for i, o in enumerate(out) if not o[3] and o[4] and o[2] == AND_LABEL]
+        drop = set(quarter_pos[:over])
+        if len(drop) < over:
+            drop |= set(and_pos[:over - len(drop)])
         if len(drop) < over:
             beat_pos = [i for i, o in enumerate(out) if not o[3] and not o[4]]
             drop |= set(beat_pos[1::2][:over - len(drop)])
@@ -435,7 +442,7 @@ def make_flip(cap, mv, t0, t1, beat, keys, frames, pids, global_box, out_dir, ur
         name = f"{stem}_f{len(shots):02d}.jpg"
         cv2.imwrite(os.path.join(out_dir, name), render_flip_tile(frame, crop),
                     [cv2.IMWRITE_JPEG_QUALITY, FLIP_JPEG_QUALITY])
-        shot = {"t": round(t, 2), "url": f"{url_prefix}/{name}", "label": flip_label(mv, count, label)}
+        shot = {"t": round(t, 2), "url": f"{url_prefix}/{name}", "label": label if half else flip_label(mv, count, label)}
         if count is not None:
             shot["count"] = count
         if is_key:

@@ -10,7 +10,7 @@ import { getJobDetail } from '../engine/homeServer';
 import { ReportModal } from '../components/ReportModal';
 import { parseChoreoSheet, type ChoreoSheetData, type SheetRow } from '../engine/choreoSheet';
 import {
-  clampPage, dragOffset, frameAt, frameBeats, frameCaption, frameDurationsMs, frameSpans, keyStep, loadReportView,
+  captionIndex, clampPage, dragOffset, frameAt, frameBeats, frameCaption, frameDurationsMs, frameSpans, keyStep, loadReportView,
   loopTime, moveWindow, pageLabel, parseFlipIndex, preloadUrls, rowCounts, saveReportView, sourceFromFrameSet,
   splitStrip, stripTileCount, swipeStep, VIEW_STORAGE_KEY, type FlipFrame,
   FLIP_SPEEDS, SPEED_STORAGE_KEY, loadFlipSpeed, saveFlipSpeed,
@@ -174,6 +174,25 @@ describe('めくり: index.json の読み取り（v1 / v2 / flip）', () => {
     expect(frameCaption(fr[1])).toBe('1&');
     expect(fr[2].half).toBeUndefined();
     expect(frameCaption(fr[2])).toBe('2 男が下がる');
+  });
+
+  it('1/4 拍の flip[]: label 空の half は quarter。見出しは直前の拍のまま、速さは時刻差で変わらない', () => {
+    const json = { moves: [{ index: 0, start: 0.1, flip: [
+      { t: 0.1, url: '/f0.jpg', count: 1, label: '男が下がる' },
+      { t: 0.18, url: '/f1.jpg', count: 1, label: '', half: true },
+      { t: 0.26, url: '/f2.jpg', count: 1, label: '&', half: true },
+      { t: 0.34, url: '/f3.jpg', count: 1, label: '', half: true },
+      { t: 0.42, url: '/f4.jpg', count: 2, label: '' },
+    ] }] };
+    const fr = parseFlipIndex(json, rows).get(0)!.frames;
+    expect(fr[1]).toMatchObject({ count: 1, half: true, quarter: true });
+    expect(fr[2].quarter).toBeUndefined();
+    expect(frameCaption(fr[1])).toBe('1');
+    expect(frameCaption(fr[2])).toBe('1&');
+    expect([1, 2, 3, 4].map(i => captionIndex(fr, i))).toEqual([0, 2, 2, 4]);
+    // 倍の密度でも 1 コマの出ている時間は時刻差どおり（1 拍 = 0.32 秒なら 1/4 拍 = 0.08 秒 → 0.25 倍で 320ms）
+    const q: FlipFrame[] = Array.from({ length: 32 }, (_, k) => ({ url: `q${k}`, t: 10 + (k * BEAT) / 4 }));
+    expect(frameDurationsMs(frameSpans(q, { start: 10, end: 10 + 8 * BEAT }, BEAT), 0.25).map(Math.round)[0]).toBe(320);
   });
 
   it('開始時刻が食い違う（routine が書き直された）行・知らない行は使わない', () => {

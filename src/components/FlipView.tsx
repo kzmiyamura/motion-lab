@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import type { ChoreoSheetData, MoveFrameSet, SheetRow } from '../engine/choreoSheet';
 import {
-  FLIP_SPEEDS, clampPage, dragOffset, frameAt, frameCaption, frameCount, frameLabel, frameSpans, keyStep, loadFlipSpeed, loopTime,
+  FLIP_SPEEDS, clampPage, dragOffset, captionIndex, frameAt, frameCaption, frameCount, frameLabel, frameSpans, keyStep, loadFlipSpeed, loopTime,
   moveWindow, pageLabel, parseFlipIndex, preloadUrls, saveFlipSpeed, sourceFromFrameSet, splitStrip, swipeStep,
   type FlipFrame, type FlipSource, type FlipSpeed, type MoveWindow,
 } from '../engine/flipView';
@@ -203,9 +203,12 @@ function Flipbook({ row, source, beatSec, speed, onSpeed, clicks, onClicks, time
 
   const cur = frames[Math.min(idx, frames.length - 1)];
   const curIdx = Math.min(idx, frames.length - 1);
-  const caption = cur ? frameCaption(cur, curIdx, row.startPos) : '';
-  const countWord = cur ? frameCount(cur) : '';
-  const labelWord = cur ? frameLabel(cur, curIdx, row.startPos) : '';
+  // 1/4 拍のコマは見出しを直前の拍のまま保つ
+  const capIdx = cur ? captionIndex(frames, curIdx) : 0;
+  const capFrame = cur ? frames[capIdx] : undefined;
+  const caption = capFrame ? frameCaption(capFrame, capIdx, row.startPos) : '';
+  const countWord = capFrame ? frameCount(capFrame) : '';
+  const labelWord = capFrame ? frameLabel(capFrame, capIdx, row.startPos) : '';
 
   return (
     <div className={styles.flipbook}>

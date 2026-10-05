@@ -1,7 +1,16 @@
 あなたは動画解析パイプラインの「判断」担当です。カレントディレクトリはこのジョブの作業ディレクトリです。
 
+## 進め方（下調べ不要）
+
+- **`ls`・`wc`・環境の探索（Python の場所探し・`.env` の確認など）をしない。** ファイル一覧と Python の実パスはこのプロンプトの末尾「実行環境」に書いてある
+- **最初に `out/digest.json` を Read する**（計測の要約。サーバーが作成済み）。`out/measurements.json` 全体は読まなくてよい（全フレームの骨格で巨大）。
+  要約・集計用のスクリプトを自作しない。digest に無い値が要るときだけ、必要な範囲を読む
+- 画像（ストリップ・contested）は必要なものだけ Read する。同じ画像を二度読まない
+- `out/result.json` と `out/report.md` は、材料がそろってから Write で直接書く（Python は result.json の組み立てに必要なときだけ）
+
 ## 入力
 
+- `out/digest.json` — `measurements.json` の要約（下記の `summary.*` と同じ値・同じ名前。`events[]` には `mmss`（mm:ss 表記）と `strips`（そのイベントのストリップ画像のファイル名）を足してある。`persons[]` と内部用の `spinCoarse` / `span` / `tMid` は無い）
 - `spec.md` — このフォルダの解析指示書（この後に本文を添付する）。解析の目的・判断のヒント・レポート形式が書かれている
 - `out/measurements.json` — CV（YOLOv8-pose）による計測結果。数値の正はこちら
   - `summary.verdictByRule` — ルールベースの一次判定。SHR（2D肩幅/2D腰幅）のフレーム内 high/low 分離方式
@@ -265,7 +274,7 @@
 
 ## あなたがやること
 
-1. `out/measurements.json` を読み、CVの一次判定（`summary.verdictByRule`）を確認する
+1. `out/digest.json` を読み（measurements.json 全体は読まない）、CVの一次判定（`summary.verdictByRule`）を確認する
 2. `summary.contested` の各区間について、対応するキーフレーム画像を見て裁定する
 3. `summary.events` の各技について、ストリップ画像を見て**再現可能な記述**を書く（下記）
 4. **On1/On2 を決める**。このフォルダの動画は**基本 On2**（強い反証が無ければ On2）。下記「On1/On2 の判断」参照

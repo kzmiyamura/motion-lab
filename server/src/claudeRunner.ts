@@ -11,10 +11,12 @@
  *   識別は割れやすいので、判定に使った出力の末尾を必ずエラーメッセージに含める
  */
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recordClaudeUsageFromStdout } from './claudeUsage.js';
+import { writeDigest } from './digest.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,6 +30,7 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN ?? 'claude';
 const PROMPT_PATH = path.resolve(__dirname, '../prompts/runner-prompt.md');
 const ANCHOR_PROMPT_PATH = path.resolve(__dirname, '../prompts/anchor-prompt.md');
 const MAX_TURNS = process.env.CLAUDE_MAX_TURNS ?? '30';
+const PYTHON_BIN = process.env.PYTHON_BIN ?? 'python3';
 /**
  * 裁定役が必要なときだけ Read する技辞典・On2 の拍の資料（docs/salsa-knowledge）。
  * claude は cwd = jobDir・Read のみ許可で動くので、ジョブの作業ディレクトリの knowledge/ に写して渡す
@@ -47,6 +50,140 @@ function copyKnowledge(jobDir: string): void {
   } catch (e) {
     console.warn(`[claudeRunner] knowledge copy failed: ${(e as Error).message}`);
   }
+}
+
+/**
+ * claude CLI を「ジョブ専用の軽い文脈」で動かすための共通引数（`claude --help` 2.1.289 で確認済みのフラグのみ）。
+ *   --safe-mode                 CLAUDE.md（~/.claude/CLAUDE.md を含む）・skills・plugins・hooks・MCP・カスタムコマンドを無効化。
+ *                               認証・モデル・組み込みツール・--allowedTools の許可は通常どおり（ログインはそのまま使える）
+ *   --strict-mcp-config         --mcp-config 以外の MCP を読まない（safe-mode と二重で MCP のツール定義を文脈に載せない）
+ *   --disable-slash-commands    skills を無効化
+ *   --exclude-dynamic-system-prompt-sections  cwd・環境情報・git status をシステムプロンプトから外す
+ *   --tools <names>             使える組み込みツールをこの一覧だけにする（他のツールの定義を文脈に載せない）
+ * CLAUDE_SLIM=0 で従来どおり（フラグ無し）に戻せる。
+ */
+export function claudeSlimArgs(tools: string[]): string[] {
+  if (process.env.CLAUDE_SLIM === '0') return [];
+  return [
+    '--safe-mode',
+    '--strict-mcp-config',
+    '--disable-slash-commands',
+    '--exclude-dynamic-system-prompt-sections',
+    '--tools', tools.join(','),
+  ];
+}
+
+/** claude に渡す引数（プロンプトは stdin。argv にはフラグだけ） */
+export function buildClaudeArgs(kind: 'main' | 'anchor' | 'turnJudge', maxTurns: string): string[] {
+  const read = kind !== 'main';
+  return [
+    '-p',
+    '--allowedTools', read ? 'Read' : 'Bash(python*) Read Write',
+    ...claudeSlimArgs(read ? ['Read'] : ['Bash', 'Read', 'Write']),
+    '--max-turns', maxTurns,
+    '--output-format', 'json',
+  ];
+}
+
+/**
+ * claude の作業ディレクトリ置き場。リポジトリの外（OS の一時ディレクトリ）にする。
+ * ジョブの作業ディレクトリ（server/storage/analysis-jobs/<id>）はリポジトリ内なので、
+ * そこを cwd にすると上の階層の CLAUDE.md（リポジトリ直下・server/CLAUDE.md）が毎回の文脈に載る
+ */
+const WORK_ROOT = process.env.CLAUDE_WORK_ROOT ?? path.join(os.tmpdir(), 'motion-lab-claude');
+
+export function makeWorkdir(label: string, root: string = WORK_ROOT): string {
+  mkdirSync(root, { recursive: true });
+  return mkdtempSync(path.join(root, `${label.replace(/[^\w.-]/g, '_')}-`));
+}
+
+/** 作業場所を消す（失敗は無視。一時ディレクトリなので残っても害は無い） */
+export function removeWorkdir(dir: string): void {
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ }
+}
+
+/** 画像だけの作業フォルダ（anchor / turn_judge）を一時の作業場所へ写す */
+export function stageFlatDir(srcDir: string, label: string, root?: string): string {
+  const dst = makeWorkdir(label, root);
+  for (const f of readdirSync(srcDir)) cpSync(path.join(srcDir, f), path.join(dst, f), { recursive: true });
+  return dst;
+}
+
+/** 本解析で Claude に見せる out/ の中身。動画・コマ画像・原盤（tracks）は見せない */
+const OUT_SKIP_DIRS = new Set(['report_frames', 'move_frames', 'anchor', 'turn_judge']);
+
+export function stageJobDir(jobDir: string, root?: string): string {
+  const dst = makeWorkdir(path.basename(jobDir), root);
+  const specSrc = path.join(jobDir, 'spec.md');
+  if (existsSync(specSrc)) copyFileSync(specSrc, path.join(dst, 'spec.md'));
+  const knowledgeSrc = path.join(jobDir, 'knowledge');
+  if (existsSync(knowledgeSrc)) cpSync(knowledgeSrc, path.join(dst, 'knowledge'), { recursive: true });
+  const outSrc = path.join(jobDir, 'out');
+  if (existsSync(outSrc)) {
+    cpSync(outSrc, path.join(dst, 'out'), {
+      recursive: true,
+      filter: src => {
+        if (src === outSrc) return true;
+        const rel = path.relative(outSrc, src);
+        const top = rel.split(path.sep)[0];
+        if (OUT_SKIP_DIRS.has(top)) return false;
+        const base = path.basename(src);
+        return !(/\.mp4$/i.test(base) || /\.tracks\.json$/i.test(base) || /^audio\.wav$/i.test(base));
+      },
+    });
+  } else {
+    mkdirSync(path.join(dst, 'out'), { recursive: true });
+  }
+  return dst;
+}
+
+/** Claude が書いた成果物（report.md / result.json）を本来の out/ へ戻す */
+export function collectOutputs(workDir: string, jobDir: string): void {
+  const outDst = path.join(jobDir, 'out');
+  mkdirSync(outDst, { recursive: true });
+  for (const f of ['report.md', 'result.json']) {
+    const src = path.join(workDir, 'out', f);
+    if (existsSync(src)) copyFileSync(src, path.join(outDst, f));
+  }
+}
+
+export interface RunnerPromptInfo {
+  pythonBin: string;
+  /** 作業場所の out/digest.json があるか */
+  hasDigest: boolean;
+  /** 作業場所のファイル一覧（相対パス）。プロンプトに載せて ls を不要にする */
+  files: string[];
+}
+
+/** 作業場所の主なファイル（相対パス）。keyframes はファイル名が多いので digest 側に任せ、個数だけ書く */
+export function listWorkdirFiles(workDir: string): string[] {
+  const out: string[] = [];
+  const add = (rel: string) => { if (existsSync(path.join(workDir, rel))) out.push(rel); };
+  add('spec.md');
+  for (const f of ['digest.json', 'measurements.json', 'report.md', 'result.json']) add(`out/${f}`);
+  const kfDir = path.join(workDir, 'out', 'keyframes');
+  if (existsSync(kfDir)) out.push(`out/keyframes/ （JPEG ${readdirSync(kfDir).filter(f => /\.jpe?g$/i.test(f)).length} 枚。一覧は digest.json の events[].strips / contested[].frames / keyframes）`);
+  const knDir = path.join(workDir, 'knowledge');
+  if (existsSync(knDir)) for (const f of readdirSync(knDir)) out.push(`knowledge/${f}`);
+  return out;
+}
+
+/** 固定プロンプト + サーバーが埋めた実行環境 + spec.md 本文 */
+export function buildRunnerPrompt(basePrompt: string, specMarkdown: string, info: RunnerPromptInfo): string {
+  const env = [
+    '## 実行環境（サーバーが用意した情報。**下調べ不要。`ls` や環境の探索（Python の場所探し・`.env` の確認など）をしない**）',
+    '',
+    `- Python の実パス: \`${info.pythonBin}\`（Bash で python を使うときはこのパスをそのまま使う。探さない）`,
+    ...(info.hasDigest
+      ? ['- **最初に `out/digest.json` を Read する。** 計測の要約（判定・信頼度・拍・技の候補・手のつなぎ・contested・キーフレーム一覧）をサーバーが先に作ってある。' +
+         '`out/measurements.json` 全体（全フレームの骨格 `persons[]`）は読まなくてよい。要約に無い値が要るときだけ必要な範囲を読む',
+         '- 計算（集計・整形）は要約に済んでいる。自作の要約スクリプトを書かない']
+      : []),
+    '- 作業ディレクトリのファイル（これで全部）:',
+    ...info.files.map(f => `  - \`${f}\``),
+    '- 成果物は `out/result.json` と `out/report.md`（Write で直接書く。result.json の組み立てに Python スクリプトが要るときだけ上の python を使う）',
+  ].join('\n');
+  return `${basePrompt}\n\n${env}\n\n---\n\n${specMarkdown}`;
 }
 
 /** レート制限・使用量上限。リトライ（バックオフ）対象 */
@@ -75,13 +212,10 @@ function tailOf(stdout: string, stderr: string): string {
 export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise<string | null> {
   const promptText = readFileSync(ANCHOR_PROMPT_PATH, 'utf-8');
   return new Promise(resolve => {
-    const proc = spawn(CLAUDE_BIN, [
-      '-p',
-      '--allowedTools', 'Read',
-      '--max-turns', '10',
-      '--output-format', 'json',
-    ], {
-      cwd: anchorDir,
+    let workDir: string;
+    try { workDir = stageFlatDir(anchorDir, 'anchor'); } catch { return resolve(null); }
+    const proc = spawn(CLAUDE_BIN, buildClaudeArgs('anchor', '10'), {
+      cwd: workDir,
       env: { ...process.env },
       signal,
       shell: process.platform === 'win32',
@@ -91,8 +225,9 @@ export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise
     proc.stdin.on('error', () => { /* noop */ });
     proc.stdin.write(promptText);
     proc.stdin.end();
-    proc.on('error', () => resolve(null));
+    proc.on('error', () => { removeWorkdir(workDir); resolve(null); });
     proc.on('exit', code => {
+      removeWorkdir(workDir);
       const u = usageTargetOfSub(anchorDir);
       recordClaudeUsageFromStdout(u.outDir, u.jobId, 'anchor', stdout);
       if (code !== 0) return resolve(null);
@@ -143,13 +278,10 @@ export function runClaudeTurnJudge(stripDir: string, items: TurnJudgeItem[], sig
   const promptText = `${readFileSync(TURN_JUDGE_PROMPT_PATH, 'utf-8')}\n\n## 場面の一覧（${items.length} 件）\n\n${listing}\n`;
   const started = Date.now();
   return new Promise((resolve, reject) => {
-    const proc = spawn(CLAUDE_BIN, [
-      '-p',
-      '--allowedTools', 'Read',
-      '--max-turns', String(items.length + 10),
-      '--output-format', 'json',
-    ], {
-      cwd: stripDir,
+    let workDir: string;
+    try { workDir = stageFlatDir(stripDir, 'turnjudge'); } catch (e) { return reject(e as Error); }
+    const proc = spawn(CLAUDE_BIN, buildClaudeArgs('turnJudge', String(items.length + 10)), {
+      cwd: workDir,
       env: { ...process.env },
       signal,
       shell: process.platform === 'win32',
@@ -161,8 +293,9 @@ export function runClaudeTurnJudge(stripDir: string, items: TurnJudgeItem[], sig
     proc.stdin.on('error', () => { /* noop */ });
     proc.stdin.write(promptText);
     proc.stdin.end();
-    proc.on('error', err => reject(new ClaudeAuthError(`claude CLI を起動できません: ${err.message}`)));
+    proc.on('error', err => { removeWorkdir(workDir); reject(new ClaudeAuthError(`claude CLI を起動できません: ${err.message}`)); });
     proc.on('exit', code => {
+      removeWorkdir(workDir);
       const elapsedMs = Date.now() - started;
       const u = usageTargetOfSub(stripDir);
       recordClaudeUsageFromStdout(u.outDir, u.jobId, 'turnJudge', stdout);
@@ -202,21 +335,27 @@ export interface RunClaudeOptions {
   promptFile?: string;
   /** サルサ用の技辞典を knowledge/ に写すか（省略時 true = 従来どおり） */
   copySalsaKnowledge?: boolean;
+  /** out/digest.json を作って渡すか（省略時 true。measurements.json の形が salsa-pair 専用なので general は false） */
+  digest?: boolean;
 }
 
 export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSignal, opts: RunClaudeOptions = {}): Promise<ClaudeRunResult> {
   const promptPath = opts.promptFile ? path.resolve(__dirname, '../prompts', path.basename(opts.promptFile)) : PROMPT_PATH;
-  const promptText = `${readFileSync(promptPath, 'utf-8')}\n\n---\n\n${specMarkdown}`;
   if (opts.copySalsaKnowledge ?? true) copyKnowledge(jobDir);
 
+  // リポジトリ外の作業場所へ必要なファイルだけ写して、そこを cwd にする（CLAUDE.md を拾わせない）。
+  // 成果物（report.md / result.json）は終了後に jobDir/out へ戻す
+  const workDir = stageJobDir(jobDir);
+  if (opts.digest !== false) writeDigest(path.join(jobDir, 'out'), { pythonBin: PYTHON_BIN }, path.join(workDir, 'out'));
+  const promptText = buildRunnerPrompt(readFileSync(promptPath, 'utf-8'), specMarkdown, {
+    pythonBin: PYTHON_BIN,
+    hasDigest: existsSync(path.join(workDir, 'out', 'digest.json')),
+    files: listWorkdirFiles(workDir),
+  });
+
   return new Promise((resolve, reject) => {
-    const proc = spawn(CLAUDE_BIN, [
-      '-p',
-      '--allowedTools', 'Bash(python*) Read Write',
-      '--max-turns', MAX_TURNS,
-      '--output-format', 'json',
-    ], {
-      cwd: jobDir,
+    const proc = spawn(CLAUDE_BIN, buildClaudeArgs('main', MAX_TURNS), {
+      cwd: workDir,
       env: { ...process.env },
       signal,
       // Windows で claude が .cmd シムの場合 shell 経由でないと起動できない。
@@ -233,6 +372,7 @@ export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSig
     proc.stdin.end();
 
     proc.on('error', err => {
+      removeWorkdir(workDir);
       reject(new ClaudeAuthError(
         `claude CLI を起動できません（未インストールの可能性）: ${err.message}。` +
         `server/CLAUDE.md の手順で claude CLI を導入し、CLAUDE_BIN にパスを設定してください`,
@@ -240,6 +380,8 @@ export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSig
     });
 
     proc.on('exit', code => {
+      collectOutputs(workDir, jobDir);
+      removeWorkdir(workDir);
       // リトライでも 1 回ずつ記録する（失敗終了でもエンベロープが読めれば残す）
       recordClaudeUsageFromStdout(path.join(jobDir, 'out'), path.basename(jobDir), 'main', stdout);
       const combined = `${stdout}\n${stderr}`;

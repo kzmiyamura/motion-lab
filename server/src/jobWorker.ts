@@ -275,6 +275,7 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
     try {
       const r = await runClaude(jobDir, job.spec_snapshot, signal, {
         promptFile: preset.promptFile, copySalsaKnowledge: preset.copySalsaKnowledge,
+        digest: preset.cvSteps.some(s => s.script === 'analyze_pair.py'),
       });
       let normalized: string | null = null;
       if (r.resultJson) {

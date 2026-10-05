@@ -877,6 +877,36 @@ class PhaseShiftTest(unittest.TestCase):
         swaps = [s + 7.5 * self.BEAT for s in starts]
         self.assertLessEqual(abs(phase_shift_beats(starts, self.BEAT, swaps)), PHASE_MAX_SHIFT)
 
+    def test_explicit_delay_moves_target(self):
+        # delay を渡すと目標が delay / 拍 だけ動く（既定 PHASE_CV_DELAY_SEC と同じ値なら同じ）
+        from normalize_routine import PHASE_CV_DELAY_SEC, PHASE_PASS_BEAT, phase_shift_beats
+        starts = [k * 8 * self.BEAT for k in range(10)]
+        swaps = [s + (PHASE_PASS_BEAT + 1.0) * self.BEAT + 0.2 for s in starts]
+        self.assertAlmostEqual(phase_shift_beats(starts, self.BEAT, swaps, 0.2), 1.0, places=3)
+        self.assertAlmostEqual(phase_shift_beats(starts, self.BEAT, swaps, PHASE_CV_DELAY_SEC),
+                               phase_shift_beats(starts, self.BEAT, swaps), places=6)
+
+    def test_cv_delay_estimate(self):
+        # 腰の X の差が tCross の 0.2 秒前に 0 を横切る合成の tracks から、遅れ 0.2 秒を読む
+        from normalize_routine import PHASE_DELAY_MIN_N, cv_delay_estimate
+        swaps = [2.0 + 3.0 * k for k in range(6)]
+        frames = []
+        for k, tc in enumerate(swaps):
+            z = tc - 0.2            # 本当の通過
+            for dt in (-0.4, -0.3, 0.2, 0.3):   # 通過の前後（直前コマ z-0.3 → 直後コマ z+0.4 = tc+0.2 で 0 を挟む）
+                t = round(z + dt, 3)
+                x = (t - z)
+                frames.append({"t": t, "kept": [{"pid": 0, "hipX": 0.5 + x}, {"pid": 1, "hipX": 0.5}]})
+        tr = {"frames": sorted(frames, key=lambda f: f["t"])}
+        d, n = cv_delay_estimate(tr, swaps)
+        self.assertEqual(n, 6)
+        self.assertIsNotNone(d)
+        self.assertGreaterEqual(n, PHASE_DELAY_MIN_N)
+        self.assertAlmostEqual(d, 0.2, delta=0.06)
+        # 件数が足りない・tracks が無いときは None（呼び出し側は PHASE_CV_DELAY_SEC に戻る）
+        self.assertIsNone(cv_delay_estimate(tr, swaps[:2])[0])
+        self.assertEqual(cv_delay_estimate(None, swaps), (None, 0))
+
     def test_rows_keep_their_passes(self):
         from normalize_routine import PHASE_CV_DELAY_SEC, PHASE_ROW_AFTER, PHASE_ROW_BEFORE, shift_row_starts
         starts = [0.0, 2.4, 4.8]

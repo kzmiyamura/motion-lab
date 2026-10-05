@@ -412,10 +412,60 @@ PHASE_MIN_Z = 3.0          # 通過の位置の揃い方 z = n·R²（Rayleigh�
 PHASE_MAX_SHIFT = 2.0      # 補正の最大（拍。4.0 だと count は少し上がるが img1884 で cbl が 1 つ落ちる）
 
 
-def phase_shift_beats(starts, beat, swaps):
+PHASE_DELAY_EST = False    # CV の遅れを動画ごとに推定する（cv_delay_estimate）。README 41: 推定が正解から逆算した遅れと合わず既定は切る（True で試せる）
+PHASE_DELAY_MIN_N = 4      # 推定に使う入れ替わりの数の下限
+PHASE_DELAY_SPREAD = 0.2   # 各入れ替わりの推定のばらつき（中央絶対偏差、秒）がこれ以上なら信頼しない
+PHASE_DELAY_RANGE = (0.0, 0.5)   # 1 件ごとの推定の有効範囲（秒）。外れたものは捨てる
+PHASE_DELAY_MAX_GAP = 0.6  # 腰の X の並びが入れ替わった前後のコマの間隔の上限（秒。隠れが長いと補間できない）
+
+
+def cv_delay_estimate(tracks, swaps):
+    """CV の入れ替わり（腰の交差 tCross）が本当の通過より遅れる秒数を、動画の中の手がかりだけで推定する。
+    2 人の腰の X の差 dx が、tCross の直前の読めたコマ → 直後の読めたコマの間で 0 を横切る時刻を線形補間で求め、
+    tCross − その時刻の中央値（tCross は「入れ替わった後に 2 人とも見えた最初のコマ」なので補間の方が早い）。
+    戻り (遅れ, 件数)。信頼できない（件数・ばらつき・隠れが長い）ときは (None, 件数)"""
+    frames = (tracks or {}).get("frames") if isinstance(tracks, dict) else None
+    if not frames or not swaps:
+        return None, 0
+    ser = []
+    for f in frames:
+        p = {k.get("pid"): k.get("hipX") for k in f.get("kept") or [] if isinstance(k, dict) and _num(k.get("hipX"))}
+        if 0 in p and 1 in p and _num(f.get("t")):
+            ser.append((f["t"], p[0] - p[1]))
+    if len(ser) < 3:
+        return None, 0
+    ts = [s[0] for s in ser]
+    vals = []
+    for tc in swaps:
+        i = bisect.bisect_left(ts, tc - 0.05)   # tc 以後の最初のコマ（tc 自身を含む）
+        for j in range(min(i, len(ser) - 1), 0, -1):
+            if ts[j - 1] < tc - 1.5:
+                break
+            (t0, d0), (t1, d1) = ser[j - 1], ser[j]
+            if t1 > tc + 0.05 + 0.5:
+                continue
+            if d0 * d1 < 0 and t1 - t0 <= PHASE_DELAY_MAX_GAP:
+                z = t0 + (t1 - t0) * abs(d0) / (abs(d0) + abs(d1))
+                v = tc - z
+                if PHASE_DELAY_RANGE[0] <= v <= PHASE_DELAY_RANGE[1]:
+                    vals.append(v)
+                break
+    if len(vals) < PHASE_DELAY_MIN_N:
+        return None, len(vals)
+    vals.sort()
+    m = vals[len(vals) // 2] if len(vals) % 2 else (vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2
+    mad = sorted(abs(v - m) for v in vals)[len(vals) // 2]
+    if mad >= PHASE_DELAY_SPREAD:
+        return None, len(vals)
+    return m, len(vals)
+
+
+def phase_shift_beats(starts, beat, swaps, delay=None):
     """行の頭（starts、8 カウントの頭の時刻）から見た CV の入れ替わりの位置（8 拍周期の円周平均）が、On2 の期待の位置
-    （頭から PHASE_PASS_BEAT 拍 + CV の遅れ）に来るようにするための、行の頭を遅らせる拍数（−4〜+4）。
+    （頭から PHASE_PASS_BEAT 拍 + CV の遅れ delay 秒。None なら PHASE_CV_DELAY_SEC）に来るようにするための、行の頭を遅らせる拍数（−4〜+4）。
     入れ替わりが 8 カウントの同じ所に集まっていない（z < PHASE_MIN_Z）ときは補正できないので 0"""
+    if delay is None:
+        delay = PHASE_CV_DELAY_SEC
     if not PHASE_FIX or not swaps or not starts or not beat:
         return 0.0
     cs = []
@@ -430,7 +480,7 @@ def phase_shift_beats(starts, beat, swaps):
     if len(cs) * abs(z) ** 2 < PHASE_MIN_Z:
         return 0.0
     mean = (math.atan2(z.imag, z.real) / (2 * math.pi) * 8) % 8
-    target = (PHASE_PASS_BEAT + PHASE_CV_DELAY_SEC / beat) % 8
+    target = (PHASE_PASS_BEAT + delay / beat) % 8
     d = (mean - target + 4) % 8 - 4
     return max(-PHASE_MAX_SHIFT, min(PHASE_MAX_SHIFT, d))
 
@@ -439,15 +489,17 @@ PHASE_ROW_BEFORE = 1.0     # 行の頭は、その行の通過（CV の入れ替
 PHASE_ROW_AFTER = 1.5      # (0.5 だと img1884 で cbl が 1 つ落ちる） 行の頭は、前の行の通過の少なくともこの拍数後
 
 
-def shift_row_starts(starts, beat, shift, swaps):
+def shift_row_starts(starts, beat, shift, swaps, delay=None):
     """行の頭を shift 拍遅らせた時刻。ただし通過がその行から出ないよう、各行の頭は
     ・その行の最初の通過の PHASE_ROW_BEFORE 拍前より後にならず、
     ・前の行の最後の通過の PHASE_ROW_AFTER 拍後より前にならない
     （技はその通過が入る行に属する。補正前の格子で各通過がどの行にあるかで決める）。通過 = 入れ替わりの時刻 − CV の遅れ"""
-    est = [t - PHASE_CV_DELAY_SEC for t in swaps]
+    if delay is None:
+        delay = PHASE_CV_DELAY_SEC
+    est = [t - delay for t in swaps]
     per = [[] for _ in starts]
     for t in est:
-        i = bisect.bisect_right(starts, t + PHASE_CV_DELAY_SEC) - 1
+        i = bisect.bisect_right(starts, t + delay) - 1
         if i >= 0:
             per[i].append(t)
     new = []
@@ -1725,15 +1777,21 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
     # カウントの位相: 行の割り当て・行の中身の判定は上の格子のままにして、行の頭の時刻だけを通過の位置で補正する。
     # 音（audio / audio+dance の downbeat）で頭を決めたものは音が正しいので触らない
     phase_fix = 0.0
+    phase_ran = False
     if not (downbeat and downbeat.get("source") in ("audio", "audio+dance")):
         old = [m["start"] for m in out]
+        phase_ran = True
         sw_t = swap_times(summary)
-        phase_fix = phase_shift_beats(old, beat, sw_t)
+        delay, n_est = (cv_delay_estimate(tracks, sw_t) if PHASE_DELAY_EST else (None, 0))
+        if delay is None:
+            delay = PHASE_CV_DELAY_SEC
+        phase_fix = phase_shift_beats(old, beat, sw_t, delay)
         if phase_fix:
-            for mv, s in zip(out, shift_row_starts(old, beat, phase_fix, sw_t)):
+            for mv, s in zip(out, shift_row_starts(old, beat, phase_fix, sw_t, delay)):
                 mv["start"] = round(s, 2)
             phase += phase_fix * beat
 
+    routine["phaseDelay"] = {"sec": round(delay, 3), "n": n_est, "source": "estimate" if n_est and delay != PHASE_CV_DELAY_SEC else "default"} if phase_ran else None
     routine["rawMoves"] = raw
     routine["moves"] = out
     routine["timing"] = timing

@@ -257,7 +257,8 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
           ? `${base}:${(e.spin.from - 0.3).toFixed(2)}:${(e.spin.to + 0.4).toFixed(2)}`
           : base;
       });
-      await runPython([stripScript, ctx.videoPath, keyframesDir, ...specs], signal);
+      const tracksArg = `--tracks=${ctx.measurementsPath.replace(/\.json$/, '.tracks.json')}`;
+      await runPython([stripScript, ctx.videoPath, keyframesDir, tracksArg, ...specs], signal);
     }
     // ROIデバッグ動画・骨格人形動画（mp4v）をブラウザ再生可能な H.264 へ変換
     if (preset.stages.debugVideos) {

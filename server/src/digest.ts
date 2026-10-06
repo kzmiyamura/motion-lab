@@ -24,14 +24,17 @@ export interface DigestKeyframe {
   kind: 'turn' | 'cbl' | 'contested' | 'other';
   /** 21 コマを超える場面の続き（_strip_2.jpg 以降）なら 2 以降 */
   part: number;
+  /** 手のつなぎ・腕の形を読む詳細画像（_detail.jpg）なら true */
+  detail?: boolean;
 }
 
 /** out/keyframes の「<秒>_<種別>[_strip[_n]].jpg」を読む。読めないものは null */
 export function parseKeyframeName(file: string): DigestKeyframe | null {
-  const m = /^(\d+(?:\.\d+)?)_([a-z]+)(?:_strip(?:_(\d+))?)?\.jpg$/i.exec(file);
+  const m = /^(\d+(?:\.\d+)?)_([a-z]+)(?:_strip(?:_(\d+))?|(_detail))?\.jpg$/i.exec(file);
   if (!m) return null;
   const kind = m[2] === 'turn' || m[2] === 'cbl' || m[2] === 'contested' ? m[2] : 'other';
-  return { file, t: Number(m[1]), kind, part: m[3] ? Number(m[3]) : 1 };
+  const base: DigestKeyframe = { file, t: Number(m[1]), kind, part: m[3] ? Number(m[3]) : 1 };
+  return m[4] ? { ...base, detail: true } : base;
 }
 
 const DROP_EVENT_KEYS = new Set(['spinCoarse', 'span', 'tMid']);
@@ -55,9 +58,9 @@ export function buildDigest(measurements: Json, keyframes: DigestKeyframe[], env
   const events = Array.isArray(summary.events) ? (summary.events as Json[]) : [];
   const contested = Array.isArray(summary.contested) ? (summary.contested as Json[]) : [];
 
-  const stripsOf = (type: string, t: number): string[] =>
+  const stripsOf = (type: string, t: number, detail = false): string[] =>
     keyframes
-      .filter(k => k.kind === type.toLowerCase() && Math.abs(k.t - t) <= 0.06)
+      .filter(k => k.kind === type.toLowerCase() && Math.abs(k.t - t) <= 0.06 && !!k.detail === detail)
       .map(k => k.file);
 
   const slim = events.map(e => {
@@ -67,6 +70,8 @@ export function buildDigest(measurements: Json, keyframes: DigestKeyframe[], env
     o.mmss = mmss(t);
     const strips = stripsOf(String(e.type), t);
     if (strips.length) o.strips = strips;
+    const details = stripsOf(String(e.type), t, true);
+    if (details.length) o.detail = details[0];
     return o;
   });
 

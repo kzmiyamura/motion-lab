@@ -11,7 +11,8 @@ OpenCV のみ（extract_keyframes.py と同じ環境で動く）。
 Usage: python make_strips.py <video_path> <out_dir> [--tracks=<tracks.json>] <t>:<label>[:<from>:<to>] [...]
   --tracks があれば、各ストリップを2人の外接矩形（上25%・左右15%・下10%の余白、全コマ共通の和集合）で
   元の解像度のコマから切り取る（画素数は従来と同じか小さく、拡大は元画素の2倍まで、縦横比は変えない）。
-  取れないときは今までどおり全体。
+  取れないときは今までどおり全体。枠の辺は外れ値に強い分位点。端数のストリップは列数を詰める。
+  さらに --tracks があれば <秒>_<label>_detail.jpg（2人の上半身を大きく、0.3秒刻み6コマの3x2）も書く。
   各イベント時刻 t について [t-PRE_SEC, t+POST_SEC] を STEP_SEC 刻みで切り出す。
   from/to を指定すると、その範囲も含むように広げる（連続ターンが長いとき。最大 MAX_SPAN_SEC）。
 出力ファイル名: <秒を0埋め6桁+小数1桁>_<label>_strip.jpg（例: 000038.6_turn_strip.jpg）
@@ -64,8 +65,10 @@ def union_crop(tracks, t_from, t_to, w, h):
             boxes.extend(got.values())
     if total == 0 or len(boxes) / 2 < MIN_PAIR_RATIO * total:
         return None
-    x1 = min(b[0] for b in boxes); y1 = min(b[1] for b in boxes)
-    x2 = max(b[2] for b in boxes); y2 = max(b[3] for b in boxes)
+    # 1コマの外れ値（骨格の飛び・他人の混入）で枠が広がらないよう、各辺は分位点で決める
+    q = lambda vals, p: float(np.percentile(vals, p))
+    x1 = q([b[0] for b in boxes], 10); x2 = q([b[2] for b in boxes], 90)
+    y1 = q([b[1] for b in boxes], 5); y2 = q([b[3] for b in boxes], 95)
     bw, bh = (x2 - x1) * w, (y2 - y1) * h
     X1 = max(0, int(math.floor(x1 * w - bw * MARGIN_SIDE)))
     X2 = min(w, int(math.ceil(x2 * w + bw * MARGIN_SIDE)))
@@ -93,17 +96,67 @@ def tile_size(w, h, cols, crop):
     return max(int(tw), 16), max(int(th), 16)
 
 
+UPPER_KPS = (0, 5, 6, 7, 8, 9, 10, 11, 12)  # 鼻・肩・肘・手首・腰（COCO）
+UPPER_MARGIN_SIDE, UPPER_MARGIN_TOP, UPPER_MARGIN_BOTTOM = 0.15, 0.20, 0.10
+DETAIL_PRE, DETAIL_STEP, DETAIL_N, DETAIL_COLS = 0.6, 0.3, 6, 3
+DETAIL_BUDGET = SHEET_MAX_W * 1500  # 詳細画像1枚の画素数の上限（ストリップ1枚と同程度以下）
+
+
+def upper_body_crop(tracks, t_from, t_to, w, h):
+    """窓内の2人の上半身（鼻・肩・肘・手首・腰。信頼度 0.3 以上）の和集合に余白を足した枠（元画素）。
+    各辺は 5〜95% の分位点（骨格の飛びに強い）。どちらかの人が取れたコマが2未満なら None"""
+    if not tracks:
+        return None
+    pids = set(pair_pids(tracks))
+    xs, ys, seen = [], [], {p: 0 for p in pids}
+    for f in tracks.get("frames", []):
+        t = f.get("t")
+        if t is None or not (t_from <= t <= t_to):
+            continue
+        for p in f.get("kept", []):
+            if p.get("pid") not in pids or not p.get("kps"):
+                continue
+            pts = [p["kps"][i] for i in UPPER_KPS if i < len(p["kps"]) and p["kps"][i][2] >= 0.3]
+            if len(pts) >= 4:
+                seen[p["pid"]] += 1
+                xs.extend(q[0] for q in pts)
+                ys.extend(q[1] for q in pts)
+    if min(seen.values()) < 2:
+        return None
+    x1, x2 = np.percentile(xs, 5), np.percentile(xs, 95)
+    y1, y2 = np.percentile(ys, 5), np.percentile(ys, 95)
+    bw, bh = (x2 - x1) * w, (y2 - y1) * h
+    X1 = max(0, int(math.floor(x1 * w - bw * UPPER_MARGIN_SIDE)))
+    X2 = min(w, int(math.ceil(x2 * w + bw * UPPER_MARGIN_SIDE)))
+    Y1 = max(0, int(math.floor(y1 * h - bh * UPPER_MARGIN_TOP)))
+    Y2 = min(h, int(math.ceil(y2 * h + bh * UPPER_MARGIN_BOTTOM)))
+    if X2 - X1 < 32 or Y2 - Y1 < 32:
+        return None
+    return X1, Y1, X2, Y2
+
+
+def detail_tile_size(crop):
+    """詳細画像のタイル。縦横比は枠のまま、幅は 3 列で SHEET_MAX_W 以内、拡大は元の2倍まで、1枚が DETAIL_BUDGET 以下"""
+    cw, ch = crop[2] - crop[0], crop[3] - crop[1]
+    tw = min(math.sqrt(DETAIL_BUDGET / DETAIL_N * cw / ch), SHEET_MAX_W // DETAIL_COLS, MAX_UPSCALE * cw)
+    return max(int(tw), 16), max(int(tw * ch / cw), 16)
+
+
 def resize_tile(img, tw, th):
     interp = cv2.INTER_AREA if tw <= img.shape[1] else cv2.INTER_CUBIC
     return cv2.resize(img, (tw, th), interpolation=interp)
 
 
-def build_sheet(frames, times, crop=None):
-    """フレーム列を時刻ラベル付きのグリッドに並べる。crop=(x1,y1,x2,y2) 元画素なら全コマ共通でそこだけ切り取る"""
+def build_sheet(frames, times, crop=None, cols=None, tile=None):
+    """フレーム列を時刻ラベル付きのグリッドに並べる。crop=(x1,y1,x2,y2) 元画素なら全コマ共通でそこだけ切り取る。
+    列数はコマ数を超えない（端数の1コマが7列ぶんの白い余白にならない）。tile=(w,h) で寸法を指定できる"""
     h, w = frames[0].shape[:2]
-    portrait = h >= w
-    cols = 7 if portrait else 5
-    tile_w, tile_h = tile_size(w, h, cols, crop)
+    if cols is None:
+        cols = 7 if h >= w else 5
+    if tile is None:
+        tile = tile_size(w, h, cols, crop)
+    tile_w, tile_h = tile
+    cols = min(cols, len(frames))
     rows = math.ceil(len(frames) / cols)
     sheet = np.full((rows * tile_h, cols * tile_w, 3), 255, np.uint8)
     for i, (f, t) in enumerate(zip(frames, times)):
@@ -117,13 +170,13 @@ def build_sheet(frames, times, crop=None):
     return sheet
 
 
-def read_window(cap, fps, t_from, t_to):
-    """[t_from, t_to] を STEP_SEC 刻みで読む。先頭へ1回だけシークし、以降は順読みで最寄りフレームを拾う"""
+def read_window(cap, fps, t_from, t_to, step=STEP_SEC):
+    """[t_from, t_to] を step 刻みで読む。先頭へ1回だけシークし、以降は順読みで最寄りフレームを拾う"""
     targets = []
     t = t_from
     while t <= t_to + 1e-6:
         targets.append(round(t, 2))
-        t += STEP_SEC
+        t += step
     # POS_MSEC のシークは可変フレームレートで最大 0.3 秒遅れて着くので、手前に着いたことを確かめてから読む（README 27）
     frame, cur = seek_read(cap, t_from - 0.05)
     frames, times = [], []
@@ -139,6 +192,28 @@ def read_window(cap, fps, t_from, t_to):
             break
         cur = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
     return frames, times
+
+
+def write_detail(cap, fps, tracks, out_dir, t, label):
+    """詳細画像: イベント前後の 0.3 秒刻み 6 コマを 3x2 に並べ、2人の上半身だけを元解像度から切り取る。
+    手のつなぎ・頭に手をかける等の腕の形を読むため。tracks が無い・2人の骨格が取れなければ作らない"""
+    if not tracks:
+        return
+    d_from = max(0.0, t - DETAIL_PRE)
+    d_to = d_from + DETAIL_STEP * (DETAIL_N - 1)
+    frames, times = read_window(cap, fps, d_from, d_to, DETAIL_STEP)
+    if not frames:
+        return
+    fh, fw = frames[0].shape[:2]
+    crop = upper_body_crop(tracks, d_from - 0.1, d_to + 0.1, fw, fh)
+    if crop is None:
+        return
+    tile = detail_tile_size(crop)
+    sheet = build_sheet(frames, times, crop, cols=DETAIL_COLS, tile=tile)
+    name = f"{t:08.1f}_{label}_detail.jpg".replace(" ", "0")
+    if os.environ.get("STRIP_VERBOSE"):
+        print(f"{name}: src={fw}x{fh} crop={crop} tile={tile} sheet={sheet.shape[1]}x{sheet.shape[0]}", file=sys.stderr)
+    cv2.imwrite(os.path.join(out_dir, name), sheet, [cv2.IMWRITE_JPEG_QUALITY, 82])
 
 
 def main():
@@ -186,11 +261,13 @@ def main():
             name = f"{t:08.1f}_{label}_strip{suffix}.jpg".replace(" ", "0")
             fs, ts = frames[i:i + SHEET_MAX_TILES], times[i:i + SHEET_MAX_TILES]
             fh, fw = fs[0].shape[:2]
-            crop = union_crop(tracks, ts[0] - STEP_SEC, ts[-1] + STEP_SEC, fw, fh)
+            # 枠はイベントの窓全体で決める（続きの端数ストリップも同じ枠にして、コマ数が少なくても全体に戻らない）
+            crop = union_crop(tracks, t_from - STEP_SEC, t_to + STEP_SEC, fw, fh)
             sheet = build_sheet(fs, ts, crop)
             if os.environ.get("STRIP_VERBOSE"):
                 print(f"{name}: src={fw}x{fh} crop={crop} sheet={sheet.shape[1]}x{sheet.shape[0]}", file=sys.stderr)
             cv2.imwrite(os.path.join(out_dir, name), sheet, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        write_detail(cap, fps, tracks, out_dir, t, label)
         written += 1
 
     cap.release()

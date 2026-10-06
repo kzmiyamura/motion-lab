@@ -150,6 +150,7 @@ test('runner-prompt.md: 下調べ不要と digest の指示がある', () => {
 test('parseKeyframeName', () => {
   assert.deepEqual(parseKeyframeName('000003.5_turn_strip_2.jpg'), { file: '000003.5_turn_strip_2.jpg', t: 3.5, kind: 'turn', part: 2 });
   assert.equal(parseKeyframeName('000033.2_contested.jpg')?.kind, 'contested');
+  assert.deepEqual(parseKeyframeName('000003.5_turn_detail.jpg'), { file: '000003.5_turn_detail.jpg', t: 3.5, kind: 'turn', part: 1, detail: true });
   assert.equal(parseKeyframeName('sheet_01.jpg'), null);
 });
 

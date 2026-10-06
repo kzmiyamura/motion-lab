@@ -54,7 +54,7 @@ test('sumClaudeUsage / formatUsageLine', () => {
   assert.equal(t.calls, 2);
   assert.equal(
     formatUsageLine('86afab96-aaaa', a),
-    '[claudeUsage] job=86afab96 step=anchor out=600 cacheW=49000 cacheR=250000 turns=3 cost=$0.5000',
+    '[claudeUsage] job=86afab96 step=anchor out=600 cacheW=49000 cacheR=250000 turns=3',
   );
 });
 

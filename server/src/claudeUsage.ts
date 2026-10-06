@@ -95,12 +95,11 @@ export function sumClaudeUsage(steps: ClaudeUsageStep[]): ClaudeUsageTotal {
   return t;
 }
 
-/** pm2 ログ用の 1 行 */
+/** pm2 ログ用の 1 行（金額換算は出さない。消費はトークン数で見る） */
 export function formatUsageLine(jobId: string, s: ClaudeUsageStep): string {
-  const cost = s.total_cost_usd == null ? '?' : s.total_cost_usd.toFixed(4);
   return `[claudeUsage] job=${jobId.slice(0, 8)} step=${s.step} out=${s.output_tokens ?? '?'} ` +
     `cacheW=${s.cache_creation_input_tokens ?? '?'} cacheR=${s.cache_read_input_tokens ?? '?'} ` +
-    `turns=${s.num_turns ?? '?'} cost=$${cost}`;
+    `turns=${s.num_turns ?? '?'}`;
 }
 
 /** out/claude-usage.json を読む（無い・壊れていれば null） */

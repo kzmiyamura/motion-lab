@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  buildClaudeArgs, buildRunnerPrompt, collectOutputs, listWorkdirFiles, mainEnv, modelForStep, removeWorkdir, stageFlatDir, stageJobDir,
+  buildClaudeArgs, buildRunnerPrompt, collectOutputs, countImageReads, listJudgeImages, listWorkdirFiles, mainEnv, modelForStep, needsReadAllImages, readSessionLog, removeWorkdir, stageFlatDir, stageJobDir,
 } from './claudeRunner.js';
 import { buildDigest, parseKeyframeName, writeDigest } from './digest.js';
 
@@ -63,6 +63,58 @@ test('mainEnv: 本解析の python が UTF-8 で書くよう PYTHONUTF8=1 を足
   const e = mainEnv({ PATH: 'x', PYTHONUTF8: '0' });
   assert.equal(e.PYTHONUTF8, '1');
   assert.equal(e.PATH, 'x');
+});
+
+test('needsReadAllImages: sonnet のときだけ', () => {
+  assert.equal(needsReadAllImages('sonnet'), true);
+  assert.equal(needsReadAllImages('claude-sonnet-5-5'), true);
+  assert.equal(needsReadAllImages('opus'), false);
+  assert.equal(needsReadAllImages(null), false);
+});
+
+test('buildRunnerPrompt: readAllImages で全部読む指示と枚数・seen の注意が入る', () => {
+  const info = { pythonBin: 'py', hasDigest: true, files: [] as string[] };
+  const p = buildRunnerPrompt('BASE', 'SPEC', { ...info, readAllImages: true, imageCount: 23 });
+  assert.ok(p.includes('全部 Read する'));
+  assert.ok(p.includes('23 枚'));
+  assert.ok(p.includes('"seen"'));
+  assert.ok(p.endsWith('SPEC'));
+  assert.ok(!buildRunnerPrompt('BASE', 'SPEC', info).includes('全部 Read する'));
+  assert.ok(!buildRunnerPrompt('BASE', 'SPEC', { ...info, readAllImages: true, imageCount: 0 }).includes('全部 Read する'));
+});
+
+test('listJudgeImages: strip と detail だけ数える', () => {
+  const d = tmp();
+  try {
+    for (const f of ['000003.5_turn_strip.jpg', '000003.5_turn_strip_2.jpg', '000003.5_turn_detail.jpg', '000033.2_contested.jpg', 'x.txt']) {
+      writeFileSync(path.join(d, f), 'x');
+    }
+    assert.equal(listJudgeImages(d).length, 3);
+    assert.deepEqual(listJudgeImages(path.join(d, 'none')), []);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('countImageReads / readSessionLog: セッションログから Read した画像を重複なしで数える', () => {
+  const read = (p: string) => ({ type: 'tool_use', name: 'Read', input: { file_path: p } });
+  const lines = [
+    { type: 'assistant', message: { content: [read('out/digest.json'), read('out/keyframes/a_strip.jpg'), read('out\\keyframes\\b_detail.jpg')] } },
+    { type: 'assistant', message: { content: [read('C:/w/out/keyframes/a_strip.jpg'), { type: 'tool_use', name: 'Write', input: { file_path: 'c.jpg' } }] } },
+    { type: 'user', message: { content: [read('d.jpg')] } },
+  ].map(o => JSON.stringify(o)).join('\n') + '\nnot json "tool_use"\n';
+  assert.equal(countImageReads(lines), 2);
+  const proj = tmp();
+  try {
+    const workDir = 'C:\\Users\\x\\Temp\\motion-lab-claude\\job-abc_1';
+    mkdirSync(path.join(proj, 'C--Users-x-Temp-motion-lab-claude-job-abc-1'));
+    writeFileSync(path.join(proj, 'C--Users-x-Temp-motion-lab-claude-job-abc-1', 'sid-1.jsonl'), lines);
+    assert.equal(readSessionLog(JSON.stringify({ session_id: 'sid-1' }), workDir, proj), lines);
+    assert.equal(readSessionLog(JSON.stringify({ session_id: '../x' }), workDir, proj), null);
+    assert.equal(readSessionLog('not json', workDir, proj), null);
+  } finally {
+    rmSync(proj, { recursive: true, force: true });
+  }
 });
 
 function makeJob(): string {

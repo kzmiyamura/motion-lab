@@ -1165,6 +1165,9 @@ FILL_CBL_TURN = True        # ターンの無い CBL の行に女性の CV の�
 EARLY_SWAP_BEATS = 1.0      # 前の行が CBL 系のとき、行の頭からこの拍数以内（カウント 2 より前）の入れ替わりは前の行のもの。
                             # CV の交差は女性の通過（2）より遅れて出るので、2 より前の交差はこの行の通過ではない（None = しない）
 GHOST_CBL_BACK = True       # 入れ替わりの無い CBL 系の行の直前の行に入れ替わりがあれば、CBL を前の行へ移す
+TURN_HEAD_PULL_BEATS = 2.0  # 女性のターンのある行の頭より前この拍数以内に CV の女性のターンが始まり、前の行にターンが無ければ、
+                            # 行の頭をそのターンの始まりの拍まで前へ戻す（ターンが前の行に入るのを防ぐ。None = しない）
+TURN_HEAD_MIN_BEATS = 4.0   # 戻した後も前の行にこの拍数は残す
 
 MIN_BEATS_PER_ROT = 1.0    # 多回転でも 1 回転に最低 1 拍（シングルは ≈ 2 拍）。これより多い回転は採らない
 TURN_WINDOW_BEATS = 4.0     # CV の回転区間が無いときに回転に使える拍（半分の 8 カウント。On2 の 2-3-(4)-5 等）
@@ -1602,6 +1605,51 @@ def move_ghost_cbl_back(out, summary, timing, beat):
     return fixes
 
 
+def turn_start(e):
+    """CV のターンの始まりの時刻（spin.from → span.from → t）"""
+    for k in ("spin", "span"):
+        v = (e.get(k) or {}).get("from")
+        if _num(v):
+            return float(v)
+    return float(e["t"]) if _num(e.get("t")) else None
+
+
+def has_follower_turn(mv):
+    turn = mv.get("turn")
+    # "both"（語彙外。Sonnet が男女とも回る行に書くことがある）も女性が回っている
+    return isinstance(turn, dict) and turn.get("by") in (None, "follower", "both")
+
+
+def pull_turn_heads(out, summary, beat):
+    """女性のターンのある行の頭が CV の女性のターンの始まりより後ろにずれていて、ターンが前の行（ターン無し）に
+    入ってしまう行の頭を、ターンの始まりの拍まで前へ戻す（拍の格子の上で）。戻した行の一覧を返す。
+    例: screenrec 21.7 の右回り 1.5 は Claude の行が 22.0 から、CV のターンの始まりは 21.79。
+    Sonnet で 2 件。Opus の行は始まりより前に頭があり、変わらない"""
+    if not TURN_HEAD_PULL_BEATS or not _num(beat) or beat <= 0:
+        return []
+    starts = [turn_start(e) for e in (summary or {}).get("events") or []
+              if e.get("type") == "Turn" and e.get("by") == "follower"]
+    starts = [s for s in starts if s is not None]
+    pulled = []
+    for k in range(1, len(out)):
+        mv, prev = out[k], out[k - 1]
+        if not has_follower_turn(mv) or has_follower_turn(prev):
+            continue
+        head = mv["start"]
+        cand = [s for s in starts if head - TURN_HEAD_PULL_BEATS * beat <= s < head]
+        if not cand:
+            continue
+        n = math.ceil((head - min(cand)) / beat - 1e-6)
+        new = head - n * beat
+        if new - prev["start"] < TURN_HEAD_MIN_BEATS * beat:
+            continue
+        # counts（8 の倍数）は変えない。行の頭の時刻だけ動かす（前の行の終わりは次の行の頭で決まる）
+        mv["start"] = round(new, 2)
+        mv["turnHeadPull"] = {"from": round(head, 2), "beats": n}
+        pulled.append(mv["turnHeadPull"])
+    return pulled
+
+
 def mark_uncertain(mv):
     """自信を下げ、名前に「?」を付ける（アプリが推定バッジを出す）"""
     c = mv.get("confidence")
@@ -1844,6 +1892,10 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
                 for mv, s in zip(out, shift_row_starts(old, beat, local, sw_t, delay)):
                     mv["start"] = round(s, 2)
                 routine["phaseLocal"] = [round(x, 2) for x in local]
+
+    pulled = pull_turn_heads(out, summary, beat)
+    if pulled:
+        routine["turnHeadPulls"] = len(pulled)
 
     # 行の頭を動かしたら、行の始まり・終わりの立ち位置も動かした後の窓で読み直す（README 50）。
     # 上の sides は動かす前の窓で読んでいて、頭が 0.5 秒動くと、行の頭のすぐ後ろの入れ替わりを

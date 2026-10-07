@@ -990,5 +990,50 @@ class PhaseLocalTest(unittest.TestCase):
             self.assertAlmostEqual(n - s, 0.5 * b, places=3)
 
 
+class TurnHeadPullTest(unittest.TestCase):
+    """女性のターンの行の頭が CV のターンの始まりより後ろなら、始まりの拍まで前へ戻す（screenrec 21.7 の型）"""
+
+    def setUp(self):
+        import normalize_routine as nr
+        self.nr = nr
+        self.beat = 0.3
+
+    def rows(self, turn_by="follower"):
+        return [mv(0.0, "cbl"), mv(2.4, "reverse_cbl", turn={"by": turn_by, "direction": "right", "rotations": 1.5})]
+
+    def summary(self, start):
+        return {"events": [{"t": start + 0.3, "type": "Turn", "by": "follower", "span": {"from": start}}]}
+
+    def test_pulls_head_back_to_turn_start_beat(self):
+        out = self.rows()
+        pulled = self.nr.pull_turn_heads(out, self.summary(2.2), self.beat)
+        self.assertEqual(len(pulled), 1)
+        self.assertAlmostEqual(out[1]["start"], 2.1)
+        self.assertEqual(out[1]["counts"], 8)
+        self.assertEqual(out[1]["turnHeadPull"], {"from": 2.4, "beats": 1})
+
+    def test_both_counts_as_follower_turn(self):
+        out = self.rows("both")
+        self.assertEqual(len(self.nr.pull_turn_heads(out, self.summary(2.2), self.beat)), 1)
+
+    def test_no_pull_when_turn_starts_after_head_or_too_early(self):
+        for s in (2.5, 1.7):
+            out = self.rows()
+            self.assertEqual(self.nr.pull_turn_heads(out, self.summary(s), self.beat), [])
+            self.assertEqual(out[1]["start"], 2.4)
+
+    def test_no_pull_when_previous_row_has_turn_or_row_has_none(self):
+        out = self.rows()
+        out[0]["turn"] = {"by": "follower", "direction": "left", "rotations": 1}
+        self.assertEqual(self.nr.pull_turn_heads(out, self.summary(2.2), self.beat), [])
+        out = self.rows()
+        out[1]["turn"] = {"by": "leader", "direction": "right", "rotations": 1}
+        self.assertEqual(self.nr.pull_turn_heads(out, self.summary(2.2), self.beat), [])
+
+    def test_keeps_min_beats_in_previous_row(self):
+        out = [mv(0.0, "cbl"), mv(1.2, "right_turn", turn={"by": "follower", "direction": "right", "rotations": 1})]
+        self.assertEqual(self.nr.pull_turn_heads(out, self.summary(1.0), self.beat), [])
+
+
 if __name__ == "__main__":
     unittest.main()

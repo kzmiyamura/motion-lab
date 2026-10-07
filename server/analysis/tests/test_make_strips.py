@@ -85,6 +85,39 @@ class OutlierAndPartialTest(unittest.TestCase):
         self.assertGreater(x1, 100)
         self.assertLess(x2, 900)
 
+    def test_background_person_while_partner_hidden_is_ignored(self):
+        # 820f0461 の冒頭: 男性（pid1）が手前の女性（pid0）の陰に隠れ、追跡が奥の小さい別人（右寄り）に乗り換わる
+        tr = _tracks(20)
+        for f in tr["frames"][:10]:
+            f["kept"][0]["bbox"] = [0.15, 0.20, 0.58, 0.76]      # 手前の踊り手
+            f["kept"][1]["bbox"] = [0.60, 0.26, 0.90, 0.52]      # 背景の人（小さく足元が高い）
+        for f in tr["frames"][10:]:
+            f["kept"][0]["bbox"] = [0.15, 0.20, 0.58, 0.76]
+            f["kept"][1]["bbox"] = [0.35, 0.28, 0.60, 0.78]      # 本物のパートナー
+        x1, _, x2, _ = union_crop(tr, 0.0, 0.9, 1000, 2000)       # 隠れている間だけの窓
+        self.assertLess(x2, 700)                                   # 背景の人の x=0.90 を含まない
+        self.assertLess(x2 - x1, 0.55 * 1000 * 1.35)
+
+    def test_background_filter_keeps_close_pair(self):
+        # 少し背が違う・足元が少しずれる程度の本物のペアは落とさない（実測: 高さ比 0.8・足元差 0.1 倍）
+        tr = _tracks(10)
+        for f in tr["frames"]:
+            f["kept"][0]["bbox"] = [0.30, 0.34, 0.50, 0.78]
+            f["kept"][1]["bbox"] = [0.50, 0.28, 0.70, 0.82]
+        x1, _, x2, _ = union_crop(tr, 0.0, 0.9, 1000, 2000)
+        self.assertLessEqual(x1, int(0.30 * 1000))
+        self.assertGreaterEqual(x2, int(0.70 * 1000))
+
+    def test_all_frames_background_still_crops_dancer(self):
+        # 窓の全コマで相手が見つからず背景の人に乗り換わっていても、踊り手の枠は出る（全体には戻らない）
+        tr = _tracks(10)
+        for f in tr["frames"]:
+            f["kept"][0]["bbox"] = [0.15, 0.20, 0.58, 0.76]
+            f["kept"][1]["bbox"] = [0.60, 0.26, 0.90, 0.52]
+        crop = union_crop(tr, 0.0, 0.9, 1000, 2000)
+        self.assertIsNotNone(crop)
+        self.assertLess(crop[2], 700)
+
     def test_partial_sheet_has_no_blank_columns(self):
         frames = [np.zeros((1920, 1080, 3), np.uint8)]
         sheet = build_sheet(frames, [0.0])
@@ -117,6 +150,16 @@ class DetailTest(unittest.TestCase):
             f["kept"] = f["kept"][:1]
         self.assertIsNone(upper_body_crop(tr, 0.0, 1.9, 1000, 2000))
         self.assertIsNone(upper_body_crop(None, 0.0, 1.9, 1000, 2000))
+
+    def test_upper_body_ignores_background_person(self):
+        tr = _kps_tracks()
+        for f in tr["frames"]:
+            f["kept"][0]["bbox"] = [0.2, 0.2, 0.4, 0.8]
+            bg = f["kept"][1]
+            bg["bbox"] = [0.8, 0.30, 0.95, 0.52]                   # 小さく足元が高い別人
+            bg["kps"] = [[k[0] + 0.3, k[1] * 0.4 + 0.2, k[2]] for k in bg["kps"]]
+        x1, y1, x2, y2 = upper_body_crop(tr, 0.0, 1.9, 1000, 2000)
+        self.assertLess(x2, 700)   # 背景の人の肩（x≈0.9）が枠に入らない
 
     def test_detail_tile_within_budget_and_upscale(self):
         crop = (0, 0, 600, 700)

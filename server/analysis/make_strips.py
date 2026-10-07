@@ -41,6 +41,8 @@ LABEL_H = 34
 MARGIN_TOP, MARGIN_SIDE, MARGIN_BOTTOM = 0.25, 0.15, 0.10  # 2人の外接矩形への余白（手を上げても切れない）
 MIN_PAIR_RATIO = 0.4   # 窓内のこの割合のコマで2人が取れなければ全体のまま
 MAX_UPSCALE = 2.0      # 元の画素に対する拡大の上限（それ以上はぼやけるだけ）
+MIN_HEIGHT_RATIO = 0.6  # 2人の箱の高さの比がこれ未満なら、小さい方は奥の別人（背景）とみなす
+MAX_FOOT_GAP = 0.3     # 2人の足元（bbox 下端）のずれが背の高い方の箱の高さのこの割合を超えたら別人
 
 
 def pair_pids(tracks):
@@ -48,22 +50,58 @@ def pair_pids(tracks):
     return (lp, 1 - lp) if lp in (0, 1) else (0, 1)
 
 
+def _box_area(b):
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def background_pid(boxes):
+    """2人の bbox（{pid: [x1,y1,x2,y2]}）が組んでいるペアに見えないとき、奥にいる別人の pid を返す（なければ None）。
+    一方が手前の相手の陰に隠れている間、追跡が背後の人に乗り換わる（820f0461 の冒頭 0〜1.4 秒）。
+    背景の人は箱の高さがペアの半分以下で、足元の高さ（bbox 下端）もずれる。踊り手の箱が欠けた1コマでも
+    高さ比が MIN_HEIGHT_RATIO を割ることは少ないので、両方の条件でなく高さ比か足元のずれのどちらかで判定する"""
+    if len(boxes) != 2:
+        return None
+    (pa, a), (pb, b) = boxes.items()
+    ha, hb = a[3] - a[1], b[3] - b[1]
+    big, small = (pa, pb) if _box_area(a) >= _box_area(b) else (pb, pa)
+    hmax = max(ha, hb)
+    if hmax <= 0:
+        return None
+    if min(ha, hb) / hmax < MIN_HEIGHT_RATIO or abs(a[3] - b[3]) > MAX_FOOT_GAP * hmax:
+        return small
+    return None
+
+
+def pair_boxes(frame, pids):
+    """このコマのペアの bbox（{pid: bbox}）。背景の別人に乗り換わっていれば、そちらを除いて踊り手側だけにする。
+    戻り値の第2要素は「ペアが映っていたコマか」（背景を除いた場合も True。隠れているだけで踊り手はいる）"""
+    got = {p["pid"]: p["bbox"] for p in frame.get("kept", []) if p.get("pid") in pids and p.get("bbox")}
+    if len(got) < 2:
+        return got, False
+    bg = background_pid(got)
+    if bg is not None:
+        del got[bg]
+    return got, True
+
+
 def union_crop(tracks, t_from, t_to, w, h):
     """窓 [t_from, t_to] の全コマで、2人（リーダー・フォロワー）の bbox の和集合に余白を足した切り取り枠（元画素）。
-    2人がそろったコマが少なければ None（全体のまま）。縦横比はそのまま（タイルを枠の比で作る）"""
+    2人がそろったコマが少なければ None（全体のまま）。縦横比はそのまま（タイルを枠の比で作る）。
+    片方が隠れて背後の別人に乗り換わったコマは、その別人の箱を使わない"""
     if not tracks:
         return None
     pids = set(pair_pids(tracks))
-    boxes, total = [], 0
+    boxes, total, paired = [], 0, 0
     for f in tracks.get("frames", []):
         t = f.get("t")
         if t is None or not (t_from <= t <= t_to):
             continue
         total += 1
-        got = {p["pid"]: p["bbox"] for p in f.get("kept", []) if p.get("pid") in pids and p.get("bbox")}
-        if len(got) == 2:
+        got, ok = pair_boxes(f, pids)
+        if ok:
+            paired += 1
             boxes.extend(got.values())
-    if total == 0 or len(boxes) / 2 < MIN_PAIR_RATIO * total:
+    if total == 0 or paired < MIN_PAIR_RATIO * total:
         return None
     # 1コマの外れ値（骨格の飛び・他人の混入）で枠が広がらないよう、各辺は分位点で決める
     q = lambda vals, p: float(np.percentile(vals, p))
@@ -108,20 +146,22 @@ def upper_body_crop(tracks, t_from, t_to, w, h):
     if not tracks:
         return None
     pids = set(pair_pids(tracks))
-    xs, ys, seen = [], [], {p: 0 for p in pids}
+    xs, ys, paired = [], [], 0
     for f in tracks.get("frames", []):
         t = f.get("t")
         if t is None or not (t_from <= t <= t_to):
             continue
+        # 隠れた間に背後の別人へ乗り換わったコマは、その人の骨格を使わない（踊り手側だけで枠を決める）
+        use, ok = pair_boxes(f, pids)
+        paired += ok
         for p in f.get("kept", []):
-            if p.get("pid") not in pids or not p.get("kps"):
+            if p.get("pid") not in use or not p.get("kps"):
                 continue
             pts = [p["kps"][i] for i in UPPER_KPS if i < len(p["kps"]) and p["kps"][i][2] >= 0.3]
             if len(pts) >= 4:
-                seen[p["pid"]] += 1
                 xs.extend(q[0] for q in pts)
                 ys.extend(q[1] for q in pts)
-    if min(seen.values()) < 2:
+    if paired < 2 or not xs:
         return None
     x1, x2 = np.percentile(xs, 5), np.percentile(xs, 95)
     y1, y2 = np.percentile(ys, 5), np.percentile(ys, 95)

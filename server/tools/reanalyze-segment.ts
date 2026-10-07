@@ -4,6 +4,7 @@
  * Usage（server/ で）:
  *   npx tsx tools/reanalyze-segment.ts --job <jobId> --from <秒> --to <秒> [--model sonnet|opus] [--apply]
  *     [--tag <名前>] [--images overview,detail] [--step 0.2] [--dstep 0.3] [--max-turns 8] [--dry]
+ *   --auto  … 再解析の候補の窓を一覧するだけ（--job だけ要る。claude は呼ばない）
  *   --dry   … claude を呼ばず、digest と画像だけ作ってプロンプトの大きさを出す
  *   --apply … 答えで result.json の該当行を置き換える（既定は out/segment-<from>-<to>.json に書くだけ。result.json.bak を残す）
  * 保存先は MOTION_LAB_STORAGE（既定 server/storage）、DB は MOTION_LAB_DB（既定 <storage>/../data/motionlab.db）。
@@ -18,7 +19,9 @@ import { DatabaseSync } from 'node:sqlite';
 import dotenv from 'dotenv';
 import { buildClaudeArgs, makeWorkdir, removeWorkdir } from '../src/claudeRunner.js';
 import { extractClaudeUsage } from '../src/claudeUsage.js';
-import { applySegmentRows, buildSegmentDigest, buildSegmentPrompt, extractHandRules, parseSegmentAnswer } from '../src/segmentDigest.js';
+import { buildSegmentDigest, buildSegmentPrompt, extractHandRules, parseSegmentAnswer } from '../src/segmentDigest.js';
+import { applyRowsToResult } from '../src/segmentApply.js';
+import { findCandidates } from '../src/segmentCandidates.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = path.resolve(__dirname, '..');
@@ -44,6 +47,20 @@ const IMAGE_NOTES: Record<string, string> = {
 
 async function main(): Promise<number> {
   const jobId = opt('job');
+  if (jobId && flag('auto')) {
+    // 候補の一覧を出すだけ（claude は呼ばない・何も書かない）
+    const out = path.join(STORAGE, 'analysis-jobs', jobId, 'out');
+    const tracks = JSON.parse(readFileSync(path.join(out, 'measurements.tracks.json'), 'utf-8'));
+    const m = JSON.parse(readFileSync(path.join(out, 'measurements.json'), 'utf-8')) as { summary?: { events?: unknown[]; holdUnclear?: Array<{ from: number; to: number }> } };
+    const rp = path.join(out, 'result.json');
+    const cands = findCandidates({
+      tracks, result: existsSync(rp) ? JSON.parse(readFileSync(rp, 'utf-8')) : null,
+      summaryEvents: (m.summary?.events ?? null) as Record<string, unknown>[] | null, holdUnclear: m.summary?.holdUnclear ?? null,
+    });
+    for (const c of cands) console.log(`--from ${c.from} --to ${c.to}  (${c.score}) ${c.reasons.slice(0, 3).join(' / ')}`);
+    console.log(`[segment] 候補 ${cands.length} 窓 / ${cands.reduce((s, c) => s + c.to - c.from, 0).toFixed(1)} 秒`);
+    return 0;
+  }
   const from = Number(opt('from')), to = Number(opt('to'));
   if (!jobId || !Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
     console.error('Usage: reanalyze-segment.ts --job <jobId> --from <秒> --to <秒> [--model sonnet|opus] [--apply]');
@@ -67,7 +84,8 @@ async function main(): Promise<number> {
   // 1. 区間専用の画像
   const want = (opt('images') ?? 'overview,detail').split(',');
   const imgArgs = [path.join(SERVER_DIR, 'analysis', 'make_segment_images.py'), video, runDir, `--from=${from}`, `--to=${to}`,
-    `--tracks=${tracksPath}`, `--detail-to=${to + Number(opt('look', '0'))}`, `--step=${opt('step', '0.2')}`, `--dstep=${opt('dstep', '0.3')}`];
+    `--tracks=${tracksPath}`, `--detail-to=${to + Number(opt('look', '0'))}`, `--step=${opt('step', '0.2')}`, `--dstep=${opt('dstep', '0.3')}`,
+    `--dn=${opt('dn', '6')}`, `--dscale=${opt('dscale', '1')}`, `--oscale=${opt('oscale', '1')}`, `--max-detail=${opt('max-detail', '3')}`];
   if (!want.includes('overview')) imgArgs.push('--no-overview');
   if (!want.includes('detail')) imgArgs.push('--no-detail');
   const py = spawnSync(PYTHON_BIN, imgArgs, { encoding: 'utf-8', env: { ...process.env, PYTHONUTF8: '1', OMP_NUM_THREADS: '4' } });
@@ -127,7 +145,7 @@ async function main(): Promise<number> {
   // 4. --apply のときだけ result.json を置き換える（bak を残す）
   if (flag('apply') && answer && result) {
     copyFileSync(resultPath, `${resultPath}.bak`);
-    writeFileSync(resultPath, JSON.stringify(applySegmentRows(result, from, to, answer.rows), null, 2), 'utf-8');
+    writeFileSync(resultPath, JSON.stringify(applyRowsToResult(result, from, to, answer.rows), null, 2), 'utf-8');
     record.applied = true;
   }
   const outFile = path.join(outDir, `${runName}.json`);

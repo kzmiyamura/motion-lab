@@ -20,7 +20,7 @@ import {
 } from './db.js';
 import { isAnalysisRunning } from './analysisJob.js';
 import { PRESETS, type JobContext } from './presets.js';
-import { runClaude, runClaudeAnchor, ClaudeAuthError, ClaudeRateLimitError } from './claudeRunner.js';
+import { runClaude, runClaudeAnchorReport,ClaudeAuthError, ClaudeRateLimitError } from './claudeRunner.js';
 import { judgeTurns } from './turnJudge.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -144,8 +144,9 @@ async function runJob(job: AnalysisJobRow): Promise<void> {
       mkdirSync(anchorDir, { recursive: true });
       const extractScript = path.resolve(__dirname, '../analysis/extract_keyframes.py');
       await runPython([extractScript, videoPath, anchorDir, 'anchor', '2.0', '5.0', '9.0'], signal);
-      leaderHint = await runClaudeAnchor(anchorDir, signal);
-      if (leaderHint === null) console.warn('[jobWorker] leader anchor unavailable, CV vote fallback');
+      const report = await runClaudeAnchorReport(anchorDir, signal);
+      leaderHint = report.hint;
+      if (leaderHint === null) console.warn(`[jobWorker] leader anchor unavailable after ${report.attempts} attempts (${report.reason}), CV vote fallback`);
     } catch (e) {
       console.warn(`[jobWorker] leader anchor skipped: ${e instanceof Error ? e.message : e}`);
     }

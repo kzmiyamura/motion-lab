@@ -905,7 +905,29 @@ HINT_SIZE_RATIO = 0.7  # ヒントを当てるコマ: 2 人とも本人の bbox 
 HINT_MAX_SEC = 2.0     # ヒントの時刻からこの秒数以内のコマが無ければ使わない
 
 
-def leader_from_hint(draw_frames, leader_pid, leader_hint):
+TURN_CUE_MIN_RATIO = 1.5   # ターン回転量の差がこの比以上かつ TURN_CUE_MIN_DIFF 以上のときだけ手がかりにする
+TURN_CUE_MIN_DIFF = 3
+
+
+def turn_cue_leader(draw_frames):
+    """ターンで回るのは主に女性（フォロワー）。pid ごとの総回転数が少ない方を Leader とみなす（差が小さければ None）。
+    SHR・身長・肩幅の投票はカメラに近い人に偏るので、その補助。正解付き 7 本で 7/7（投票は 3/7 + 同点 2 + 誤り 2）"""
+    try:
+        cbl = detect_cbl(draw_frames)
+        rot = {}
+        for pid in (0, 1):
+            rot[pid] = sum(r for _, r in detect_turns(draw_frames, pid, with_span=False, cbl_times=cbl))
+    except Exception as e:  # 手がかりは補助。失敗しても投票結果で進める
+        print(f"turn cue failed: {e}", file=sys.stderr)
+        return None
+    lo, hi = min(rot.values()), max(rot.values())
+    leader = None
+    if hi - lo >= TURN_CUE_MIN_DIFF and hi >= TURN_CUE_MIN_RATIO * max(lo, 1):
+        leader = 0 if rot[0] < rot[1] else 1
+    return {"leader": leader, "rot": {"0": rot[0], "1": rot[1]}}
+
+
+def leader_from_hint(draw_frames, leader_pid, leader_hint, status=None):
     """Claude アンカー（例: right@5.00）で Leader の pid を決める。使えなければ leader_pid のまま。
 
     ヒントの時刻にいちばん近い「きれいな」コマ（2 人とも本人の背丈で写り、bbox が SEGMENT_IOU 未満しか重ならない）で、
@@ -941,6 +963,8 @@ def leader_from_hint(draw_frames, leader_pid, leader_hint):
         return leader_pid
     right_pid = 0 if by_pid[0]["hipX"] >= by_pid[1]["hipX"] else 1
     anchored = right_pid if side == "right" else 1 - right_pid
+    if status is not None:
+        status["used"] = True
     if anchored != leader_pid:
         print(f"leader anchor override: {leader_pid} -> {anchored} (hint={leader_hint})", file=sys.stderr)
     else:
@@ -3061,13 +3085,27 @@ def main():
     # Claude アンカーによるリーダー上書き（併用方針: 写真で間違えようがない意味判断は
     # Claude が先に1回だけ行い、CVはそれを基準に計測する。ヒントが無い/壊れている場合は
     # 上の中央値多数決がそのまま使われる）
+    hint_status = {}
     if leader_hint and draw_frames:
-        leader_pid = leader_from_hint(draw_frames, leader_pid, leader_hint)
+        leader_pid = leader_from_hint(draw_frames, leader_pid, leader_hint, hint_status)
     # リーダーを何で決めたかを残す。CV 投票は SHR・身長・肩幅が全部カメラに近い人（女性）に偏る動画があり
     # （820f0461。正解付きの bb0efcb9・img1884 でも投票は正解と食い違う）、ヒントが無いときは誤りうる。
     # 後から原因を追えるようにする（2人が分かれて見えるコマだけで投票し直す案は、正解付きで逆に悪化した）
+    anchored = bool(leader_hint and draw_frames and hint_status.get("used"))
     leader_decision = {"vote": vote_leader, "hint": leader_hint or None, "final": leader_pid,
-                       "source": "anchor" if (leader_hint and draw_frames) else "cv-vote"}
+                       "source": "anchor" if anchored else "cv-vote",
+                       "confidence": "high" if anchored else "low"}
+    if draw_frames and not anchored:
+        cue = turn_cue_leader(draw_frames)
+        if cue is not None:
+            leader_decision["turnCue"] = cue
+            if cue["leader"] is not None and cue["leader"] != leader_pid:
+                print(f"leader by turns: {leader_pid} -> {cue['leader']} (rot={cue['rot']})", file=sys.stderr)
+                leader_pid = cue["leader"]
+                leader_decision["final"] = leader_pid
+                leader_decision["source"] = "cv-turns"
+            elif cue["leader"] == leader_pid:
+                leader_decision["confidence"] = "medium"
 
     events = detect_events(draw_frames, leader_pid) if draw_frames else []
     if events:

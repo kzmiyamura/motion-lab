@@ -298,11 +298,37 @@ function tailOf(stdout: string, stderr: string): string {
  * 戻り値は analyze_pair.py の --leader-hint 形式（例: "right@5.00"）。
  * 判定不能・claude 不在・パース失敗は null（CV側の中央値多数決にフォールバック）
  */
-export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise<string | null> {
-  const promptText = readFileSync(ANCHOR_PROMPT_PATH, 'utf-8');
-  return new Promise(resolve => {
+export async function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise<string | null> {
+  return (await runClaudeAnchorReport(anchorDir, signal)).hint;
+}
+
+export interface AnchorReport {
+  hint: string | null;
+  attempts: number;
+  /** 取れなかった理由（最後の試行。成功時は null） */
+  reason: string | null;
+}
+
+/** アンカーを最大 2 回試す（1 回目が max-turns 超過・JSON なし等で空振りしても、もう一度だけ聞く）。理由を残す */
+export async function runClaudeAnchorReport(anchorDir: string, signal: AbortSignal, maxAttempts = 2): Promise<AnchorReport> {
+  let reason: string | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const r = await runClaudeAnchorOnce(anchorDir, signal);
+    if (r.hint) return { hint: r.hint, attempts: attempt, reason: null };
+    reason = r.reason;
+    console.warn(`[claudeAnchor] attempt ${attempt}/${maxAttempts} failed: ${reason}`);
+  }
+  return { hint: null, attempts: maxAttempts, reason };
+}
+
+function runClaudeAnchorOnce(anchorDir: string, signal: AbortSignal): Promise<{ hint: string | null; reason: string | null }> {
+  return new Promise(resolveRaw => {
+    const resolve = (hint: string | null, reason: string | null = null) => resolveRaw({ hint, reason });
     let workDir: string;
-    try { workDir = stageFlatDir(anchorDir, 'anchor'); } catch { return resolve(null); }
+    try { workDir = stageFlatDir(anchorDir, 'anchor'); } catch { return resolve(null, 'stage-failed'); }
+    // ファイル名は 000002.0_anchor.jpg のようにゼロ埋め。モデルには ls が無く推測で外す（全件空振りの原因だった）ので、一覧を渡す
+    const names = readdirSync(workDir).filter(f => /\.jpe?g$/i.test(f)).sort();
+    const promptText = `${readFileSync(ANCHOR_PROMPT_PATH, 'utf-8')}\n\n画像ファイル（これで全部。この名前のまま Read する。\`t\` はファイル名の先頭の秒数）:\n${names.map(n => `- ${n}`).join('\n')}\n`;
     const model = modelForStep('anchor');
     const proc = spawn(CLAUDE_BIN, buildClaudeArgs('anchor', '10', model), {
       cwd: workDir,
@@ -315,24 +341,25 @@ export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise
     proc.stdin.on('error', () => { /* noop */ });
     proc.stdin.write(promptText);
     proc.stdin.end();
-    proc.on('error', () => { removeWorkdir(workDir); resolve(null); });
+    proc.on('error', e => { removeWorkdir(workDir); resolve(null, `spawn-error: ${e.message}`); });
     proc.on('exit', code => {
       removeWorkdir(workDir);
       const u = usageTargetOfSub(anchorDir);
       recordClaudeUsageFromStdout(u.outDir, u.jobId, 'anchor', stdout, model);
-      if (code !== 0) return resolve(null);
+      if (code !== 0) return resolve(null, `exit-code ${code}`);
       try {
         // --output-format json のエンベロープから結果テキストを取り出し、その中の JSON を拾う
-        const envelope = JSON.parse(stdout) as { result?: string };
-        const m = (envelope.result ?? '').match(/\{[^{}]*"leaderSide"[^{}]*\}/);
-        if (!m) return resolve(null);
+        const envelope = JSON.parse(stdout) as { result?: string; subtype?: string };
+        const text = envelope.result ?? '';
+        const m = text.match(/\{[^{}]*"leaderSide"[^{}]*\}/);
+        if (!m) return resolve(null, `no-json (subtype=${envelope.subtype ?? '?'}, result=${text.slice(0, 120).replace(/\s+/g, ' ')})`);
         const parsed = JSON.parse(m[0]) as { t: number | null; leaderSide: 'left' | 'right' | null; leaderLook?: string };
-        if (parsed.leaderSide !== 'left' && parsed.leaderSide !== 'right') return resolve(null);
-        if (typeof parsed.t !== 'number') return resolve(null);
+        if (parsed.leaderSide !== 'left' && parsed.leaderSide !== 'right') return resolve(null, `undecided (leaderSide=${parsed.leaderSide})`);
+        if (typeof parsed.t !== 'number') return resolve(null, 'no-time');
         console.log(`[claudeAnchor] leader=${parsed.leaderSide} at t=${parsed.t} (${parsed.leaderLook ?? '?'})`);
         resolve(`${parsed.leaderSide}@${parsed.t.toFixed(2)}`);
-      } catch {
-        resolve(null);
+      } catch (e) {
+        resolve(null, `parse-error: ${e instanceof Error ? e.message : e}`);
       }
     });
   });

@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  buildClaudeArgs, buildRunnerPrompt, collectOutputs, listWorkdirFiles, modelForStep, removeWorkdir, stageFlatDir, stageJobDir,
+  buildClaudeArgs, buildRunnerPrompt, collectOutputs, listWorkdirFiles, mainEnv, modelForStep, removeWorkdir, stageFlatDir, stageJobDir,
 } from './claudeRunner.js';
 import { buildDigest, parseKeyframeName, writeDigest } from './digest.js';
 
@@ -57,6 +57,12 @@ test('buildClaudeArgs: モデル指定があれば --model、無ければ付け�
   const a = buildClaudeArgs('main', '30', 'sonnet');
   assert.equal(a[a.indexOf('--model') + 1], 'sonnet');
   assert.ok(!buildClaudeArgs('anchor', '10', null).includes('--model'));
+});
+
+test('mainEnv: 本解析の python が UTF-8 で書くよう PYTHONUTF8=1 を足す（元の環境は残す）', () => {
+  const e = mainEnv({ PATH: 'x', PYTHONUTF8: '0' });
+  assert.equal(e.PYTHONUTF8, '1');
+  assert.equal(e.PATH, 'x');
 });
 
 function makeJob(): string {

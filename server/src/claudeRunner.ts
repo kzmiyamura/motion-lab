@@ -366,6 +366,15 @@ export interface RunClaudeOptions {
   digest?: boolean;
 }
 
+/**
+ * 本解析の claude に渡す環境変数。PYTHONUTF8=1 で、Claude が Bash の python で書くファイル（result.json 等）を UTF-8 にする。
+ * Windows の Python は既定で cp932 で書くので、encoding を付け忘れると normalize_routine.py が読めず、
+ * サーバー側（utf-8 で読む）でも日本語が化ける（2026-10-08 Sonnet の試走で発生）
+ */
+export function mainEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, PYTHONUTF8: '1' };
+}
+
 export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSignal, opts: RunClaudeOptions = {}): Promise<ClaudeRunResult> {
   const promptPath = opts.promptFile ? path.resolve(__dirname, '../prompts', path.basename(opts.promptFile)) : PROMPT_PATH;
   if (opts.copySalsaKnowledge ?? true) copyKnowledge(jobDir);
@@ -384,7 +393,7 @@ export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSig
     const model = modelForStep('main');
     const proc = spawn(CLAUDE_BIN, buildClaudeArgs('main', MAX_TURNS, model), {
       cwd: workDir,
-      env: { ...process.env },
+      env: mainEnv(),
       signal,
       // Windows で claude が .cmd シムの場合 shell 経由でないと起動できない。
       // argv にはユーザー由来の文字列を置かないためエスケープ問題は起きない

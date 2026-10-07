@@ -178,6 +178,69 @@ export interface RunnerPromptInfo {
   hasDigest: boolean;
   /** 作業場所のファイル一覧（相対パス）。プロンプトに載せて ls を不要にする */
   files: string[];
+  /** ストリップ・detail を全部読ませる追加指示を付けるか（Sonnet 用。画像をほとんど読まずに書く傾向がある） */
+  readAllImages?: boolean;
+  /** 作業場所の out/keyframes にあるストリップ・detail の枚数（readAllImages の指示に書く） */
+  imageCount?: number;
+}
+
+/**
+ * 本解析で画像を全部読ませるモデルか。2026-10-08 の 6 本比較で Sonnet は 18〜30 枚中 2〜4 枚しか読まず、
+ * 女性のターン（turn 45→39/51）と技の種類（コパ・ラップ・シャドー等）が落ちた。Opus は 16〜25 枚読む
+ */
+export function needsReadAllImages(model: string | null): boolean {
+  return !!model && /sonnet/i.test(model);
+}
+
+/** ストリップ（*_strip*.jpg）と上半身の詳細（*_detail*.jpg）のファイル名 */
+export function listJudgeImages(keyframesDir: string): string[] {
+  if (!existsSync(keyframesDir)) return [];
+  return readdirSync(keyframesDir).filter(f => /\.jpe?g$/i.test(f) && /_(strip|detail)/i.test(f));
+}
+
+export function readAllImagesSection(imageCount: number): string {
+  return [
+    '## 画像の読み方（このジョブへの追加指示。上の「必要なものだけ Read する」より優先する）',
+    '',
+    `- \`out/keyframes/\` のターン・CBL のストリップ（\`*_strip*.jpg\`）と上半身の詳細（\`*_detail*.jpg\`）は**全部 Read する**（${imageCount} 枚）。` +
+      'digest の数値だけで技・回った人・向き・回転数・手を決めない',
+    '- 1 枚ずつではなく、1 回の応答で 6〜8 枚ずつ並列にまとめて Read する。全部読み終えてから result.json と report.md を書く',
+    '- **画像を読んでいない行に `evidence: "seen"` を付けない**（digest の数値だけで埋めた行は `"inferred"`）',
+  ].join('\n');
+}
+
+/**
+ * claude のセッションログ（jsonl）の中身から、Read した画像の枚数（ファイル名の重複なし）を数える。
+ * `--output-format json` のエンベロープには道具の呼び出しが入らないので、ログから数える
+ */
+export function countImageReads(jsonlText: string): number {
+  const seen = new Set<string>();
+  for (const line of jsonlText.split(/\r?\n/)) {
+    if (!line.includes('"tool_use"')) continue;
+    let o: { type?: string; message?: { content?: unknown } };
+    try { o = JSON.parse(line); } catch { continue; }
+    if (o.type !== 'assistant' || !Array.isArray(o.message?.content)) continue;
+    for (const c of o.message.content as { type?: string; name?: string; input?: { file_path?: unknown } }[]) {
+      if (c?.type !== 'tool_use' || c.name !== 'Read' || typeof c.input?.file_path !== 'string') continue;
+      const base = path.basename(c.input.file_path.replace(/\\/g, '/'));
+      if (/\.(jpe?g|png)$/i.test(base)) seen.add(base);
+    }
+  }
+  return seen.size;
+}
+
+/** エンベロープの session_id から、そのセッションのログを探して読む（見つからなければ null） */
+export function readSessionLog(stdout: string, workDir: string, projectsDir = path.join(os.homedir(), '.claude', 'projects')): string | null {
+  try {
+    const sid = (JSON.parse(stdout) as { session_id?: unknown }).session_id;
+    if (typeof sid !== 'string' || !/^[\w-]+$/.test(sid)) return null;
+    // Claude Code は作業ディレクトリのパスの英数字以外を `-` にしたディレクトリにログを置く
+    for (const dir of [workDir.replace(/[^a-zA-Z0-9]/g, '-'), workDir.replace(/[:\\/]/g, '-')]) {
+      const p = path.join(projectsDir, dir, `${sid}.jsonl`);
+      if (existsSync(p)) return readFileSync(p, 'utf-8');
+    }
+  } catch { /* noop */ }
+  return null;
 }
 
 /** 作業場所の主なファイル（相対パス）。keyframes はファイル名が多いので digest 側に任せ、個数だけ書く */
@@ -208,7 +271,8 @@ export function buildRunnerPrompt(basePrompt: string, specMarkdown: string, info
     ...info.files.map(f => `  - \`${f}\``),
     '- 成果物は `out/result.json` と `out/report.md`（Write で直接書く。result.json の組み立てに Python スクリプトが要るときだけ上の python を使う）',
   ].join('\n');
-  return `${basePrompt}\n\n${env}\n\n---\n\n${specMarkdown}`;
+  const extra = info.readAllImages && (info.imageCount ?? 0) > 0 ? `\n\n${readAllImagesSection(info.imageCount!)}` : '';
+  return `${basePrompt}\n\n${env}${extra}\n\n---\n\n${specMarkdown}`;
 }
 
 /** レート制限・使用量上限。リトライ（バックオフ）対象 */
@@ -375,6 +439,21 @@ export function mainEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
   return { ...base, PYTHONUTF8: '1' };
 }
 
+/**
+ * 本解析で Read した画像の枚数を pm2 ログに 1 行出す。全部読ませる指示を付けたのに半分も読んでいなければ警告にする。
+ * 失敗しても何もしない（ログのためにジョブを落とさない）
+ */
+function logImageReads(jobId: string, stdout: string, workDir: string, imageCount: number, readAll: boolean): void {
+  try {
+    const log = readSessionLog(stdout, workDir);
+    if (log == null || imageCount === 0) return;
+    const n = countImageReads(log);
+    const line = `[claudeRunner] job=${jobId.slice(0, 8)} images read ${n}/${imageCount}`;
+    if (readAll && n < imageCount * 0.5) console.warn(`${line} — 全部読む指示に対して少ない`);
+    else console.log(line);
+  } catch { /* noop */ }
+}
+
 export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSignal, opts: RunClaudeOptions = {}): Promise<ClaudeRunResult> {
   const promptPath = opts.promptFile ? path.resolve(__dirname, '../prompts', path.basename(opts.promptFile)) : PROMPT_PATH;
   if (opts.copySalsaKnowledge ?? true) copyKnowledge(jobDir);
@@ -383,14 +462,18 @@ export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSig
   // 成果物（report.md / result.json）は終了後に jobDir/out へ戻す
   const workDir = stageJobDir(jobDir);
   if (opts.digest !== false) writeDigest(path.join(jobDir, 'out'), { pythonBin: PYTHON_BIN }, path.join(workDir, 'out'));
+  const model = modelForStep('main');
+  const readAll = needsReadAllImages(model);
+  const imageCount = listJudgeImages(path.join(workDir, 'out', 'keyframes')).length;
   const promptText = buildRunnerPrompt(readFileSync(promptPath, 'utf-8'), specMarkdown, {
     pythonBin: PYTHON_BIN,
     hasDigest: existsSync(path.join(workDir, 'out', 'digest.json')),
     files: listWorkdirFiles(workDir),
+    readAllImages: readAll,
+    imageCount,
   });
 
   return new Promise((resolve, reject) => {
-    const model = modelForStep('main');
     const proc = spawn(CLAUDE_BIN, buildClaudeArgs('main', MAX_TURNS, model), {
       cwd: workDir,
       env: mainEnv(),
@@ -421,6 +504,7 @@ export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSig
       removeWorkdir(workDir);
       // リトライでも 1 回ずつ記録する（失敗終了でもエンベロープが読めれば残す）
       recordClaudeUsageFromStdout(path.join(jobDir, 'out'), path.basename(jobDir), 'main', stdout, model);
+      logImageReads(path.basename(jobDir), stdout, workDir, imageCount, readAll);
       const combined = `${stdout}\n${stderr}`;
       const tail = tailOf(stdout, stderr);
 

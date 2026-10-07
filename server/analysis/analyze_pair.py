@@ -331,6 +331,86 @@ def pick_main_pair(persons):
     return sorted(persons, key=lambda p: p["bboxArea"], reverse=True)[:2]
 
 
+# 背景の別人（相方が手前の相手の陰に隠れている間に、追跡が奥の人に乗り換わる）を主ペアから外す。
+# 820f0461 の冒頭 0〜1.4 秒は男性が女性の陰に隠れ、奥に立つ観客が「2人目」として拾われ、男性として色が付いていた。
+# 判定は make_strips.py と同じ: 2人の bbox の高さ比が BG_MIN_HEIGHT_RATIO 未満、または足元（bbox 下端）のずれが
+# 背の高い方の高さの BG_MAX_FOOT_GAP 倍を超えたら、面積の小さい方は別人（奥行きが違う）。
+# 外した人は kept から rejected に移す（その区間は「相方なし」の欠損で、別人では埋めない）。
+# MOTION_LAB_BG_FILTER=0 で無効（回帰の比較用）
+BG_FILTER = os.environ.get("MOTION_LAB_BG_FILTER", "1") != "0"
+BG_MIN_HEIGHT_RATIO = 0.6
+BG_MAX_FOOT_GAP = 0.3
+BG_MIN_RUN_SEC = 1.2    # ペアに見えないコマがこの秒数以上続いたら乗り換わり
+# 相方を見失った（1人だけの）コマのこの秒数以内も乗り換わりとみなす。既定は 0（無効）。
+# 0.3 にすると 820f0461 の 2.45〜2.52 秒の別人も外れるが、回帰評価（1230b3d5 の短い区間に効く）で
+# CBL の誤検出が 11→13 に増え All F1 が .900→.897 に下がったので既定では使わない
+BG_SOLO_ADJ_SEC = float(os.environ.get("MOTION_LAB_BG_SOLO_ADJ", "0"))
+
+
+def background_person_index(kept):
+    """kept（ちょうど2人）の、奥の別人とみなす方のインデックス。ペアに見えるなら None"""
+    if len(kept) != 2:
+        return None
+    a, b = kept[0]["bbox"], kept[1]["bbox"]
+    ha, hb = a[3] - a[1], b[3] - b[1]
+    hmax = max(ha, hb)
+    if hmax <= 0:
+        return None
+    if min(ha, hb) / hmax < BG_MIN_HEIGHT_RATIO or abs(a[3] - b[3]) > BG_MAX_FOOT_GAP * hmax:
+        area = lambda bb: max(0.0, bb[2] - bb[0]) * max(0.0, bb[3] - bb[1])
+        return 1 if area(a) >= area(b) else 0
+    return None
+
+
+def drop_background_persons(draw_frames):
+    """ペアに見えないコマの奥の別人を kept から外して rejected へ移す（in place）。戻り値: 外したコマ数
+
+    1コマだけの点滅（接近・部分遮蔽で箱が欠けただけ）は本物のペアなので外さない。外すのは次のどちらか:
+    - ペアに見えないコマが BG_MIN_RUN_SEC 秒以上続いた区間（相方が長く隠れ、別人に乗り換わっている）
+    - 相方が取れず1人しか居ないコマの BG_SOLO_ADJ_SEC 秒以内に出た、ペアに見えないコマ（見失った直後に別人を拾った）
+    """
+    if not BG_FILTER:
+        return 0
+    flagged = [background_person_index(df["kept"]) for df in draw_frames]
+    n = len(draw_frames)
+    drop = [False] * n
+    i = 0
+    while i < n:
+        if flagged[i] is None:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and flagged[j + 1] is not None and draw_frames[j + 1]["t"] - draw_frames[j]["t"] < 0.4:
+            j += 1
+        long_run = draw_frames[j]["t"] - draw_frames[i]["t"] >= BG_MIN_RUN_SEC
+        for k in range(i, j + 1):
+            drop[k] = long_run
+        i = j + 1
+    solo = [len(df["kept"]) == 1 for df in draw_frames]
+    for k in range(n):
+        if flagged[k] is None or drop[k]:
+            continue
+        t = draw_frames[k]["t"]
+        lo = k
+        while lo > 0 and t - draw_frames[lo - 1]["t"] <= BG_SOLO_ADJ_SEC:
+            lo -= 1
+            if solo[lo]:
+                drop[k] = True
+                break
+        hi = k
+        while not drop[k] and hi + 1 < n and draw_frames[hi + 1]["t"] - t <= BG_SOLO_ADJ_SEC:
+            hi += 1
+            if solo[hi]:
+                drop[k] = True
+    count = 0
+    for df, f_idx, d in zip(draw_frames, flagged, drop):
+        if d:
+            p = df["kept"].pop(f_idx)
+            df.setdefault("rejected", []).append({"bbox": p["bbox"], "shr2d": p.get("shr2d")})
+            count += 1
+    return count
+
+
 def roi_from_persons(persons, margin):
     """ペアの bbox の合併 + マージンを ROI（正規化座標）として返す"""
     x0 = min(p["bbox"][0] for p in persons) - margin
@@ -777,7 +857,11 @@ def assign_appearance_ids(draw_frames):
     - Leader は「クラスタ単位の SHR 平均」が高い方（フレーム単位の勝負ではないので
       横向きの一瞬に色が乗っ取られない）
     - 各 kept エントリに "pid" を書き込み、Leader の pid を返す（判定不能なら None）
+    - 最初に、ペアに見えないコマの奥の別人を kept から外す（drop_background_persons）
     """
+    dropped = drop_background_persons(draw_frames)
+    if dropped:
+        print(f"background person dropped in {dropped} frames", file=sys.stderr)
     track_appearance(draw_frames)
     anchor = anchor_refs(draw_frames)
     if anchor is not None:

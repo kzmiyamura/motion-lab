@@ -9,6 +9,7 @@
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { buildSegmentDigest, type Tracks } from './segmentDigest.js';
 
 type Json = Record<string, unknown>;
 
@@ -53,17 +54,52 @@ export function mmss(t: number): string {
   return `${m}:${(s - m * 60).toFixed(1).padStart(4, '0')}`;
 }
 
-export function buildDigest(measurements: Json, keyframes: DigestKeyframe[], env: DigestEnv): Json {
+/** 技 1 つ（カード）が使える窓の長さの上限（次の技までが長いとき）。8 カウント ≒ 3〜4 秒 */
+const HAND_HINT_MAX_SEC = 4.0;
+
+export interface HandHints {
+  /** 重なり・片方が隠れる区間（この間の手の計測は当てにならない） */
+  occluded: string[];
+  /** つないだ手の候補（手首同士が近い組。区間のあと 2.5 秒まで。向きのルールで右手/左手に直してある） */
+  jointHands: string[];
+  /** 相手の頭の近くにある手首（頭に手をかける動きの候補）と、頭より上に上がった手 */
+  headHand: string[];
+}
+
+/**
+ * 技の窓（このイベントの少し前〜次のイベントまで）の手のヒント。区間再解析（segmentDigest）と同じ計算を本解析にも使う。
+ * 「分かれて見える最初の時刻で決め、離す動きが見えなければさかのぼる」ために、重なる区間と区間のあとの jointHands を渡す。
+ * tracks が無い・窓にコマが無いときは null
+ */
+export function buildHandHints(tracks: Tracks, events: Json[], index: number, aspect: number): HandHints | null {
+  const e = events[index];
+  const t = Number(e.t);
+  if (!Number.isFinite(t)) return null;
+  const next = events.slice(index + 1).map(x => Number(x.t)).find(x => Number.isFinite(x) && x > t + 0.5);
+  const from = Math.max(0, t - 0.5);
+  const to = Math.min(next ?? t + HAND_HINT_MAX_SEC, t + HAND_HINT_MAX_SEC);
+  const d = buildSegmentDigest({ tracks, from, to, aspect, summaryEvents: [], drop: ['holds', 'turns', 'cardHands'] });
+  if (!d.occludedSpans.length && !d.jointHands.length && !d.handRaise.length && !d.wristNearHead.length) return null;
+  return {
+    occluded: d.occludedSpans.map(s => s.replace(/。この間の手の計測・回る人の取り違えは当てにならない$/, '')),
+    jointHands: d.jointHands,
+    headHand: [...d.wristNearHead, ...d.handRaise.filter(s => !s.startsWith('t='))],
+  };
+}
+
+export function buildDigest(measurements: Json, keyframes: DigestKeyframe[], env: DigestEnv, tracks?: Tracks | null): Json {
   const summary = (measurements.summary ?? {}) as Json;
   const events = Array.isArray(summary.events) ? (summary.events as Json[]) : [];
   const contested = Array.isArray(summary.contested) ? (summary.contested as Json[]) : [];
+  const aspect = typeof measurements.width === 'number' && typeof measurements.height === 'number' && measurements.height > 0
+    ? measurements.width / measurements.height : 0.5625;
 
   const stripsOf = (type: string, t: number, detail = false): string[] =>
     keyframes
       .filter(k => k.kind === type.toLowerCase() && Math.abs(k.t - t) <= 0.06 && !!k.detail === detail)
       .map(k => k.file);
 
-  const slim = events.map(e => {
+  const slim = events.map((e, i) => {
     const o: Json = {};
     for (const [k, v] of Object.entries(e)) if (!DROP_EVENT_KEYS.has(k)) o[k] = v;
     const t = Number(e.t);
@@ -72,6 +108,12 @@ export function buildDigest(measurements: Json, keyframes: DigestKeyframe[], env
     if (strips.length) o.strips = strips;
     const details = stripsOf(String(e.type), t, true);
     if (details.length) o.detail = details[0];
+    if (tracks) {
+      try {
+        const hh = buildHandHints(tracks, events, i, aspect);
+        if (hh) o.handHints = hh;
+      } catch (err) { console.warn(`[digest] handHints failed: ${(err as Error).message}`); }
+    }
     return o;
   });
 
@@ -143,7 +185,12 @@ export function writeDigest(outDir: string, env: DigestEnv, outputDir: string = 
   if (!existsSync(mPath)) return null;
   try {
     const m = JSON.parse(readFileSync(mPath, 'utf-8')) as Json;
-    const digest = buildDigest(m, listKeyframes(path.join(outDir, 'keyframes')), env);
+    const tPath = path.join(outDir, 'measurements.tracks.json');
+    let tracks: Tracks | null = null;
+    if (existsSync(tPath)) {
+      try { tracks = JSON.parse(readFileSync(tPath, 'utf-8')) as Tracks; } catch { /* tracks が読めなければヒント無しで続ける */ }
+    }
+    const digest = buildDigest(m, listKeyframes(path.join(outDir, 'keyframes')), env, tracks);
     const dst = path.join(outputDir, 'digest.json');
     writeFileSync(dst, stringifyDigest(digest), 'utf-8');
     return dst;

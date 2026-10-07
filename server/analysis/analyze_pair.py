@@ -905,7 +905,52 @@ HINT_SIZE_RATIO = 0.7  # ヒントを当てるコマ: 2 人とも本人の bbox 
 HINT_MAX_SEC = 2.0     # ヒントの時刻からこの秒数以内のコマが無ければ使わない
 
 
-TURN_CUE_MIN_RATIO = 1.5   # ターン回転量の差がこの比以上かつ TURN_CUE_MIN_DIFF 以上のときだけ手がかりにする
+DROP_LEADING_STILL = True   # 冒頭の静止画（再生前の表示）を解析から外す
+LEAD_CUT_SCAN_SEC = 1.0     # 冒頭のこの秒数までで切れ目を探す
+LEAD_CUT_RATIO_MED = 10.0   # 外れ値の条件: 距離 >= 中央値×これ、かつ >= 次点×LEAD_CUT_RATIO_2ND、かつ >= LEAD_CUT_ABS_MIN
+LEAD_CUT_RATIO_2ND = 2.0
+LEAD_CUT_ABS_MIN = 0.25
+
+
+def detect_leading_cut(video_path):
+    """冒頭 LEAD_CUT_SCAN_SEC 秒の連続コマで、背景（画像の上 25% の色ヒストグラム）が 1 点だけ大きく外れたら、
+    その時刻（変化後の最初のコマの PTS）を返す。無ければ None。
+
+    画面収録で再生ボタンを押す前の静止画が先頭に残る動画（820f0461: 0〜0.133 秒が別の場面）対策。
+    固定閾値の相関（make_segment_images の CUT_CORR=0.6）は、床・UI が同色で相関が 0.96 までしか下がらず届かないので、
+    中央値からの外れ方で見る。手元の 10 本で出たのは 820f0461 だけ（正解付き 6 本は出ない）"""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+    prev = None
+    rows = []
+    try:
+        while True:
+            ok, im = cap.read()
+            if not ok:
+                break
+            pts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if pts > LEAD_CUT_SCAN_SEC:
+                break
+            hsv = cv2.cvtColor(im[: int(im.shape[0] * 0.25)], cv2.COLOR_BGR2HSV)
+            hist = cv2.calcHist([hsv], [0, 1, 2], None, [8, 4, 4], [0, 180, 0, 256, 0, 256]).flatten()
+            hist = hist / (hist.sum() + 1e-9)
+            if prev is not None:
+                rows.append((float(np.abs(hist - prev).sum()), pts))
+            prev = hist
+    finally:
+        cap.release()
+    if len(rows) < 8:
+        return None
+    vals = sorted((r[0] for r in rows), reverse=True)
+    med = float(np.median(vals))
+    top, t_top = max(rows)
+    if top >= LEAD_CUT_RATIO_MED * med and top >= LEAD_CUT_RATIO_2ND * vals[1] and top >= LEAD_CUT_ABS_MIN:
+        return t_top
+    return None
+
+
+TURN_CUE_MIN_RATIO = 1.5  # ターン回転量の差がこの比以上かつ TURN_CUE_MIN_DIFF 以上のときだけ手がかりにする
 TURN_CUE_MIN_DIFF = 3
 
 
@@ -2915,6 +2960,11 @@ def main():
     effective_fps = fps / frame_interval
     clock = frame_clock(video_path, fps)  # コマごとの時刻（PTS。可変フレームレート対策。README 26・27）
 
+    lead_skip_until = detect_leading_cut(video_path) if DROP_LEADING_STILL else None
+    if lead_skip_until is not None:
+        print(f"leading still dropped: t < {lead_skip_until:.3f}s (scene cut at the start)", file=sys.stderr)
+
+    frame_size = None
     frame_idx = 0
     sampled = 0
     prev_slots = [None, None]
@@ -2946,6 +2996,11 @@ def main():
             continue
 
         t_sec = clock.time(frame_idx)
+        if lead_skip_until is not None and t_sec < lead_skip_until:
+            frame_idx += 1
+            continue
+        if frame_size is None:
+            frame_size = (frame.shape[1], frame.shape[0])   # 実際に読んだコマの大きさ（回転メタデータ反映後）。digest の縦横補正に使う
 
         # ROIマスク: 前フレームのペア位置の外側を塗りつぶして背景人物を視野から排除
         mask_roi = roi  # デバッグ動画の2パス目で同じマスクを再現するために控える
@@ -3221,6 +3276,8 @@ def main():
             "detector": "yolov8-pose",
             "shrMode": "2d",
             "fps": fps,
+            "width": frame_size[0] if frame_size else None,
+            "height": frame_size[1] if frame_size else None,
             "sampledFps": round(effective_fps, 2),
             "totalFrames": frame_idx,
             "sampledFrames": sampled,

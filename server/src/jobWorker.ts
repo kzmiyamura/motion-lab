@@ -110,7 +110,7 @@ function runPython(args: string[], signal: AbortSignal): Promise<void> {
   });
 }
 
-async function runJob(job: AnalysisJobRow): Promise<void> {
+export async function runJob(job: AnalysisJobRow): Promise<void> {
   console.log(`[jobWorker] running job ${job.id} (video=${job.video_id}, preset=${job.preset})`);
   const signal = AbortSignal.timeout(JOB_TIMEOUT_MS);
 

@@ -54,8 +54,18 @@ test('sumClaudeUsage / formatUsageLine', () => {
   assert.equal(t.calls, 2);
   assert.equal(
     formatUsageLine('86afab96-aaaa', a),
-    '[claudeUsage] job=86afab96 step=anchor out=600 cacheW=49000 cacheR=250000 turns=3',
+    '[claudeUsage] job=86afab96 step=anchor model=claude-sonnet-5-5 out=600 cacheW=49000 cacheR=250000 turns=3',
   );
+});
+
+test('extractClaudeUsage: 指定したモデル（--model）を requestedModel に残す', () => {
+  const s = extractClaudeUsage(envelope, 'main', new Date(), 'sonnet')!;
+  assert.equal(s.requestedModel, 'sonnet');
+  assert.deepEqual(s.models, ['claude-sonnet-5-5']);
+  assert.equal(extractClaudeUsage(envelope, 'main')!.requestedModel, null);
+  // エンベロープに modelUsage が無いときはログに指定値を出す
+  const bare = extractClaudeUsage(JSON.stringify({ usage: { output_tokens: 5 } }), 'main', new Date(), 'opus')!;
+  assert.match(formatUsageLine('86afab96', bare), /model=opus /);
 });
 
 test('recordClaudeUsage: リトライ分も 1 回ずつ追記し total を再計算', () => {

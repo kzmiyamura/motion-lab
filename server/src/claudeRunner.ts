@@ -73,13 +73,38 @@ export function claudeSlimArgs(tools: string[]): string[] {
   ];
 }
 
+export type ClaudeKind = 'main' | 'anchor' | 'turnJudge';
+
+const MODEL_ENV: Record<ClaudeKind, string> = {
+  main: 'CLAUDE_MODEL_MAIN',
+  anchor: 'CLAUDE_MODEL_ANCHOR',
+  turnJudge: 'CLAUDE_MODEL_TURNJUDGE',
+};
+
+/**
+ * 段階ごとのモデル（CLAUDE_MODEL_MAIN / CLAUDE_MODEL_ANCHOR / CLAUDE_MODEL_TURNJUDGE）。
+ * 値は claude CLI の --model にそのまま渡す（例 sonnet / opus / claude-sonnet-5-5）。
+ * 未設定・空なら null で --model を付けない（CLI の既定モデル = 従来どおり）。呼ぶたびに読むので再起動なしの単発実行でも効く
+ */
+export function modelForStep(kind: ClaudeKind, env: NodeJS.ProcessEnv = process.env): string | null {
+  const v = env[MODEL_ENV[kind]]?.trim();
+  if (!v) return null;
+  // Windows は shell 経由で起動するので、モデル名に使う文字以外は argv に置かない
+  if (!/^[\w.\-[\]]+$/.test(v)) {
+    console.warn(`[claudeRunner] ${MODEL_ENV[kind]} を無視しました（使えない文字を含む）: ${JSON.stringify(v)}`);
+    return null;
+  }
+  return v;
+}
+
 /** claude に渡す引数（プロンプトは stdin。argv にはフラグだけ） */
-export function buildClaudeArgs(kind: 'main' | 'anchor' | 'turnJudge', maxTurns: string): string[] {
+export function buildClaudeArgs(kind: ClaudeKind, maxTurns: string, model: string | null = modelForStep(kind)): string[] {
   const read = kind !== 'main';
   return [
     '-p',
     '--allowedTools', read ? 'Read' : 'Bash(python*) Read Write',
     ...claudeSlimArgs(read ? ['Read'] : ['Bash', 'Read', 'Write']),
+    ...(model ? ['--model', model] : []),
     '--max-turns', maxTurns,
     '--output-format', 'json',
   ];
@@ -214,7 +239,8 @@ export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise
   return new Promise(resolve => {
     let workDir: string;
     try { workDir = stageFlatDir(anchorDir, 'anchor'); } catch { return resolve(null); }
-    const proc = spawn(CLAUDE_BIN, buildClaudeArgs('anchor', '10'), {
+    const model = modelForStep('anchor');
+    const proc = spawn(CLAUDE_BIN, buildClaudeArgs('anchor', '10', model), {
       cwd: workDir,
       env: { ...process.env },
       signal,
@@ -229,7 +255,7 @@ export function runClaudeAnchor(anchorDir: string, signal: AbortSignal): Promise
     proc.on('exit', code => {
       removeWorkdir(workDir);
       const u = usageTargetOfSub(anchorDir);
-      recordClaudeUsageFromStdout(u.outDir, u.jobId, 'anchor', stdout);
+      recordClaudeUsageFromStdout(u.outDir, u.jobId, 'anchor', stdout, model);
       if (code !== 0) return resolve(null);
       try {
         // --output-format json のエンベロープから結果テキストを取り出し、その中の JSON を拾う
@@ -280,7 +306,8 @@ export function runClaudeTurnJudge(stripDir: string, items: TurnJudgeItem[], sig
   return new Promise((resolve, reject) => {
     let workDir: string;
     try { workDir = stageFlatDir(stripDir, 'turnjudge'); } catch (e) { return reject(e as Error); }
-    const proc = spawn(CLAUDE_BIN, buildClaudeArgs('turnJudge', String(items.length + 10)), {
+    const model = modelForStep('turnJudge');
+    const proc = spawn(CLAUDE_BIN, buildClaudeArgs('turnJudge', String(items.length + 10), model), {
       cwd: workDir,
       env: { ...process.env },
       signal,
@@ -298,7 +325,7 @@ export function runClaudeTurnJudge(stripDir: string, items: TurnJudgeItem[], sig
       removeWorkdir(workDir);
       const elapsedMs = Date.now() - started;
       const u = usageTargetOfSub(stripDir);
-      recordClaudeUsageFromStdout(u.outDir, u.jobId, 'turnJudge', stdout);
+      recordClaudeUsageFromStdout(u.outDir, u.jobId, 'turnJudge', stdout, model);
       const combined = `${stdout}\n${stderr}`;
       let resultText = '';
       try {
@@ -339,6 +366,15 @@ export interface RunClaudeOptions {
   digest?: boolean;
 }
 
+/**
+ * 本解析の claude に渡す環境変数。PYTHONUTF8=1 で、Claude が Bash の python で書くファイル（result.json 等）を UTF-8 にする。
+ * Windows の Python は既定で cp932 で書くので、encoding を付け忘れると normalize_routine.py が読めず、
+ * サーバー側（utf-8 で読む）でも日本語が化ける（2026-10-08 Sonnet の試走で発生）
+ */
+export function mainEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, PYTHONUTF8: '1' };
+}
+
 export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSignal, opts: RunClaudeOptions = {}): Promise<ClaudeRunResult> {
   const promptPath = opts.promptFile ? path.resolve(__dirname, '../prompts', path.basename(opts.promptFile)) : PROMPT_PATH;
   if (opts.copySalsaKnowledge ?? true) copyKnowledge(jobDir);
@@ -354,9 +390,10 @@ export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSig
   });
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(CLAUDE_BIN, buildClaudeArgs('main', MAX_TURNS), {
+    const model = modelForStep('main');
+    const proc = spawn(CLAUDE_BIN, buildClaudeArgs('main', MAX_TURNS, model), {
       cwd: workDir,
-      env: { ...process.env },
+      env: mainEnv(),
       signal,
       // Windows で claude が .cmd シムの場合 shell 経由でないと起動できない。
       // argv にはユーザー由来の文字列を置かないためエスケープ問題は起きない
@@ -383,7 +420,7 @@ export function runClaude(jobDir: string, specMarkdown: string, signal: AbortSig
       collectOutputs(workDir, jobDir);
       removeWorkdir(workDir);
       // リトライでも 1 回ずつ記録する（失敗終了でもエンベロープが読めれば残す）
-      recordClaudeUsageFromStdout(path.join(jobDir, 'out'), path.basename(jobDir), 'main', stdout);
+      recordClaudeUsageFromStdout(path.join(jobDir, 'out'), path.basename(jobDir), 'main', stdout, model);
       const combined = `${stdout}\n${stderr}`;
       const tail = tailOf(stdout, stderr);
 

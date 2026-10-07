@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  buildClaudeArgs, buildRunnerPrompt, collectOutputs, listWorkdirFiles, removeWorkdir, stageFlatDir, stageJobDir,
+  buildClaudeArgs, buildRunnerPrompt, collectOutputs, listWorkdirFiles, mainEnv, modelForStep, removeWorkdir, stageFlatDir, stageJobDir,
 } from './claudeRunner.js';
 import { buildDigest, parseKeyframeName, writeDigest } from './digest.js';
 
@@ -42,6 +42,27 @@ test('buildClaudeArgs: anchor / turnJudge は Read だけ', () => {
     assert.equal(a[a.indexOf('--tools') + 1], 'Read');
     assert.ok(a.includes('--safe-mode'));
   }
+});
+
+test('modelForStep: 段階ごとの環境変数。未設定・空・変な文字は null', () => {
+  const env = { CLAUDE_MODEL_MAIN: 'sonnet', CLAUDE_MODEL_ANCHOR: ' ', CLAUDE_MODEL_TURNJUDGE: 'opus & echo x' };
+  assert.equal(modelForStep('main', env), 'sonnet');
+  assert.equal(modelForStep('anchor', env), null);
+  assert.equal(modelForStep('turnJudge', env), null);
+  assert.equal(modelForStep('main', {}), null);
+  assert.equal(modelForStep('main', { CLAUDE_MODEL_MAIN: 'claude-opus-5-5[1m]' }), 'claude-opus-5-5[1m]');
+});
+
+test('buildClaudeArgs: モデル指定があれば --model、無ければ付けない', () => {
+  const a = buildClaudeArgs('main', '30', 'sonnet');
+  assert.equal(a[a.indexOf('--model') + 1], 'sonnet');
+  assert.ok(!buildClaudeArgs('anchor', '10', null).includes('--model'));
+});
+
+test('mainEnv: 本解析の python が UTF-8 で書くよう PYTHONUTF8=1 を足す（元の環境は残す）', () => {
+  const e = mainEnv({ PATH: 'x', PYTHONUTF8: '0' });
+  assert.equal(e.PYTHONUTF8, '1');
+  assert.equal(e.PATH, 'x');
 });
 
 function makeJob(): string {

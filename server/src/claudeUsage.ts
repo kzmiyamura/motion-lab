@@ -11,6 +11,8 @@ export type ClaudeStep = 'anchor' | 'main' | 'turnJudge' | (string & {});
 
 export interface ClaudeUsageStep {
   step: ClaudeStep;
+  /** --model で指定したモデル（CLAUDE_MODEL_* ）。未指定 = CLI の既定なら null。実際に使われたモデルは models */
+  requestedModel: string | null;
   models: string[];
   input_tokens: number | null;
   output_tokens: number | null;
@@ -44,7 +46,9 @@ export const CLAUDE_USAGE_FILE = 'claude-usage.json';
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /** stdout 全体（--output-format json のエンベロープ）から使用量を取り出す。読めなければ null */
-export function extractClaudeUsage(stdout: string, step: ClaudeStep, at: Date = new Date()): ClaudeUsageStep | null {
+export function extractClaudeUsage(
+  stdout: string, step: ClaudeStep, at: Date = new Date(), requestedModel: string | null = null,
+): ClaudeUsageStep | null {
   let env: unknown;
   try {
     env = JSON.parse(stdout);
@@ -64,6 +68,7 @@ export function extractClaudeUsage(stdout: string, step: ClaudeStep, at: Date = 
   if (!u && o.total_cost_usd == null && modelUsage.length === 0) return null;
   return {
     step,
+    requestedModel,
     models: modelUsage,
     input_tokens: num(u?.input_tokens),
     output_tokens: num(u?.output_tokens),
@@ -97,7 +102,8 @@ export function sumClaudeUsage(steps: ClaudeUsageStep[]): ClaudeUsageTotal {
 
 /** pm2 ログ用の 1 行（金額換算は出さない。消費はトークン数で見る） */
 export function formatUsageLine(jobId: string, s: ClaudeUsageStep): string {
-  return `[claudeUsage] job=${jobId.slice(0, 8)} step=${s.step} out=${s.output_tokens ?? '?'} ` +
+  const model = s.models.length ? s.models.join('+') : (s.requestedModel ?? '?');
+  return `[claudeUsage] job=${jobId.slice(0, 8)} step=${s.step} model=${model} out=${s.output_tokens ?? '?'} ` +
     `cacheW=${s.cache_creation_input_tokens ?? '?'} cacheR=${s.cache_read_input_tokens ?? '?'} ` +
     `turns=${s.num_turns ?? '?'}`;
 }
@@ -128,9 +134,11 @@ export function recordClaudeUsage(outDir: string, jobId: string, step: ClaudeUsa
 }
 
 /** stdout から取り出して記録する便利関数（取れなければ何もしない） */
-export function recordClaudeUsageFromStdout(outDir: string, jobId: string, step: ClaudeStep, stdout: string): void {
+export function recordClaudeUsageFromStdout(
+  outDir: string, jobId: string, step: ClaudeStep, stdout: string, requestedModel: string | null = null,
+): void {
   try {
-    const s = extractClaudeUsage(stdout, step);
+    const s = extractClaudeUsage(stdout, step, new Date(), requestedModel);
     if (s) recordClaudeUsage(outDir, jobId, s);
   } catch { /* noop */ }
 }

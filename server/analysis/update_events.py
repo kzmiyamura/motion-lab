@@ -150,6 +150,7 @@ def main():
     summary.setdefault("eventsPrev", summary.get("events") or [])
     summary["events"] = events
     summary["holdTimeline"] = holds
+    summary["holdUnclear"] = ap.build_hold_unclear(frames, leader_pid)
     summary.pop("eventRefine", None)
     summary["eventsUpdate"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "dense": dense, "count": len(events),
                                "retracked": retracked is not None, "retimed": retimed is not None}

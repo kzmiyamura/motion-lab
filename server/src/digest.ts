@@ -105,7 +105,10 @@ export function buildDigest(measurements: Json, keyframes: DigestKeyframe[], env
     beatGridReason: summary.beatGridReason ?? null,
     onBeat: summary.onBeat ?? null,
     contested: contestedOut,
+    // 手のつなぎの全編タイムライン。estimated: [from, to] が付いた区間は、その秒の範囲の手が計測でなく前後からの推定
     holdTimeline: summary.holdTimeline ?? [],
+    // 2人が重なる・片方が隠れる等で、手首から手のつなぎを読めない区間（この間の hold は信用しない）
+    holdUnclear: summary.holdUnclear ?? [],
     events: slim,
     keyframes: keyframes.map(k => k.file),
   };

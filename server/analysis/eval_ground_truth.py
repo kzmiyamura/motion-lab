@@ -106,6 +106,7 @@ def load_tracks(gt):
         print(f"  （動画が無いので付け直さない: {video}）")
         return data
     data["leaderPid"] = c["leaderPid"]
+    ap.drop_background_persons(data["frames"])  # 付け直し時（assign_appearance_ids）と同じ除外をして kept の並びをそろえる
     for f, pids in zip(data["frames"], c["pids"]):
         for p, pid in zip(f["kept"], pids):
             if pid is None:

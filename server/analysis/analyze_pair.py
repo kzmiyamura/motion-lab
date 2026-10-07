@@ -2117,14 +2117,131 @@ def _pair_dist(wl, wf, pair):
     return math.hypot(wl[lk][0] - wf[fk][0], wl[lk][1] - wf[fk][1])
 
 
+# (4) 重なり区間: 2人が縦に重なる（箱が横にも縦にも大きく重なる）・片方が隠れている（1人しか取れない）・
+# 手首の信頼度が低いコマでは、手首の距離で手のつなぎを読めない（左右の手を取り違える。820f0461 の冒頭は
+# 2人が縦に重なって始まり、右手×右手が左右逆に読まれ、その後の「持ち替え」も読み違いの続きになっていた）。
+# そのコマの計測値は採らず、2人が分かれて見える区間の hold を前後から引き継ぐ:
+#   先頭の重なり区間 … 直後の明瞭な区間の hold をさかのぼって入れる / 末尾 … 直前の明瞭な区間から引き継ぐ
+#   途中 … 直前と直後の明瞭な区間の hold が同じときだけ入れる（違えば持ち替えたかもしれないので空）
+# 引き継いだコマは推定（estimated）。HOLD_OCCLUSION_FILL=False（環境変数 MOTION_LAB_HOLD_FILL=0）で無効
+HOLD_OCCLUSION_FILL = os.environ.get("MOTION_LAB_HOLD_FILL", "1") != "0"
+HOLD_OVERLAP_X = 0.6        # 2人の箱の横の重なり（狭い方の幅に対する割合）がこれ以上
+HOLD_OVERLAP_Y = 0.6        # かつ縦の重なり（低い方の高さに対する割合）がこれ以上で「重なり」
+HOLD_WRIST_CONF = 0.3       # どちらかの人の両手首の信頼度がともにこれ未満なら、手首が見えていない
+HOLD_FILL_MAX_SEC = 3.0     # これより長い重なり区間は推定しない（長く隠れた間の持ち替えは分からない）
+HOLD_FILL_LOOK_SEC = 0.6    # 明瞭な区間の hold は、重なり区間の境目からこの秒数の多数決で決める
+HOLD_FILL_OVERWRITE = os.environ.get("MOTION_LAB_HOLD_OVERWRITE", "1") != "0"  # 重なり区間の計測値を捨てて推定で置き換える
+# 補うのは映像の先頭・末尾の重なり区間だけ。途中の重なり（CBL の交差の瞬間など）は、補うと正解表の hold が
+# 当たらなくなった（全区間で補うと 男の手 12/13 → 8/13）。途中は手首の計測がむしろ当たる
+HOLD_FILL_EDGES_ONLY = os.environ.get("MOTION_LAB_HOLD_EDGES_ONLY", "1") != "0"
+
+
+def _box_overlap(a, b):
+    """2つの箱の (横の重なり, 縦の重なり)。それぞれ小さい方の幅/高さに対する割合"""
+    ox = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    oy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    w = max(1e-6, min(a[2] - a[0], b[2] - b[0]))
+    h = max(1e-6, min(a[3] - a[1], b[3] - b[1]))
+    return ox / w, oy / h
+
+
+def hold_unclear(df, leader_pid):
+    """このコマは手のつなぎを手首の距離から読めないか（相方が隠れている・縦に重なっている・手首が見えない）"""
+    by_pid = {p.get("pid"): p for p in df["kept"] if p.get("pid") is not None}
+    if leader_pid not in by_pid or (1 - leader_pid) not in by_pid:
+        return True
+    a, b = by_pid[leader_pid], by_pid[1 - leader_pid]
+    ox, oy = _box_overlap(a["bbox"], b["bbox"])
+    if ox >= HOLD_OVERLAP_X and oy >= HOLD_OVERLAP_Y:
+        return True
+    for p in (a, b):
+        k = p.get("kps")
+        if k and len(k) > 10 and max(k[9][2], k[10][2]) < HOLD_WRIST_CONF:
+            return True
+    return False
+
+
+HOLD_FILL_MIN_VOTES = 2     # 引き継ぐ hold の票がこれ未満なら補わない
+HOLD_FILL_MIN_SHARE = 0.5   # 最多の hold が票の半分を超えないとき（左右の読みが割れている）は補わない。割れたまま補うと誤った推定を出す
+
+
+def _majority_label(labels):
+    votes = {}
+    for x in labels:
+        if x is not None:
+            votes[x] = votes.get(x, 0) + 1
+    if not votes:
+        return None
+    best = max(votes, key=lambda k: votes[k])
+    if votes[best] < HOLD_FILL_MIN_VOTES or votes[best] / sum(votes.values()) <= HOLD_FILL_MIN_SHARE:
+        return None
+    return best
+
+
+def fill_unclear_holds(draw_frames, leader_pid, labels):
+    """重なり区間の hold を前後の明瞭な区間から引き継ぐ。戻り値: (labels, estimated)"""
+    n = len(draw_frames)
+    unclear = [hold_unclear(df, leader_pid) for df in draw_frames]
+    out = list(labels)
+    est = [False] * n
+    i = 0
+    while i < n:
+        if not unclear[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and unclear[j + 1]:
+            j += 1
+        if HOLD_FILL_EDGES_ONLY and i > 0 and j < n - 1:
+            i = j + 1   # 途中の重なり（CBL の交差など）は手首の計測が当たるので触らない
+            continue
+        t0, t1 = draw_frames[i]["t"], draw_frames[j]["t"]
+        # 区間の長さは、前後の明瞭なコマの時刻までで測る（端のコマ1つぶん含める）
+        t_prev = draw_frames[i - 1]["t"] if i > 0 else t0
+        t_next = draw_frames[j + 1]["t"] if j + 1 < n else t1
+        if t_next - t_prev <= HOLD_FILL_MAX_SEC + 1e-6:
+            prev_labels = [labels[k] for k in range(i - 1, -1, -1)
+                           if not unclear[k] and t_prev - draw_frames[k]["t"] <= HOLD_FILL_LOOK_SEC]
+            next_labels = [labels[k] for k in range(j + 1, n)
+                           if not unclear[k] and draw_frames[k]["t"] - t_next <= HOLD_FILL_LOOK_SEC]
+            prev_l = _majority_label(prev_labels) if i > 0 else None
+            next_l = _majority_label(next_labels) if j + 1 < n else None
+            if i == 0:
+                fill = next_l
+            elif j == n - 1:
+                fill = prev_l
+            else:
+                fill = prev_l if prev_l == next_l else None
+            for k in range(i, j + 1):
+                if fill is not None:
+                    out[k], est[k] = fill, True
+                elif HOLD_FILL_OVERWRITE:
+                    out[k] = None
+        elif HOLD_FILL_OVERWRITE:
+            for k in range(i, j + 1):
+                out[k] = None
+        i = j + 1
+    return out, est
+
+
 _HOLD_CACHE = {}
 
 
 def hold_frame_table(draw_frames, leader_pid):
     """コマごとの hold ラベル（"L-R" 等 or None）の表。追跡・引き継ぎの設定を反映（draw_frames ごとに 1 回）"""
+    return _hold_table(draw_frames, leader_pid)[0]
+
+
+def hold_frame_estimated(draw_frames, leader_pid):
+    """コマごとの「この hold は重なり区間の推定か」の表（hold_frame_table と同じ長さの bool のリスト）"""
+    return _hold_table(draw_frames, leader_pid)[1]
+
+
+def _hold_table(draw_frames, leader_pid):
     key = (id(draw_frames), len(draw_frames), leader_pid, HOLD_SIDE_BY_FACING, HOLD_FACING_WINDOW,
            HOLD_TRACK_WRISTS, HOLD_CARRY, HOLD_TRACK_GATE, HOLD_TRACK_SWAP_RATIO, HOLD_CARRY_DIST,
-           HOLD_CARRY_NEED_OPPOSITE, HOLD_CARRY_MAX_GAP, HOLD_TRACK_MAX_GAP,
+           HOLD_CARRY_NEED_OPPOSITE, HOLD_CARRY_MAX_GAP, HOLD_TRACK_MAX_GAP, HOLD_OCCLUSION_FILL, HOLD_FILL_OVERWRITE,
+           HOLD_OVERLAP_X, HOLD_OVERLAP_Y, HOLD_WRIST_CONF, HOLD_FILL_MAX_SEC, HOLD_FILL_LOOK_SEC, HOLD_FILL_EDGES_ONLY,
            draw_frames[0]["kept"][0].get("pid") if draw_frames and draw_frames[0]["kept"] else None)
     if key in _HOLD_CACHE:
         return _HOLD_CACHE[key]
@@ -2184,9 +2301,12 @@ def hold_frame_table(draw_frames, leader_pid):
                     if miss > HOLD_CARRY_MAX_GAP:
                         cur = None
         labels = carried
+    est = [False] * n
+    if HOLD_OCCLUSION_FILL and n:
+        labels, est = fill_unclear_holds(draw_frames, leader_pid, labels)
     _HOLD_CACHE.clear()
-    _HOLD_CACHE[key] = labels
-    return labels
+    _HOLD_CACHE[key] = (labels, est)
+    return _HOLD_CACHE[key]
 
 
 def hold_label_jp(pair):
@@ -2199,30 +2319,72 @@ def build_hold_timeline(draw_frames, leader_pid):
     """全編のホールド（手のつなぎ）区間: [{from, to, hold}]
 
     技の瞬間だけでなく「技と技の間でどう手を持ち替えたか」を Claude が
-    レポートの連鎖記述に使う。1サンプルの欠落（オクルージョン等）は無視して繋ぐ
+    レポートの連鎖記述に使う。1サンプルの欠落（オクルージョン等）は無視して繋ぐ。
+    重なり区間（2人が重なる・片方が隠れる）を前後から補った区間には estimated: [from, to]（補った秒の範囲）を付ける。
+    その範囲の手は計測でなく推定（AI は「この区間の手は推定」と読む）
     """
     if leader_pid is None:
         return []
-    samples = []  # (t, pair or None)
-    table = hold_frame_table(draw_frames, leader_pid)
+    samples = []  # (t, pair or None, 推定か)
+    table, est = _hold_table(draw_frames, leader_pid)
     for i, df in enumerate(draw_frames):
-        samples.append((df["t"], table[i]))
+        samples.append((df["t"], table[i], est[i]))
 
     segs = []
     cur, start, last_t, miss = None, None, None, 0
+    est_span = None
     def flush():
         if cur is not None and start is not None and last_t - start >= HOLD_SEG_MIN_SEC:
-            segs.append({"from": round(start, 2), "to": round(last_t, 2), "hold": hold_label_jp(cur)})
-    for t, p in samples:
+            seg = {"from": round(start, 2), "to": round(last_t, 2), "hold": hold_label_jp(cur)}
+            if est_span is not None:
+                seg["estimated"] = [round(est_span[0], 2), round(est_span[1], 2)]
+            segs.append(seg)
+    for t, p, e in samples:
         if p == cur:
             last_t, miss = t, 0
+            if e:
+                est_span = [t, t] if est_span is None else [est_span[0], t]
         elif p is None and miss < HOLD_MISS_TOLERANCE:
             miss += 1  # 手首の取りこぼし（頭上・オクルージョン）は少しの間なら区間を切らない
         else:
             flush()
             cur, start, last_t, miss = p, t, t, 0
+            est_span = [t, t] if e else None
     flush()
     return [s for s in segs]
+
+
+HOLD_UNCLEAR_MIN_SEC = 0.3  # holdUnclear に載せる区間の最小長（1コマの点滅は載せない）
+
+
+def build_hold_unclear(draw_frames, leader_pid):
+    """手首から手のつなぎを読めない区間 [{from, to}]（2人が縦に重なる・片方が隠れる・手首が見えない）。
+    AI が「この区間の hold は信用できない（計測でなく推定）」と分かるように summary に出す"""
+    if leader_pid is None:
+        return []
+    spans, start, last = [], None, None
+    for df in draw_frames:
+        if hold_unclear(df, leader_pid):
+            if start is None:
+                start = df["t"]
+            last = df["t"]
+        elif start is not None:
+            if last - start >= HOLD_UNCLEAR_MIN_SEC:
+                spans.append({"from": round(start, 2), "to": round(last, 2)})
+            start = None
+    if start is not None and last - start >= HOLD_UNCLEAR_MIN_SEC:
+        spans.append({"from": round(start, 2), "to": round(last, 2)})
+    return spans
+
+
+def hold_is_estimated(draw_frames, t_center, leader_pid):
+    """detect_hold の投票に使うコマの過半数が、重なり区間の推定か"""
+    if leader_pid is None:
+        return False
+    table, est = _hold_table(draw_frames, leader_pid)
+    used = [est[i] for i, df in enumerate(draw_frames)
+            if abs(df["t"] - t_center) <= HOLD_WINDOW_SEC and table[i] is not None]
+    return bool(used) and sum(used) * 2 > len(used)
 
 
 def detect_hold(draw_frames, t_center, leader_pid):
@@ -2263,6 +2425,9 @@ def detect_events(draw_frames, leader_pid):
                "pass": detect_pass_side(draw_frames, t, leader_pid),
                "handRaise": detect_hand_raise(draw_frames, t, leader_pid)}
               for t in cbl_times]
+    for e in events:
+        if e["hold"] is not None and hold_is_estimated(draw_frames, e["tCross"], leader_pid):
+            e["holdEstimated"] = True  # 手のつなぎは重なり区間の前後からの推定（計測ではない）
 
     spans = {pid: detect_turns(draw_frames, pid, with_span=True, cbl_times=cbl_times) for pid in (0, 1)}
     turns = {pid: [(t, r) for t, r, _, _ in spans[pid]] for pid in (0, 1)}
@@ -2317,6 +2482,8 @@ def detect_events(draw_frames, leader_pid):
             spin =leader_spins[t] if by == "leader" else spin_hint(draw_frames, pid, t, spin_spans[pid].get(t))
             ev = {"t": t, "type": "Turn", "by": by, "rotations": rotations,
                   "hold": detect_hold(draw_frames, t, leader_pid), "spin": spin}
+            if ev["hold"] is not None and hold_is_estimated(draw_frames, t, leader_pid):
+                ev["holdEstimated"] = True
             if t in rot_spans.get(pid, {}):
                 set_turn_span(ev, *rot_spans[pid][t], source="flips10fps")
             events.append(ev)
@@ -2782,6 +2949,7 @@ def main():
         events = refine_turns_dense(video_path, model, draw_frames, events, leader_pid, clock=clock)
     events = apply_cbl_pass_half(events)
     hold_timeline = build_hold_timeline(draw_frames, leader_pid) if draw_frames else []
+    hold_unclear_spans = build_hold_unclear(draw_frames, leader_pid) if draw_frames else []
 
     # デバッグ動画（2パス目）: 全編の計測を踏まえたロールで色を塗り、イベントラベルを焼き込む
     if debug_video_path is not None and draw_frames:
@@ -2909,6 +3077,8 @@ def main():
                 "events": events,
                 # 手のつなぎの全編タイムライン（技間の持ち替えを連鎖記述に使う）
                 "holdTimeline": hold_timeline,
+                # 2人が重なる・片方が隠れる等で、手首から手のつなぎを読めない区間（この間の hold は信用しない）
+                "holdUnclear": hold_unclear_spans,
             },
         }, f)
 

@@ -33,7 +33,8 @@ def main():
     holds = ap.build_hold_timeline(draw_frames, leader_pid)
 
     with open(out_path, "w") as f:
-        json.dump({"leaderPid": leader_pid, "events": events, "holdTimeline": holds}, f, ensure_ascii=False)
+        json.dump({"leaderPid": leader_pid, "events": events, "holdTimeline": holds,
+                   "holdUnclear": ap.build_hold_unclear(draw_frames, leader_pid)}, f, ensure_ascii=False)
 
     if skeleton_path:
         ap.render_skeleton_video(skeleton_path, draw_frames, leader_pid, tracks["sampledFps"], events)

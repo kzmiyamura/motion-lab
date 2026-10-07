@@ -2102,6 +2102,122 @@ def _tracked_wrists(draw_frames, pid, facing_tab):
     return out
 
 
+# (2b) アンカー付きの手首追跡: 「顔が見えていれば画面左の手が本人の右手、背中向きなら画面左が左手」は
+# 1コマでは決めにくい（横向き・ぼけ・片方の手が隠れる）。そこで、読みやすい瞬間（顔の向きがはっきりし、
+# 両肩・両手首が見えているコマ）だけで左右を決め（アンカー）、それ以外のコマは手首の動きの連続性
+# （直前のアンカーからの位置＋速度の予測に近い方を同じ手とする）でつなぐ。時間を前向き・後ろ向きの両方で
+# 追い、近い方のアンカーから来たラベルを採る。COCO のラベル（YOLO は背中向きで左右が逆に付く）は
+# アンカー以外では信じない。アンカーが遠い（HOLD_ANCHOR_MAX_SEC 超）コマは None（hold_wrists の読みに任せる）
+HOLD_ANCHOR_WRISTS = False
+HOLD_ANCHOR_MAX_SEC = 1.5     # アンカーからこの秒数を超えて離れたコマはつながない
+HOLD_ANCHOR_SHOULDER = 0.5    # アンカーに要る両肩の信頼度
+HOLD_ANCHOR_WRIST_CONF = 0.3  # アンカーに要る両手首の信頼度
+HOLD_ANCHOR_GATE = 0.25       # 予測位置からこれ以上離れた点は同じ手と見なさない（正規化座標）
+
+
+def _anchor_labels(p):
+    """読みやすいコマなら本人の左右で見た手首 {"L","R"}（両方あるとき）、そうでなければ None"""
+    k = p.get("kps")
+    w = p.get("wrists") or {}
+    if not k or len(k) < 11 or w.get("L") is None or w.get("R") is None:
+        return None
+    if min(k[5][2], k[6][2]) < HOLD_ANCHOR_SHOULDER or min(k[9][2], k[10][2]) < HOLD_ANCHOR_WRIST_CONF:
+        return None
+    facing = person_facing(p)
+    if facing is None:
+        return None
+    return hold_wrists(p, facing)
+
+
+def _anchored_pass(frames_pts, anchors, order):
+    """order（コマの添字の並び）の向きに、アンカーのラベルを手首の連続性で運ぶ。戻り値: {添字: ({"L","R"}, 離れた秒数)}"""
+    out = {}
+    state = {"L": None, "R": None}  # 手ごとに (位置, 速度/秒, その時刻)。速度は「追う向き」で測る（後ろ向きなら時刻が戻る向き）
+
+    def update(k, q, t):
+        s = state[k]
+        vel = (0.0, 0.0)
+        if s is not None and 0 < abs(t - s[2]) <= HOLD_ANCHOR_MAX_SEC:
+            dt = abs(t - s[2])
+            vel = ((q[0] - s[0][0]) / dt, (q[1] - s[0][1]) / dt)
+        state[k] = ((q[0], q[1]), vel, t)
+
+    anchor_t = None
+    for i in order:
+        t, pts = frames_pts[i]
+        a = anchors[i]
+        if a is not None:
+            for k in ("L", "R"):
+                update(k, a[k], t)
+            anchor_t = t
+            out[i] = ({"L": a["L"], "R": a["R"]}, 0.0)
+            continue
+        if not pts or anchor_t is None or abs(t - anchor_t) > HOLD_ANCHOR_MAX_SEC:
+            continue
+        # 手ごとの予測位置（直前に見えた位置＋速度×経過秒）。アンカーからも遠すぎる（見失って長い）手は予測しない
+        pred = {}
+        for k in ("L", "R"):
+            s = state[k]
+            if s is None:
+                continue
+            dt = abs(t - s[2])
+            if dt <= HOLD_ANCHOR_MAX_SEC:
+                pred[k] = ((s[0][0] + s[1][0] * dt, s[0][1] + s[1][1] * dt), dt)
+        if not pred:
+            continue
+        dist = lambda q, k: math.hypot(q[0] - pred[k][0][0], q[1] - pred[k][0][1])
+        res = {"L": None, "R": None}
+        if len(pts) == 2 and len(pred) == 2:
+            keep = dist(pts[0], "L") + dist(pts[1], "R")
+            swap = dist(pts[0], "R") + dist(pts[1], "L")
+            u, v = (pts[0], pts[1]) if keep <= swap else (pts[1], pts[0])
+            res = {"L": u, "R": v}
+        else:
+            # 点が1つ、または予測が1つ: 予測に近い手へ付ける（ゲート内のみ）。2点で予測1つなら予測に近い方の点を採る
+            k0 = min(pred, key=lambda kk: min(dist(q, kk) for q in pts))
+            q = min(pts, key=lambda qq: dist(qq, k0))
+            if dist(q, k0) <= HOLD_ANCHOR_GATE:
+                res[k0] = q
+                if len(pts) == 2:
+                    other = pts[1] if q is pts[0] else pts[0]
+                    res["R" if k0 == "L" else "L"] = other
+        if res["L"] is None and res["R"] is None:
+            continue
+        for k in ("L", "R"):
+            if res[k] is not None:
+                update(k, res[k], t)
+        out[i] = (res, abs(t - anchor_t))   # 近い方のアンカーのラベルを採るため、アンカーからの秒数を添える
+    return out
+
+
+def _anchored_wrists(draw_frames, pid):
+    """pid の手首を、読みやすいコマのアンカーと手首の連続性でラベル付けして [{"L","R"} or None] をコマごとに返す"""
+    n = len(draw_frames)
+    persons = [next((q for q in df["kept"] if q.get("pid") == pid), None) for df in draw_frames]
+    frames_pts = []
+    anchors = []
+    for df, p in zip(draw_frames, persons):
+        if p is None:
+            frames_pts.append((df["t"], []))
+            anchors.append(None)
+            continue
+        raw = p.get("wrists") or {}
+        frames_pts.append((df["t"], [raw[k] for k in ("L", "R") if raw.get(k) is not None]))
+        anchors.append(_anchor_labels(p))
+    fwd = _anchored_pass(frames_pts, anchors, range(n))
+    bwd = _anchored_pass(frames_pts, anchors, range(n - 1, -1, -1))
+    out = []
+    for i in range(n):
+        f, b = fwd.get(i), bwd.get(i)
+        if f is None and b is None:
+            out.append(None)
+        elif b is None or (f is not None and f[1] <= b[1]):
+            out.append(f[0])
+        else:
+            out.append(b[0])
+    return out
+
+
 # (3) つないだ手はターン中も同じ手: 向かい合って顔が見え、手首が近いコマ（読めるコマ）で決まった hold を、
 # 手首が近いまま続く限り前後のコマへ引き継ぐ。引き継いだコマは自分の投票を使わない
 HOLD_CARRY = False
@@ -2240,6 +2356,7 @@ def hold_frame_estimated(draw_frames, leader_pid):
 def _hold_table(draw_frames, leader_pid):
     key = (id(draw_frames), len(draw_frames), leader_pid, HOLD_SIDE_BY_FACING, HOLD_FACING_WINDOW,
            HOLD_TRACK_WRISTS, HOLD_CARRY, HOLD_TRACK_GATE, HOLD_TRACK_SWAP_RATIO, HOLD_CARRY_DIST,
+           HOLD_ANCHOR_WRISTS, HOLD_ANCHOR_MAX_SEC, HOLD_ANCHOR_SHOULDER, HOLD_ANCHOR_WRIST_CONF, HOLD_ANCHOR_GATE,
            HOLD_CARRY_NEED_OPPOSITE, HOLD_CARRY_MAX_GAP, HOLD_TRACK_MAX_GAP, HOLD_OCCLUSION_FILL, HOLD_FILL_OVERWRITE,
            HOLD_OVERLAP_X, HOLD_OVERLAP_Y, HOLD_WRIST_CONF, HOLD_FILL_MAX_SEC, HOLD_FILL_LOOK_SEC, HOLD_FILL_EDGES_ONLY,
            draw_frames[0]["kept"][0].get("pid") if draw_frames and draw_frames[0]["kept"] else None)
@@ -2249,7 +2366,9 @@ def _hold_table(draw_frames, leader_pid):
     n = len(draw_frames)
     fpid = 1 - leader_pid
     tracked = None
-    if HOLD_TRACK_WRISTS:
+    if HOLD_ANCHOR_WRISTS:
+        tracked = {pid: _anchored_wrists(draw_frames, pid) for pid in (leader_pid, fpid)}
+    elif HOLD_TRACK_WRISTS:
         tracked = {pid: _tracked_wrists(draw_frames, pid, None if fac is None else fac.get(pid)) for pid in (leader_pid, fpid)}
     best = []     # (pair, dist) or None
     readable = []
@@ -2937,12 +3056,18 @@ def main():
 
     # 外見IDの割り当て → 技イベント検出（Turn/CBL）+ ホールドタイムライン（デバッグ動画の有無に関わらず実行）
     leader_pid = assign_appearance_ids(draw_frames) if draw_frames else None
+    vote_leader = leader_pid
 
     # Claude アンカーによるリーダー上書き（併用方針: 写真で間違えようがない意味判断は
     # Claude が先に1回だけ行い、CVはそれを基準に計測する。ヒントが無い/壊れている場合は
     # 上の中央値多数決がそのまま使われる）
     if leader_hint and draw_frames:
         leader_pid = leader_from_hint(draw_frames, leader_pid, leader_hint)
+    # リーダーを何で決めたかを残す。CV 投票は SHR・身長・肩幅が全部カメラに近い人（女性）に偏る動画があり
+    # （820f0461。正解付きの bb0efcb9・img1884 でも投票は正解と食い違う）、ヒントが無いときは誤りうる。
+    # 後から原因を追えるようにする（2人が分かれて見えるコマだけで投票し直す案は、正解付きで逆に悪化した）
+    leader_decision = {"vote": vote_leader, "hint": leader_hint or None, "final": leader_pid,
+                       "source": "anchor" if (leader_hint and draw_frames) else "cv-vote"}
 
     events = detect_events(draw_frames, leader_pid) if draw_frames else []
     if events:
@@ -3070,6 +3195,7 @@ def main():
                 "slot0": sum0,
                 "slot1": sum1,
                 "verdictByRule": verdict,
+                "leaderDecision": leader_decision,
                 "reliability": reliability,
                 "contested": contested,
                 "contestedDropped": dropped,

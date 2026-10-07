@@ -98,6 +98,8 @@ export function buildDigest(measurements: Json, keyframes: DigestKeyframe[], env
     },
     counts,
     verdictByRule: summary.verdictByRule ?? null,
+    // リーダーを何で決めたか: source=anchor（Claude の写真判定）/ cv-vote（CV 多数決。カメラに近い人に偏って逆になることがある）
+    leaderDecision: summary.leaderDecision ?? null,
     reliability: summary.reliability ?? null,
     slot0: summary.slot0 ?? null,
     slot1: summary.slot1 ?? null,

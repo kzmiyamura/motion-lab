@@ -251,6 +251,33 @@ test('buildDigest: persons を落とし、イベントにストリップを紐�
   assert.equal(d.env.pythonBin, 'py');
 });
 
+test('buildDigest: tracks があればイベントに handHints（つないだ手の候補）が付く。無ければ付かない', () => {
+  // 2 人が離れて立ち、0.5〜1.5 秒に画面左の人の右手首が画面右の人の手首の近くにある（kps の 9/10 = 左/右手首）
+  const kps = (wl: [number, number], wr: [number, number], faceConf: number) => {
+    const k: number[][] = Array.from({ length: 17 }, () => [0.5, 0.5, 0.9]);
+    for (const i of [0, 1, 2]) k[i] = [0.5, 0.3, faceConf];
+    for (const i of [3, 4]) k[i] = [0.5, 0.3, 0.1];   // 耳も頭の高さに（頭の中心を y=0.3 に置く）
+    k[5] = [0.4, 0.4, 0.9]; k[6] = [0.6, 0.4, 0.9]; k[11] = [0.45, 0.7, 0.9]; k[12] = [0.55, 0.7, 0.9];
+    k[9] = [wl[0], wl[1], 0.9]; k[10] = [wr[0], wr[1], 0.9];
+    return k;
+  };
+  const frames = Array.from({ length: 30 }, (_, i) => {
+    const t = i * 0.1;
+    const joined = t >= 0.5 && t <= 1.5;
+    const a = { pid: 0, bbox: [0.05, 0.1, 0.35, 0.95], kps: kps([0.1, 0.8], [joined ? 0.5 : 0.2, 0.55], 0.9) };
+    const b = { pid: 1, bbox: [0.6, 0.1, 0.9, 0.95], kps: kps([joined ? 0.52 : 0.8, 0.55], [0.85, 0.8], 0.1) };
+    return { t, kept: [a, b] };
+  });
+  const m = { fps: 30, width: 888, height: 1920, summary: { events: [{ t: 0.4, type: 'CBL', by: 'pair' }, { t: 3.0, type: 'Turn', by: 'follower' }] } };
+  const d = buildDigest(m, [], { pythonBin: 'py' }, { frames } as never) as Record<string, any>;
+  const hh = d.events[0].handHints;
+  assert.ok(hh, 'handHints が付く');
+  assert.ok(Array.isArray(hh.jointHands) && hh.jointHands.length > 0, 'つないだ手の候補が出る');
+  assert.ok(hh.jointHands.every((s: string) => /秒/.test(s)));
+  const d0 = buildDigest(m, [], { pythonBin: 'py' }) as Record<string, any>;
+  assert.equal(d0.events[0].handHints, undefined);
+});
+
 // 実ジョブの out（読み取りのみ）。無い環境ではスキップ
 const REAL_OUT = process.env.DIGEST_SAMPLE_OUT
   ?? 'C:\\Users\\admin\\Desktop\\projects\\motion-lab\\server\\storage\\analysis-jobs\\86afab96-8133-4089-8fa0-395b45e2e498\\out';

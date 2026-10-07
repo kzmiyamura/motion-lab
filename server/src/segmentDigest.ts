@@ -438,7 +438,10 @@ export function buildSegmentPrompt(d: SegmentDigest, o: PromptOptions): string {
     JSON.stringify(d),
     '',
     '## 出力（JSON のみ。前後に説明を書かない）',
-    '{"rows":[{"start":秒,"name":"技名","hands":"男性◯手×女性◯手","description":"1〜2文"}],"basis":"根拠を1〜2文"}',
+    '{"rows":[{"start":秒,"name":"技名","hands":"男性◯手×女性◯手","move":"技の種類","holdStart":"手","holdEnd":"手","turn":{"by":"follower","direction":"right","rotations":1},"passSide":"left","description":"1〜2文"}],"basis":"根拠を1〜2文"}',
+    '- 行は currentCards に対応させる（start はそのカードの start）。カードに収まらない出来事（カードの前の区間のターン等）は、別の行にしてよい。カードの中の出来事（ターン→頭に手をかける等）は name・description に書く。',
+    '- move は basic cbl right_turn left_turn inside_turn outside_turn cbl_inside_turn cbl_outside_turn reverse_cbl leader_turn copa hand_change wrap hammerlock shadow dip shine other のどれか。',
+    '- holdStart / holdEnd は LR RR RL LL（男性の手が先。LR=男性左手×女性右手）double cross closed none のどれか。turn は回った人 by（leader=男性 / follower=女性）・direction（right/left。回る本人から見て）・rotations。無ければ null。passSide は女性が男性のどちら側を通ったか（left/right/return）。',
   ].join('\n');
 }
 
@@ -463,4 +466,16 @@ export function applySegmentRows(result: Json, from: number, to: number, rows: J
   }));
   routine.moves = [...kept, ...added].sort((a, b) => Number(a.start) - Number(b.start));
   return { ...result, routine };
+}
+
+export interface ParsedHands { man: 'L' | 'R' | 'both' | null; woman: 'L' | 'R' | 'both' | null }
+
+/** 「男性右手×女性左手」「右手同士」「男性左手で」「両手」などの手の文字列を読む（評価・比較用） */
+export function parseHands(text: string): ParsedHands {
+  const side = (s: string) => (s === '右' ? 'R' : 'L');
+  const same = /(右|左)手同士/.exec(text);
+  if (same) return { man: side(same[1]), woman: side(same[1]) };
+  if (/両手/.test(text)) return { man: 'both', woman: 'both' };
+  const m = /男性(右|左)手/.exec(text), w = /女性(右|左)手/.exec(text);
+  return { man: m ? side(m[1]) : null, woman: w ? side(w[1]) : null };
 }

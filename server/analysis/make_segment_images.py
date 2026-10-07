@@ -56,6 +56,9 @@ def main():
     step = float(args.get("step", 0.2))
     dstep = float(args.get("dstep", 0.3))
     max_detail = int(args.get("max-detail", 3))
+    dn = int(args.get("dn", ms.DETAIL_N))          # 詳細画像 1 枚のコマ数
+    dscale = float(args.get("dscale", 1.0))        # 詳細画像のタイルの大きさの倍率
+    oscale = float(args.get("oscale", 1.0))        # 一覧画像のタイルの大きさの倍率
     tracks = None
     if args.get("tracks"):
         with open(args["tracks"], encoding="utf-8") as fp:
@@ -79,7 +82,11 @@ def main():
         frames, times = ms.read_window(cap, fps, t_from, t_to, step)
         frames, times = frames[:ms.SHEET_MAX_TILES], times[:ms.SHEET_MAX_TILES]
         crop = ms.union_crop(tracks, t_from - step, t_to + step, w, h)
-        sheet = ms.build_sheet(frames, times, crop)
+        cols = min(7 if h >= w else 5, len(frames))
+        tile = ms.tile_size(w, h, cols, crop)
+        if oscale != 1.0:
+            tile = (max(int(tile[0] * oscale), 16), max(int(tile[1] * oscale), 16))
+        sheet = ms.build_sheet(frames, times, crop, tile=tile)
         cv2.imwrite(os.path.join(out_dir, "seg_overview.jpg"), sheet, [cv2.IMWRITE_JPEG_QUALITY, 82])
         written.append("seg_overview.jpg")
 
@@ -88,12 +95,14 @@ def main():
         n = 0
         d_end = float(args.get("detail-to", t_to))
         while t <= d_end + 1e-6 and n < max_detail:
-            d_to = t + dstep * (ms.DETAIL_N - 1)
+            d_to = t + dstep * (dn - 1)
             frames, times = ms.read_window(cap, fps, t, d_to, dstep)
             if frames:
                 crop = ms.upper_body_crop(tracks, t - 0.1, d_to + 0.1, w, h)
                 if crop is not None:
-                    sheet = ms.build_sheet(frames, times, crop, cols=ms.DETAIL_COLS, tile=ms.detail_tile_size(crop))
+                    tw, th = ms.detail_tile_size(crop)  # 6 コマ前提の大きさ
+                    tile = (max(int(tw * dscale), 16), max(int(th * dscale), 16))
+                    sheet = ms.build_sheet(frames, times, crop, cols=3 if dn > 4 else 2, tile=tile)
                     n += 1
                     name = f"seg_detail_{n}.jpg"
                     cv2.imwrite(os.path.join(out_dir, name), sheet, [cv2.IMWRITE_JPEG_QUALITY, 82])

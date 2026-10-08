@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  buildClaudeArgs, buildRunnerPrompt, collectOutputs, countImageReads, listJudgeImages, listWorkdirFiles, mainEnv, modelForStep, needsReadAllImages, readSessionLog, removeWorkdir, stageFlatDir, stageJobDir,
+  buildClaudeArgs, buildRunnerPrompt, collectOutputs, countImageReads, effortForStep, listJudgeImages, listWorkdirFiles, mainEnv, modelForStep, needsReadAllImages, readSessionLog, removeWorkdir, stageFlatDir, stageJobDir,
 } from './claudeRunner.js';
 import { buildDigest, parseKeyframeName, writeDigest } from './digest.js';
 
@@ -57,6 +57,16 @@ test('buildClaudeArgs: モデル指定があれば --model、無ければ付け�
   const a = buildClaudeArgs('main', '30', 'sonnet');
   assert.equal(a[a.indexOf('--model') + 1], 'sonnet');
   assert.ok(!buildClaudeArgs('anchor', '10', null).includes('--model'));
+});
+
+test('effortForStep: main だけ・正しい値だけ --effort になる（既定は付けない）', () => {
+  assert.equal(effortForStep('main', {}), null);
+  assert.equal(effortForStep('main', { CLAUDE_EFFORT_MAIN: ' Medium ' }), 'medium');
+  assert.equal(effortForStep('main', { CLAUDE_EFFORT_MAIN: 'turbo' }), null);
+  assert.equal(effortForStep('anchor', { CLAUDE_EFFORT_MAIN: 'low' }), null);
+  const a = buildClaudeArgs('main', '30', null, 'low');
+  assert.equal(a[a.indexOf('--effort') + 1], 'low');
+  assert.ok(!buildClaudeArgs('main', '30', null, null).includes('--effort'));
 });
 
 test('mainEnv: 本解析の python が UTF-8 で書くよう PYTHONUTF8=1 を足す（元の環境は残す）', () => {

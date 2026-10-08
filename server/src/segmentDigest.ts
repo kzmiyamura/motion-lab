@@ -296,7 +296,8 @@ export function buildSegmentDigest(inp: SegmentInputs): SegmentDigest {
     const run = spin?.runs?.[0];
     const occluded = isOcc(t) || isOcc(s0) || isOcc(s1);
     const o: Json = {
-      type: e.type, t, 回転数: e.rotations ?? null,
+      // 重なり/隠れの間のターンの回転数は、骨格が取り違えて数えるので出さない（出すと AI がその数に寄る）。回数は画像で数える
+      type: e.type, t, 回転数: e.type === 'Turn' && occluded ? null : (e.rotations ?? null),
       // 向きは骨格の肩の動きから計算した値（回る本人から見た右/左）。誰が回ったかは重なり中は取り違える
       向き: run?.dir === 'right' ? '右回り(時計回り。回る本人から見て)' : run?.dir === 'left' ? '左回り(回る本人から見て)' : null,
       span: [r2(s0), r2(s1)], 信頼: verdictOf(e),

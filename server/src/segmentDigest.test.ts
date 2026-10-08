@@ -144,6 +144,7 @@ test('buildSegmentDigest: 隠れ区間・hold の信頼度・つないだ手・�
   assert.match(String(d.turns[0].回った人), /当てにならない/);
   assert.match(String(d.turns[0].向き), /右回り/);
   assert.equal(d.turns[0].信頼, 'doubtful');
+  assert.equal(d.turns[0].回転数, null); // 重なり中の回転数（CV は 1 と数えた）は出さない
   // つないだ手は向きのルールで右手/左手に直る（顔が見える人の体の画面右側の手=左手、背中向きの画面左の手=左手）
   assert.ok(d.jointHands.some(s => s.includes('画面左の人の左手×画面右の人の左手')));
   assert.equal(d.currentCards[0].name, 'ベーシック');

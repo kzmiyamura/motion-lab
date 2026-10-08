@@ -283,7 +283,8 @@ test('buildDigest: tracks があればイベントに handHints（つないだ�
   const hh = d.events[0].handHints;
   assert.ok(hh, 'handHints が付く');
   assert.ok(Array.isArray(hh.jointHands) && hh.jointHands.length > 0, 'つないだ手の候補が出る');
-  assert.ok(hh.jointHands.every((s: string) => /秒/.test(s)));
+  assert.ok(hh.jointHands.every((s: string) => /: \d/.test(s)), '「中身: 区間, 区間」の形');
+  assert.ok(typeof d.handHintsKey === 'string' && d.handHintsKey.includes('中身: 区間'), '凡例が付く');
   const d0 = buildDigest(m, [], { pythonBin: 'py' }) as Record<string, any>;
   assert.equal(d0.events[0].handHints, undefined);
 });

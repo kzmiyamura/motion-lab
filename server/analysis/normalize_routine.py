@@ -210,6 +210,28 @@ def best_phase(starts, period, candidates):
     return min(candidates, key=lambda p: (snap_cost(starts, period, p), p))
 
 
+AUDIO_SWAP_PHASE = True   # 拍はあるが 8 カウントの頭（downbeat）が決まらないとき、位相を CV の入れ替わりで決める（下の関数）
+SWAP_PHASE_MIN = 3        # 入れ替わりがこの数以上あるときだけ
+SWAP_PHASE_CONC = 0.5     # 入れ替わりの位相のまとまり（1 = 全部同じ位置）がこれ以上のときだけ
+
+
+def audio_phase_from_swaps(swaps, period, beat, first, swap_beat):
+    """音の拍（first + beat×k）のうち、CV の入れ替わりが 8 カウントの頭から swap_beat 拍目に来る位相。
+    決まらなければ None（呼び側は従来の技の頭に合う拍を選ぶ）。
+    技の頭に合わせる位相は、Claude の行の時刻が 1 拍ずれているだけで入れ替わりが 8 カウントの境目に
+    乗り、行の割り当て（align_to_swaps）が全部 1 マスずれて hold が崩れる（img1884 を古い CV 出力で測ったとき）"""
+    if not AUDIO_SWAP_PHASE or len(swaps) < SWAP_PHASE_MIN:
+        return None
+    ang = [2 * math.pi * ((s - first) / period) for s in swaps]
+    c = sum(math.cos(a) for a in ang) / len(ang)
+    s_ = sum(math.sin(a) for a in ang) / len(ang)
+    if math.hypot(c, s_) < SWAP_PHASE_CONC:
+        return None
+    mean_t = first + math.atan2(s_, c) / (2 * math.pi) * period
+    k = round((mean_t - swap_beat * beat - first) / beat)
+    return first + beat * k
+
+
 def fit_grid(starts, unit_guess):
     """拍が分からないとき: 周期を目安の ±12% で探し、位相も合わせる。
     周期が短いほど誤差は小さくなりがちなので、格子線のうち技の頭が来ない線の割合も罰する"""
@@ -1671,7 +1693,9 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
             # 音（楽器の打点）と踊り（CBL の通過・ターン）で決めたカウント 1 を 8 カウントの頭にする
             phase = float(downbeat["sec"]) % period
         else:
-            phase = best_phase(starts, period, [first + beat * k for k in range(8)])
+            phase = audio_phase_from_swaps(swap_times(summary), period, beat, first, sb)
+            if phase is None:
+                phase = best_phase(starts, period, [first + beat * k for k in range(8)])
         tempo_src = "audio"
     else:
         guess = salsa_unit8(unit8_from_routine(moves)) or DEFAULT_UNIT8

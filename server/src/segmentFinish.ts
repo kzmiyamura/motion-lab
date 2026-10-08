@@ -7,7 +7,21 @@
  * 窓は「弱いカードの start から、その次の次のカードの start まで」（手は後ろの明瞭な区間で決めるので 1 枚先まで含める）。
  * 長さは maxWindow 秒まで。窓は連結しない（弱さの点＝理由の数＋自信の足りなさ が高い順に、重ならないものを最大 maxWindows 個）。正解は使わない。
  */
+import { readFileSync } from 'node:fs';
+
 type Json = Record<string, unknown>;
+
+/** 仕上げ段で更新した区間の注記（report.md の本文は main のままなので、振付シートのカードと食い違うことを断る）。読めなければ空 */
+export function segmentFinishNote(summaryPath: string): string {
+  try {
+    const s = JSON.parse(readFileSync(summaryPath, 'utf-8')) as { windows?: Array<{ from: number; to: number }> };
+    const w = s.windows ?? [];
+    if (!w.length) return '';
+    const mmss = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+    return `\n\n> 仕上げ段（区間再解析）で更新した区間: ${w.map(x => `${mmss(x.from)}〜${mmss(x.to)}`).join('、')}。` +
+      '振付シートのカードはこの区間で更新済みで、上の本文（再現可能な記述）は更新前の main の内容のため、食い違うことがある。';
+  } catch { return ''; }
+}
 
 export interface FinishWindow { from: number; to: number; cards: number[]; reasons: string[] }
 

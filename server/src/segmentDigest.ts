@@ -296,7 +296,8 @@ export function buildSegmentDigest(inp: SegmentInputs): SegmentDigest {
     const run = spin?.runs?.[0];
     const occluded = isOcc(t) || isOcc(s0) || isOcc(s1);
     const o: Json = {
-      type: e.type, t, 回転数: e.rotations ?? null,
+      // 重なり/隠れの間のターンの回転数は、骨格が取り違えて数えるので出さない（出すと AI がその数に寄る）。回数は画像で数える
+      type: e.type, t, 回転数: e.type === 'Turn' && occluded ? null : (e.rotations ?? null),
       // 向きは骨格の肩の動きから計算した値（回る本人から見た右/左）。誰が回ったかは重なり中は取り違える
       向き: run?.dir === 'right' ? '右回り(時計回り。回る本人から見て)' : run?.dir === 'left' ? '左回り(回る本人から見て)' : null,
       span: [r2(s0), r2(s1)], 信頼: verdictOf(e),
@@ -447,8 +448,8 @@ export function buildSegmentPrompt(d: SegmentDigest, o: PromptOptions): string {
     '',
     '## 出力（JSON のみ。前後に説明を書かない）',
     '{"rows":[{"start":秒,"name":"技名","hands":"男性◯手×女性◯手","move":"技の種類","holdStart":"手","holdEnd":"手","turn":{"by":"follower","direction":"right","rotations":1},"passSide":"left","description":"1〜2文"}],"basis":"根拠を1〜2文"}',
-    '- 行は currentCards に対応させる（start はそのカードの start）。カードに収まらない出来事（カードの前の区間のターン等）は、別の行にしてよい。カードの中の出来事（ターン→頭に手をかける等）は name・description に書く。',
-    '- move は basic cbl right_turn left_turn inside_turn outside_turn cbl_inside_turn cbl_outside_turn reverse_cbl leader_turn copa hand_change wrap hammerlock shadow dip shine other のどれか。',
+    '- 行は currentCards に対応させる（start はそのカードの start）。カードに収まらない出来事（カードの前の区間のターン等）は、別の行にしてよい。カードの中の出来事（ターン→頭に手をかける等）は name・description に書く。手を頭にかける動きを画像で確かめたときは、技名の末尾に「（頭に手をかける）」を付ける（description だけに書かない）。',
+    '- move は basic cbl right_turn left_turn inside_turn outside_turn cbl_inside_turn cbl_outside_turn reverse_cbl leader_turn copa hand_change wrap hammerlock shadow dip shine other のどれか。女性が男性の脇・背後を通って左右が入れ替わる行は、男性が回っていても move を cbl 系（cbl cbl_inside_turn cbl_outside_turn reverse_cbl）にして、男性の回りは leaderTurn（{"direction":"right","rotations":1}）に書く（turn は女性の回りだけ。男性の回りを turn に書かない）。leader_turn は入れ替わりが無いときだけ。',
     '- holdStart / holdEnd は LR RR RL LL（男性の手が先。LR=男性左手×女性右手）double cross closed none のどれか。turn は回った人 by（leader=男性 / follower=女性）・direction（right/left。回る本人から見て）・rotations。無ければ null。passSide は女性が男性のどちら側を通ったか（left/right/return）。',
   ].join('\n');
 }

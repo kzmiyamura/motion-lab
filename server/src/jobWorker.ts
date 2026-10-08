@@ -22,6 +22,7 @@ import { isAnalysisRunning } from './analysisJob.js';
 import { PRESETS, type JobContext } from './presets.js';
 import { runClaude, runClaudeAnchorReport,ClaudeAuthError, ClaudeRateLimitError } from './claudeRunner.js';
 import { judgeTurns } from './turnJudge.js';
+import { segmentFinishNote } from './segmentFinish.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const JOBS_DIR = path.resolve(__dirname, '../storage/analysis-jobs');
@@ -303,15 +304,17 @@ export async function runJob(job: AnalysisJobRow): Promise<void> {
       });
       let normalized: string | null = null;
       let rawResult = r.resultJson;
+      let finishNote = '';
       if (rawResult && process.env.SEGMENT_FINISH === '1' && await finishWeakSegments(job.id, signal)) {
         rawResult = readFileSync(path.join(jobDirOf(job.id), 'out', 'result.json'), 'utf-8');
+        finishNote = segmentFinishNote(path.join(jobDirOf(job.id), 'out', 'finish-summary.json'));
       }
       if (r.resultJson) {
         if (preset.stages.normalizeRoutine) normalized = await normalizeRoutine(job.id, ctx, signal, preset.defaultOnBeat);
         if (preset.stages.moveFrames) await makeMoveFrames(job.id, ctx, signal);
       }
       const reportBody = preset.stages.sceneFrames ? await withSceneFrames(job.id, ctx, r.reportMd, signal) : r.reportMd;
-      const reportMd = reportBody + debugVideoSection(job.id);
+      const reportMd = reportBody + finishNote + debugVideoSection(job.id);
       const resultJson = normalized ?? rawResult
         ?? JSON.stringify({ pipeline: 'p2-claude', preset: job.preset, note: 'result.json 未生成（report.md のみ）' });
       markJobDone(job.id, resultJson, reportMd);

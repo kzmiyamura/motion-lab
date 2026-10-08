@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findWeakWindows } from './segmentFinish.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { findWeakWindows, segmentFinishNote } from './segmentFinish.js';
+
+test('仕上げ段の注記: 更新した区間を mm:ss で並べ、食い違うことを断る。読めなければ空', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'finish-note-'));
+  const p = path.join(dir, 'finish-summary.json');
+  writeFileSync(p, JSON.stringify({ windows: [{ from: 0.58, to: 4.56 }, { from: 62.29, to: 67.86 }] }));
+  const note = segmentFinishNote(p);
+  assert.ok(note.includes('0:00〜0:04') && note.includes('1:02〜1:07') && note.includes('食い違う'));
+  assert.equal(segmentFinishNote(path.join(dir, 'nothing.json')), '');
+  writeFileSync(p, JSON.stringify({ windows: [] }));
+  assert.equal(segmentFinishNote(p), '');
+});
 
 const card = (start: number, extra: Record<string, unknown> = {}) => ({ start, counts: 8, holdStart: 'RR', holdEnd: 'RR', confidence: 0.6, ...extra });
 const result = (moves: unknown[]) => ({ routine: { bpm: 100, moves } });

@@ -37,6 +37,16 @@ const turnOf = (t: unknown): Json | null => {
   return { by: o.by, direction: dir, ...(rot !== undefined ? { rotations: rot } : {}) };
 };
 
+/** 男性の回り: 行の leaderTurn、または turn.by=leader の行（古い答え方）→ カードの leaderTurn。無ければ null */
+function leaderTurnOf(row: Json): Json | null {
+  const src = row.leaderTurn && typeof row.leaderTurn === 'object' ? (row.leaderTurn as Json)
+    : (row.turn && typeof row.turn === 'object' && (row.turn as Json).by === 'leader' ? (row.turn as Json) : null);
+  if (!src) return null;
+  const dir = src.direction === 'right' || src.direction === 'left' ? src.direction : null;
+  const rot = typeof src.rotations === 'number' ? src.rotations : undefined;
+  return { direction: dir, ...(rot !== undefined ? { rotations: rot } : {}) };
+}
+
 /** 1 行 → RoutineMove。ref = 置き換える今のカード（start・counts を引き継ぐ） */
 export function rowToMove(row: Json, ref?: Json | null): Json {
   const rawStart = Number(row.start);
@@ -51,7 +61,9 @@ export function rowToMove(row: Json, ref?: Json | null): Json {
     name: String(row.name ?? ''),
     start,
     counts: ref && typeof ref.counts === 'number' ? ref.counts : 8,
-    turn: turnOf(row.turn),
+    // turn は女性（または両方）の回り。男性の回りは leaderTurn（turn に入れると 1 行 1 つの女性ターンの欄を潰す）
+    turn: (row.turn as Json | null)?.by === 'leader' ? null : turnOf(row.turn),
+    leaderTurn: leaderTurnOf(row),
     passSide: row.passSide === 'left' || row.passSide === 'right' || row.passSide === 'return' ? row.passSide : null,
     holdStart: holdStart ?? null,
     holdEnd: holdEnd ?? null,

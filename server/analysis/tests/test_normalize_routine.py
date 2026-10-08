@@ -1035,5 +1035,25 @@ class TurnHeadPullTest(unittest.TestCase):
         self.assertEqual(self.nr.pull_turn_heads(out, self.summary(1.0), self.beat), [])
 
 
+class AudioPhaseFromSwaps(unittest.TestCase):
+    """拍はあるが downbeat が無いとき、位相は入れ替わりが頭から SWAP_BEAT 拍目に来る拍にする"""
+
+    def test_places_swaps_at_swap_beat(self):
+        import normalize_routine as nr
+        beat, period, first = 0.32, 2.56, 0.1
+        head = first + 3 * beat   # 本当の 8 カウントの頭（拍 3 番目）
+        swaps = [head + k * period + nr.SWAP_BEAT * beat + d for k, d in enumerate([0.02, -0.03, 0.01, 0.0, -0.02])]
+        ph = nr.audio_phase_from_swaps(swaps, period, beat, first, nr.SWAP_BEAT)
+        self.assertIsNotNone(ph)
+        self.assertAlmostEqual(((ph - head) / period + 0.5) % 1 - 0.5, 0, delta=0.01)
+
+    def test_none_when_few_or_scattered(self):
+        import normalize_routine as nr
+        beat, period, first = 0.32, 2.56, 0.1
+        self.assertIsNone(nr.audio_phase_from_swaps([5.0, 7.5], period, beat, first, nr.SWAP_BEAT))
+        scattered = [first + period * i + period * f for i, f in enumerate([0.0, 0.25, 0.5, 0.75])]
+        self.assertIsNone(nr.audio_phase_from_swaps(scattered, period, beat, first, nr.SWAP_BEAT))
+
+
 if __name__ == "__main__":
     unittest.main()

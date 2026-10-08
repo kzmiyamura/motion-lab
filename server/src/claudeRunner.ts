@@ -204,7 +204,7 @@ export function readAllImagesSection(imageCount: number): string {
     '',
     `- \`out/keyframes/\` のターン・CBL のストリップ（\`*_strip*.jpg\`）と上半身の詳細（\`*_detail*.jpg\`）は**全部 Read する**（${imageCount} 枚）。` +
       'digest の数値だけで技・回った人・向き・回転数・手を決めない',
-    '- 1 枚ずつではなく、1 回の応答で 6〜8 枚ずつ並列にまとめて Read する。全部読み終えてから result.json と report.md を書く',
+    '- 1 枚ずつではなく、**全部を 1〜2 回の応答にまとめて並列で Read する**（1 回に 14〜27 枚。応答を分けるたびにそれまでの全文脈を読み直すので、回数を減らす）。全部読み終えてから result.json と report.md を書く',
     '- **画像を読んでいない行に `evidence: "seen"` を付けない**（digest の数値だけで埋めた行は `"inferred"`）',
   ].join('\n');
 }
@@ -261,7 +261,7 @@ export function buildRunnerPrompt(basePrompt: string, specMarkdown: string, info
   const env = [
     '## 実行環境（サーバーが用意した情報。**下調べ不要。`ls` や環境の探索（Python の場所探し・`.env` の確認など）をしない**）',
     '',
-    `- Python の実パス: \`${info.pythonBin}\`（Bash で python を使うときはこのパスをそのまま使う。探さない）`,
+    `- Python の実パス: \`${info.pythonBin}\`（Bash で python を使うときはこのパスをそのまま使う。探さない。\`-I\` を付けるなら \`-X utf8\` も付ける: \`-I\` は環境変数を無視するので、付けないと日本語の print で UnicodeEncodeError になり、実行し直しになる）`,
     ...(info.hasDigest
       ? ['- **最初に `out/digest.json` を Read する。** 計測の要約（判定・信頼度・拍・技の候補・手のつなぎ・contested・キーフレーム一覧）をサーバーが先に作ってある。' +
          '`out/measurements.json` 全体（全フレームの骨格 `persons[]`）は読まなくてよい。要約に無い値が要るときだけ必要な範囲を読む',
@@ -269,7 +269,7 @@ export function buildRunnerPrompt(basePrompt: string, specMarkdown: string, info
       : []),
     '- 作業ディレクトリのファイル（これで全部）:',
     ...info.files.map(f => `  - \`${f}\``),
-    '- 成果物は `out/result.json` と `out/report.md`（Write で直接書く。result.json の組み立てに Python スクリプトが要るときだけ上の python を使う）',
+    '- 成果物は `out/result.json` と `out/report.md`（Write で直接書く。result.json の組み立てに Python スクリプトが要るときだけ上の python を使う）。書き終えたら、読み返し・誤記探しの追加確認はせず、短い要約だけ返して終える',
   ].join('\n');
   const extra = info.readAllImages && (info.imageCount ?? 0) > 0 ? `\n\n${readAllImagesSection(info.imageCount!)}` : '';
   return `${basePrompt}\n\n${env}${extra}\n\n---\n\n${specMarkdown}`;

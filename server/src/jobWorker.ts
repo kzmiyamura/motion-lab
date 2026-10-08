@@ -110,6 +110,28 @@ function runPython(args: string[], signal: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * 仕上げ段（既定オフ。環境変数 SEGMENT_FINISH=1 のときだけ）: main の結果で弱いカードを区間再解析（Sonnet）で直し、result.json に書き戻す。
+ * 補助的な段なので、失敗してもジョブは止めず main の結果のまま進める（false を返す）
+ */
+function finishWeakSegments(jobId: string, signal: AbortSignal): Promise<boolean> {
+  return new Promise(resolve => {
+    const serverDir = path.resolve(__dirname, '..');
+    const tsx = path.join(serverDir, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
+    const proc = spawn(tsx, [path.join(serverDir, 'tools', 'finish-segments.ts'), '--job', jobId, '--model', process.env.SEGMENT_FINISH_MODEL ?? 'sonnet', '--in-place'], {
+      cwd: serverDir, signal, shell: process.platform === 'win32', env: { ...process.env, PYTHON_BIN },
+    });
+    let out = '';
+    proc.stdout.on('data', d => { out += d.toString(); });
+    proc.stderr.on('data', d => { out += d.toString(); });
+    proc.on('error', err => { console.warn(`[jobWorker] segment finish skipped: ${err.message}`); resolve(false); });
+    proc.on('exit', code => {
+      console.log(`[jobWorker] segment finish exit=${code}: ${out.split(/\r?\n/).filter(l => l.startsWith('[finish]')).slice(-3).join(' | ')}`);
+      resolve(code === 0);
+    });
+  });
+}
+
 export async function runJob(job: AnalysisJobRow): Promise<void> {
   console.log(`[jobWorker] running job ${job.id} (video=${job.video_id}, preset=${job.preset})`);
   const signal = AbortSignal.timeout(JOB_TIMEOUT_MS);
@@ -280,13 +302,17 @@ export async function runJob(job: AnalysisJobRow): Promise<void> {
         digest: preset.cvSteps.some(s => s.script === 'analyze_pair.py'),
       });
       let normalized: string | null = null;
+      let rawResult = r.resultJson;
+      if (rawResult && process.env.SEGMENT_FINISH === '1' && await finishWeakSegments(job.id, signal)) {
+        rawResult = readFileSync(path.join(jobDirOf(job.id), 'out', 'result.json'), 'utf-8');
+      }
       if (r.resultJson) {
         if (preset.stages.normalizeRoutine) normalized = await normalizeRoutine(job.id, ctx, signal, preset.defaultOnBeat);
         if (preset.stages.moveFrames) await makeMoveFrames(job.id, ctx, signal);
       }
       const reportBody = preset.stages.sceneFrames ? await withSceneFrames(job.id, ctx, r.reportMd, signal) : r.reportMd;
       const reportMd = reportBody + debugVideoSection(job.id);
-      const resultJson = normalized ?? r.resultJson
+      const resultJson = normalized ?? rawResult
         ?? JSON.stringify({ pipeline: 'p2-claude', preset: job.preset, note: 'result.json 未生成（report.md のみ）' });
       markJobDone(job.id, resultJson, reportMd);
       console.log(`[jobWorker] job ${job.id} done (claude)`);

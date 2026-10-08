@@ -123,7 +123,7 @@ async function main(): Promise<number> {
   }
   const flipRoles = !hasDecision && (leaderSide === 'left' || leaderSide === 'right') && (cvSide === 'left' || cvSide === 'right') && cvSide !== leaderSide;
   console.error(`[segment] leaderDecision=${hasDecision} man-side=${leaderSide ?? '-'}(${sideSource}) cv=${cvSide ?? '-'} flipRoles=${flipRoles}`);
-  const resultPath = path.join(outDir, 'result.json');
+  const resultPath = opt('result') ?? path.join(outDir, 'result.json'); // --result で別の result.json（コピー）に適用して試せる
   const result = existsSync(resultPath) ? JSON.parse(readFileSync(resultPath, 'utf-8')) : null;
   const digest = buildSegmentDigest({
     tracks, result, summaryEvents: (measurements.summary?.events ?? null) as Record<string, unknown>[] | null,

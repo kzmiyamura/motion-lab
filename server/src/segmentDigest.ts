@@ -31,6 +31,8 @@ export interface SegmentInputs {
   drop?: string[];
   /** つないだ手の候補を区間のあと何秒まで見るか */
   lookAhead?: number;
+  /** CV の leaderPid が男女逆のとき true（リーダー=女性として読み替える。正しい男性の側は anchor か正解表から） */
+  flipRoles?: boolean;
 }
 
 // ---- 人物の箱（make_strips.py の background_pid / pair_boxes と同じ考え方） ----
@@ -283,6 +285,7 @@ export function buildSegmentDigest(inp: SegmentInputs): SegmentDigest {
   // ターン・CBL
   const turns: Json[] = [];
   const turnSpans: Array<{ from: number; to: number; who: string; dir: string }> = [];
+  const whoOf = (by: unknown) => whoJa(inp.flipRoles && (by === 'leader' || by === 'follower') ? (by === 'leader' ? 'follower' : 'leader') : by);
   for (const e of events) {
     if (e.type !== 'Turn' && e.type !== 'CBL') continue;
     const span = (e.span ?? e.spin) as { from?: number; to?: number } | undefined;
@@ -300,14 +303,14 @@ export function buildSegmentDigest(inp: SegmentInputs): SegmentDigest {
     };
     if (e.type === 'Turn') {
       o.回った人 = occluded
-        ? `CV は${whoJa(e.by)}と判定したが、重なり/隠れの間なので当てにならない（回っているのは見えている箱の人。男女は画像で決める）`
-        : `CV の判定: ${whoJa(e.by)}`;
+        ? `CV は${whoOf(e.by)}と判定したが、重なり/隠れの間なので当てにならない（回っているのは見えている箱の人。男女は画像で決める）`
+        : `CV の判定: ${whoOf(e.by)}`;
     } else {
-      o.回った人 = whoJa(e.by);
+      o.回った人 = whoOf(e.by);
       o.pass = e.pass ?? null; o.手上げ = e.handRaise ?? null;
     }
     turns.push(o);
-    if (e.type === 'Turn') turnSpans.push({ from: s0, to: s1, who: occluded ? '' : whoJa(e.by), dir: run?.dir === 'right' ? '右回り' : run?.dir === 'left' ? '左回り' : '' });
+    if (e.type === 'Turn') turnSpans.push({ from: s0, to: s1, who: occluded ? '' : whoOf(e.by), dir: run?.dir === 'right' ? '右回り' : run?.dir === 'left' ? '左回り' : '' });
   }
 
   // hold
@@ -320,7 +323,12 @@ export function buildSegmentDigest(inp: SegmentInputs): SegmentDigest {
       ? { 信頼度: 'low', 理由: `区間の ${Math.round(bad * 100)}% のコマで2人が重なる/片方が隠れている` }
       : { 信頼度: 'normal', 理由: '2人が分かれて見えるコマが多い', 重なり割合: r2(bad) };
   };
-  const describeHold = (h: HoldSpan) => ({ from: h.from, to: h.to, hold: h.hold, ...holdRel(h) }) as Json;
+  const handsOfHold = (label: string) => {
+    const m = /リーダー(右|左)手×フォロワー(右|左)手/.exec(label);
+    if (!m) return label;
+    return inp.flipRoles ? `男性${m[2]}手×女性${m[1]}手` : `男性${m[1]}手×女性${m[2]}手`;
+  };
+  const describeHold = (h: HoldSpan) => ({ from: h.from, to: h.to, hold: handsOfHold(h.hold), ...holdRel(h) }) as Json;
   const inSeg = holdsAll.filter(h => overlaps(h.from, h.to, from, to));
   const before = [...holdsAll].filter(h => h.to < from).sort((a, b) => b.to - a.to)[0];
   const after = [...holdsAll].filter(h => h.from > to).sort((a, b) => a.from - b.from)[0];
@@ -425,7 +433,7 @@ export function buildSegmentPrompt(d: SegmentDigest, o: PromptOptions): string {
     '',
     '## 手順',
     '1. 今のカード（currentCards）と hold の計測は、この区間が「間違っている」と見なされたときの値。写さず、画像と jointHands を優先する。',
-    '2. 手は、2人が重なっていない最初の時刻（区間のあとの jointHands でもよい）で決め、離す・持ち替える動きが画像で見えない限り、前へさかのぼって同じ手にする。',
+    '2. 手は、2人が重なっていない最初の時刻（区間のあとの jointHands でもよい）で決め、離す・持ち替える動きが画像で見えない限り、前へさかのぼって同じ手にする。重なり/隠れで読めないだけの区間を「手を離して」「none」と書かない（離したと画像で見えた時だけ none）。決めた手は、さかのぼる先のすべての行の hands・holdStart・holdEnd に書く（男性◯手×女性◯手の形で。片方だけにしない）。',
     '3. 回った人・向き・手を頭にかける動きは、画像で確かめてから書く。',
     '',
     '## 手の判定ルール（指示書の抜粋）',

@@ -17,7 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import dotenv from 'dotenv';
-import { buildClaudeArgs, makeWorkdir, removeWorkdir } from '../src/claudeRunner.js';
+import { buildClaudeArgs, makeWorkdir, removeWorkdir, runClaudeAnchorReport } from '../src/claudeRunner.js';
 import { extractClaudeUsage } from '../src/claudeUsage.js';
 import { buildSegmentDigest, buildSegmentPrompt, extractHandRules, parseSegmentAnswer } from '../src/segmentDigest.js';
 import { applyRowsToResult } from '../src/segmentApply.js';
@@ -94,12 +94,40 @@ async function main(): Promise<number> {
 
   // 2. 区間ダイジェスト（純粋関数）
   const tracks = JSON.parse(readFileSync(tracksPath, 'utf-8'));
-  const measurements = JSON.parse(readFileSync(path.join(outDir, 'measurements.json'), 'utf-8')) as { summary?: { events?: unknown[] } };
+  const measurements = JSON.parse(readFileSync(path.join(outDir, 'measurements.json'), 'utf-8')) as { summary?: { events?: unknown[]; verdictByRule?: { leaderAtStart?: { side?: string } } } };
+  // 男女の読み替え。CV の leader が男性でないジョブ（leaderDecision が無い古いジョブ）は、
+  // 男性が画面のどちら側かを --leader-side か anchor（1回だけ走らせて out/leader-side.json に残す）で決め、CV と逆なら読み替える。
+  // leaderDecision があるジョブは役割が anchor 由来の最終値で付いているので読み替えない。
+  const cvSide = measurements.summary?.verdictByRule?.leaderAtStart?.side;
+  const hasDecision = !!(measurements.summary as { leaderDecision?: unknown } | undefined)?.leaderDecision;
+  let leaderSide = opt('leader-side');
+  let sideSource = leaderSide ? 'arg' : '-';
+  if (!leaderSide && !hasDecision) {
+    const cache = path.join(outDir, 'leader-side.json');
+    if (existsSync(cache)) {
+      leaderSide = (JSON.parse(readFileSync(cache, 'utf-8')) as { side?: string }).side;
+      sideSource = 'cache';
+    } else {
+      const anchorDir = path.join(outDir, 'segment-runs', '_anchor');
+      mkdirSync(anchorDir, { recursive: true });
+      const kf = spawnSync(PYTHON_BIN, [path.join(SERVER_DIR, 'analysis', 'extract_keyframes.py'), video, anchorDir, 'anchor', '2.0', '5.0', '9.0'], { stdio: 'ignore' });
+      if (kf.status === 0) {
+        const rep = await runClaudeAnchorReport(anchorDir, new AbortController().signal);
+        const side = rep.hint?.split('@')[0];
+        if (side === 'left' || side === 'right') {
+          leaderSide = side; sideSource = 'anchor';
+          writeFileSync(cache, JSON.stringify({ side, hint: rep.hint }));
+        }
+      }
+    }
+  }
+  const flipRoles = !hasDecision && (leaderSide === 'left' || leaderSide === 'right') && (cvSide === 'left' || cvSide === 'right') && cvSide !== leaderSide;
+  console.error(`[segment] leaderDecision=${hasDecision} man-side=${leaderSide ?? '-'}(${sideSource}) cv=${cvSide ?? '-'} flipRoles=${flipRoles}`);
   const resultPath = path.join(outDir, 'result.json');
   const result = existsSync(resultPath) ? JSON.parse(readFileSync(resultPath, 'utf-8')) : null;
   const digest = buildSegmentDigest({
     tracks, result, summaryEvents: (measurements.summary?.events ?? null) as Record<string, unknown>[] | null,
-    from, to, aspect: meta.width / meta.height, cuts: meta.cuts, drop: (opt('drop') ?? '').split(',').filter(Boolean),
+    from, to, aspect: meta.width / meta.height, cuts: meta.cuts, flipRoles, drop: (opt('drop') ?? '').split(',').filter(Boolean),
   });
   const specMd = readFileSync(opt('spec') ?? path.join(jobDir, 'spec.md'), 'utf-8');
   const prompt = buildSegmentPrompt(digest, {

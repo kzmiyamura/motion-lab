@@ -45,7 +45,17 @@ for (const w of wins) console.log(`[finish] 窓 ${w.from}〜${w.to} カード ${
 console.log(`[finish] 窓 ${wins.length} 個 / ${wins.reduce((s, w) => s + w.to - w.from, 0).toFixed(1)} 秒`);
 if (opt('dry') !== undefined || args.includes('--dry') || !wins.length) process.exit(0);
 
-if (!inPlace) copyFileSync(resultPath, copyPath);
+if (!inPlace) {
+  copyFileSync(resultPath, copyPath);
+  // normalize 済みの result は routine.rawMoves を持ち、normalize_routine.py は moves ではなく rawMoves から作り直す
+  // （適用結果が消える）。normalize 前の形（moves = raw）に戻してから適用する。jobWorker の流れ（main 直後）では起きない
+  const cp = JSON.parse(readFileSync(copyPath, 'utf-8')) as { routine?: { moves?: unknown; rawMoves?: unknown } };
+  if (cp.routine && Array.isArray(cp.routine.rawMoves)) {
+    cp.routine.moves = cp.routine.rawMoves;
+    delete cp.routine.rawMoves;
+    writeFileSync(copyPath, JSON.stringify(cp, null, 2), 'utf-8');
+  }
+}
 const tsx = path.join(SERVER_DIR, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
 const tot = { out: 0, cacheW: 0, cacheR: 0, calls: 0 };
 wins.forEach((w, i) => {

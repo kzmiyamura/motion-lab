@@ -4,6 +4,10 @@
 
 /* ── Design tokens ── */
 :root {
+  /* ノッチ・ステータスバー・ホームバーを避ける余白（viewport-fit=cover 前提）。変数にしておくと検証で値を差し替えられる */
+  --sa-top:    env(safe-area-inset-top, 0px);
+  --sa-right:  env(safe-area-inset-right, 0px);
+  --sa-left:   env(safe-area-inset-left, 0px);
   --color-bg:            #080814;
   --color-fg:            #e0e0ff;
   --color-fg-dim:        #6060a0;

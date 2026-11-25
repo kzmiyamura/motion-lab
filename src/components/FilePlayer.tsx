@@ -461,14 +461,17 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
     if (!el || !source) return;
     const at = goodTimeRef.current;
     brokenRef.current = false;
+    // 位置はメタデータが読めてから入れる（Safari は読み込み前の currentTime 代入を無視して 0 に戻すことがある）
+    el.addEventListener('loadedmetadata', () => { el.currentTime = at; }, { once: true });
     if (source.isHls && !el.canPlayType('application/vnd.apple.mpegurl')) {
-      el.addEventListener('loadedmetadata', () => { el.currentTime = at; el.play().catch(() => {}); }, { once: true });
+      // hls.js: effect で作り直される（attachMedia 後に play()。Chrome 系は直前の ▶ の操作が有効）
+      el.addEventListener('loadedmetadata', () => { el.play().catch(() => {}); }, { once: true });
       setHlsReloadKey(k => k + 1);
       return;
     }
+    // 通常ファイル・iOS ネイティブ HLS: play() は ▶ の操作の中で同期的に呼ぶ（iOS の自動再生制限）
     el.src = source.url;
     el.load();
-    el.currentTime = at;
     el.play().catch(() => setIsPlaying(false));
   };
 

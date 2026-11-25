@@ -157,6 +157,12 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pseudoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pseudoPlayingRef = useRef(false);
+  /** 動画が error 状態（バックグラウンドで OS にネットワーク／メディアのセッションを切られた等）。次の ▶ で読み直す */
+  const brokenRef = useRef(false);
+  /** error 状態になる前の最後の正常な再生位置（error 後は currentTime が 0 に戻るので別に持つ） */
+  const goodTimeRef = useRef(0);
+  /** hls.js の作り直し用（▶ で読み直すときに増やす） */
+  const [hlsReloadKey, setHlsReloadKey] = useState(0);
   // View mode (audio / video)
   const [fileViewMode, setFileViewMode] = useState<'audio' | 'video'>('video');
 
@@ -429,6 +435,13 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
     } else if (Hls.isSupported()) {
       const hls = new Hls();
       hlsRef.current = hls;
+      // 致命的エラー（裏に回って通信を切られた等）は自力で戻す。戻せないものは次の ▶ で読み直す
+      hls.on(Hls.Events.ERROR, (_e, data) => {
+        if (!data.fatal) return;
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+        else { brokenRef.current = true; setIsPlaying(false); }
+      });
       hls.loadSource(source.url);
       hls.attachMedia(video);
     }
@@ -437,7 +450,50 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
       hlsRef.current?.destroy();
       hlsRef.current = null;
     };
-  }, [source?.url, source?.isHls]);
+  }, [source?.url, source?.isHls, hlsReloadKey]);
+
+  /**
+   * error 状態の動画を、最後に正常だった位置から読み直して再生する（▶ を押した操作の中で呼ぶ）。
+   * 通常ファイルと iOS のネイティブ HLS は src を付け直し、hls.js は作り直す。
+   */
+  const reloadMedia = () => {
+    const el = mediaRef.current;
+    if (!el || !source) return;
+    const at = goodTimeRef.current;
+    brokenRef.current = false;
+    // 位置はメタデータが読めてから入れる（Safari は読み込み前の currentTime 代入を無視して 0 に戻すことがある）
+    el.addEventListener('loadedmetadata', () => { el.currentTime = at; }, { once: true });
+    if (source.isHls && !el.canPlayType('application/vnd.apple.mpegurl')) {
+      // hls.js: effect で作り直される（attachMedia 後に play()。Chrome 系は直前の ▶ の操作が有効）
+      el.addEventListener('loadedmetadata', () => { el.play().catch(() => {}); }, { once: true });
+      setHlsReloadKey(k => k + 1);
+      return;
+    }
+    // 通常ファイル・iOS ネイティブ HLS: play() は ▶ の操作の中で同期的に呼ぶ（iOS の自動再生制限）
+    el.src = source.url;
+    el.load();
+    el.play().catch(() => setIsPlaying(false));
+  };
+
+  // 裏から戻ったとき: 表示（▶/⏸）を実際の状態に合わせる。勝手に再生はしない（iOS は操作なしで鳴らせず、本人も驚く）
+  useEffect(() => {
+    const sync = () => {
+      const el = mediaRef.current;
+      if (!el) return;
+      if (document.visibilityState === 'hidden') {
+        // 疑似スロー（タイマーで currentTime を進める方式）は裏で止まる／ずれるので、止めて復帰後は ▶ から
+        if (pseudoPlayingRef.current) { stopPseudoCycle(); setIsPlaying(false); }
+        return;
+      }
+      if (!pseudoPlayingRef.current) setIsPlaying(!el.paused && !el.ended && !el.error);
+    };
+    document.addEventListener('visibilitychange', sync);
+    window.addEventListener('pageshow', sync);
+    return () => {
+      document.removeEventListener('visibilitychange', sync);
+      window.removeEventListener('pageshow', sync);
+    };
+  }, [stopPseudoCycle]);
 
   // 実際のフレームレートを検出（requestVideoFrameCallback対応ブラウザのみ）。
   // コマ送りの1コマ移動量を「30fps仮定」ではなく実fpsに合わせて正確にするため。
@@ -601,7 +657,10 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
         }, intervalMs);
       }
     } else {
-      if (el.paused) el.play().catch(() => {}); else el.pause();
+      if (el.paused) {
+        if (brokenRef.current || el.error) { reloadMedia(); return; }
+        el.play().catch(() => setIsPlaying(false));
+      } else el.pause();
     }
   };
 
@@ -615,6 +674,7 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
     const el = mediaRef.current;
     if (!el) return;
     const t = el.currentTime;
+    if (!el.error && el.readyState > 0) goodTimeRef.current = t; // src が切れた直後の 0 秒を拾わない
     if (Math.abs(t - prevTimeRef.current) > 1.0) setBeat1VideoTime(null);
     prevTimeRef.current = t;
     setCurrentTime(t);
@@ -1499,7 +1559,9 @@ export function FilePlayer({ bpm, onBpmChange, pendingHlsSource, onPendingHlsSou
               onPlay={() => setIsPlaying(true)}
               onPause={() => { if (!pseudoPlayingRef.current) setIsPlaying(false); }}
               onTimeUpdate={handleTimeUpdate}
+              onError={() => { brokenRef.current = true; setIsPlaying(false); }}
               onLoadedMetadata={() => {
+                brokenRef.current = false;
                 setDuration(mediaRef.current?.duration ?? 0);
                 if (mediaRef.current) mediaRef.current.playbackRate = slowRate;
               }}

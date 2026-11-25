@@ -442,7 +442,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  /* 上はノッチ・ステータスバーの下に出す（最大化の終了ボタンが画面端に隠れないように） */
+  padding: calc(var(--sa-top) + 8px) max(12px, var(--sa-right)) 6px max(12px, var(--sa-left));
   background: rgba(0, 0, 0, 0.6);
   transition: opacity 0.25s ease, visibility 0.25s ease;
 }
@@ -467,8 +468,8 @@
 }
 
 .theaterBarBtn {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
   border: 1.5px solid rgba(255, 255, 255, 0.12);

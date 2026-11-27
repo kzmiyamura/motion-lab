@@ -315,7 +315,9 @@ export function loadReportView(width: number | null = typeof window !== 'undefin
     const v = localStorage.getItem(VIEW_STORAGE_KEY);
     if (v === 'flip' || v === 'list') return v;
   } catch { /* プライベートモード等 */ }
-  return width !== null && width <= NARROW_PX ? 'flip' : 'list';
+  // 技の順番を覚えるにはパラパラ（めくり）がいちばん。PC も携帯も、保存された選び方が無ければめくり
+  void width;
+  return 'flip';
 }
 
 export function saveReportView(v: ReportView): void {

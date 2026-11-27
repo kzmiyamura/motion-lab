@@ -267,6 +267,7 @@ describe('choreoSheet（純関数）', () => {
 
 describe('ReportModal の振付シート表示', () => {
   beforeEach(() => {
+    localStorage.setItem('motionlab.reportView', 'list'); // 既定はめくり。ここは一覧（振付シート）の表示を見る
     vi.mocked(getJobDetail).mockResolvedValue({
       id: JOB_ID, videoId: 'v', status: 'done', preset: 'salsa-pair', retryCount: 0,
       errorMessage: null, createdAt: '', finishedAt: null,

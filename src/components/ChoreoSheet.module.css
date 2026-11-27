@@ -216,7 +216,7 @@
   margin-right: 0.2rem;
   padding: 0 0.25rem;
   border-radius: 4px;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 800;
   color: #fff;
 }
@@ -297,3 +297,25 @@
   border-radius: 6px;
 }
 
+
+/* PC: カードを 2 列に。コマは 4 列 × 2 段（最大 8 コマ）で、横スクロールなしに全部見える */
+@media (min-width: 900px) {
+  .rows {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem;
+    align-items: start;
+  }
+
+  .shots {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    overflow: visible;
+    scroll-snap-type: none;
+  }
+
+  .shot {
+    flex: none;
+    max-width: none;
+  }
+}

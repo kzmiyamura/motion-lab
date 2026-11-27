@@ -1,0 +1,199 @@
+/* 技の流れ: 1→2→3… の順に、代表コマ・技名・手・カウント。PC = 横に流れるカードのグリッド、携帯 = 縦の番号リスト */
+
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.heading {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--color-fg, #e0e0ff);
+}
+
+.total {
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-fg-dim, #6060a0);
+}
+
+.items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.li {
+  min-width: 0;
+}
+
+.item {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--color-border2, #2a2a4a);
+  border-radius: 10px;
+  background: var(--color-ui-dark2, #12122a);
+  color: var(--color-fg, #e0e0ff);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.item:hover {
+  border-color: var(--color-accent, #7c6bff);
+}
+
+.item:focus-visible {
+  outline: 2px solid var(--color-accent, #7c6bff);
+  outline-offset: 1px;
+}
+
+/* いま見ている技 */
+.here {
+  border-color: var(--color-accent, #7c6bff);
+  background: color-mix(in srgb, var(--color-accent, #7c6bff) 22%, var(--color-ui-dark2, #12122a));
+}
+
+.no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  padding: 0 0.3rem;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--color-accent, #7c6bff);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.thumb {
+  display: block;
+  background: #000;
+  overflow: hidden;
+}
+
+.thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 30%;
+}
+
+.noThumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.name {
+  font-size: 0.95rem;
+  font-weight: 800;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.q {
+  margin-left: 0.25rem;
+  color: #ffb84d;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.4rem;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--color-fg, #e0e0ff);
+  opacity: 0.78;
+  line-height: 1.3;
+}
+
+.counts {
+  padding: 0 0.3rem;
+  border: 1px solid var(--color-border2, #2a2a4a);
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── 縦の番号リスト（携帯・めくりの横の列）─── */
+
+.list .items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.list .item {
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.3rem 0.55rem 0.3rem 0.4rem;
+  min-height: 3.6rem;
+}
+
+.list .no {
+  flex: 0 0 auto;
+}
+
+.list .thumb {
+  flex: 0 0 auto;
+  width: 2.6rem;
+  height: 3.6rem;
+  border-radius: 5px;
+}
+
+.list .text {
+  flex: 1;
+}
+
+/* ─── 横に流れるカードのグリッド（PC の一覧の冒頭）─── */
+
+.grid .items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.5rem;
+}
+
+.grid .item {
+  flex-direction: column;
+}
+
+.grid .no {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.35rem;
+  z-index: 1;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+
+.grid .thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+}
+
+.grid .text {
+  padding: 0.4rem 0.5rem 0.5rem;
+}

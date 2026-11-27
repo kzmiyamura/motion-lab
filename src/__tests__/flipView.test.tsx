@@ -233,10 +233,10 @@ describe('めくり: index.json の読み取り（v1 / v2 / flip）', () => {
 describe('めくり / 一覧 の選び方', () => {
   beforeEach(() => localStorage.clear());
 
-  it('保存が無ければ 600px 以下はめくり', () => {
+  it('保存が無ければ PC も携帯もめくり（技の順番を覚えるにはパラパラ）', () => {
     expect(loadReportView(375)).toBe('flip');
     expect(loadReportView(600)).toBe('flip');
-    expect(loadReportView(1024)).toBe('list');
+    expect(loadReportView(1440)).toBe('flip');
   });
 
   it('選んだ方を覚える', () => {
@@ -453,6 +453,7 @@ describe('FlipView', () => {
 describe('ReportModal の めくり / 一覧', () => {
   beforeEach(() => {
     localStorage.clear();
+    localStorage.setItem(VIEW_STORAGE_KEY, 'list'); // 既定はめくり。ここは一覧のカードの動きを見る
     vi.mocked(getJobDetail).mockResolvedValue({
       id: 'j', videoId: 'v', status: 'done', preset: 'salsa-pair', retryCount: 0,
       errorMessage: null, createdAt: '', finishedAt: null,
@@ -467,7 +468,7 @@ describe('ReportModal の めくり / 一覧', () => {
   it('一覧のカードを押すと、その技のめくりが開く（動画が無いとき）。選んだ表示を覚える', async () => {
     render(<ReportModal jobId="j" videoTitle="t" baseUrl="https://home.example" onClose={() => {}} />);
     const rows = await screen.findAllByTestId('choreo-row', {}, { timeout: 10000 });
-    expect(screen.queryByTestId('flip-view')).toBeNull(); // 広い画面（jsdom 1024px）の既定は一覧
+    expect(screen.queryByTestId('flip-view')).toBeNull(); // 一覧を選んでいる（保存済み）
     fireEvent.click(rows[2]);
     await waitFor(() => expect(screen.getByTestId('flip-view')).toBeInTheDocument(), { timeout: 10000 });
     expect(screen.getByTestId('flip-page')).toHaveTextContent('3 / 3');

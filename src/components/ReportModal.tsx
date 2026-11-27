@@ -18,6 +18,13 @@ import styles from './ReportModal.module.css';
 import { createPortal } from 'react-dom';
 import { FlipView, ReportViewToggle } from './FlipView';
 import { useCardTap, useReportView } from '../hooks/useReportView';
+import { FlowList } from './FlowList';
+import { pickDenseShots } from '../engine/flowList';
+import { parseFlipIndex } from '../engine/flipView';
+import { useWideScreen } from '../hooks/useWideScreen';
+
+/** PC の一覧カードに並べる最大コマ数（拍ごとのコマから等間隔に選ぶ）。携帯は今のコマ数のまま */
+const WIDE_SHOTS = 8;
 
 type Props = {
   jobId: string;
@@ -220,12 +227,30 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
   const onCardTap = useCallback((i: number) => (videoUrl ? setFlipAt(i) : openFlipAt(i)), [videoUrl, setFlipAt, openFlipAt]);
   useCardTap(!!sheet && reportView.view === 'list', onCardTap);
   const resolveFrameUrl = useCallback((p: string) => (p.startsWith('/') ? resolveHomeServerUrl(baseUrl, p) ?? p : p), [baseUrl]);
+  // PC 幅: 一覧カードのコマを flip[]（密なコマ）から WIDE_SHOTS 枚に増やす。flip[] が無い行は今のコマのまま
+  const wide = useWideScreen();
+  const listFrames = useMemo(() => {
+    if (!wide || !sheet || !framesIndex) return moveFrames;
+    const dense = parseFlipIndex(framesIndex, sheet.rows, resolveFrameUrl);
+    const out = new Map(moveFrames);
+    dense.forEach((src, rowIndex) => {
+      if (src.kind !== 'flip') return;
+      const whole = src.frames.filter(f => !f.half && !f.quarter);
+      const base = whole.length >= 4 ? whole : src.frames;
+      const picked = pickDenseShots(base, WIDE_SHOTS);
+      const prev = moveFrames.get(rowIndex);
+      if (picked.length > (prev?.frames.length ?? 0)) out.set(rowIndex, { strip: prev?.strip ?? src.strip, frames: picked });
+    });
+    return out;
+  }, [wide, sheet, framesIndex, moveFrames, resolveFrameUrl]);
   const switchView = (v: 'flip' | 'list') => {
     if (v === 'flip') {
       if (practice.session) { setFlipAt(practice.current); practice.close(); }
     }
     reportView.setView(v);
   };
+  // 「流れ」の技を押したら、その技のめくり（パラパラ）へ飛ぶ
+  const openFlowAt = (rowIndex: number) => { switchView('flip'); setFlipAt(rowIndex); };
 
   // 解析結果をクリップボードへコピーし、ジェネレーターを新しいタブで開く。
   // ユーザーはジェネレーターの「📥」に貼り付けて、動画のルーティンを骨格で再現できる。
@@ -279,10 +304,17 @@ export function ReportModal({ jobId, videoTitle, baseUrl, videoUrl, onClose }: P
                 />
               )}
               <ReportViewToggle view="list" onChange={switchView} />
+              <FlowList
+                rows={sheet.rows}
+                frames={listFrames}
+                currentIndex={practice.session ? practice.current : null}
+                onPick={openFlowAt}
+                layout={wide ? 'grid' : 'list'}
+              />
               <ChoreoSheet
                 sheet={sheet}
                 states={sheetStates}
-                frames={moveFrames}
+                frames={listFrames}
                 onPlay={videoUrl ? practice.playRow : undefined}
                 playingIndex={practice.session ? practice.current : null}
                 toolbar={practice.timeline ? (

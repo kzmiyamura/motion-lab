@@ -8,6 +8,8 @@ import {
 import { BeatScheduler, VirtualClock, buildTimeline, type Timeline } from '../engine/practice';
 import { practiceAudio } from '../engine/practiceAudio';
 import { MoveDiagram } from './MoveDiagram';
+import { FlowList } from './FlowList';
+import { useWideScreen } from '../hooks/useWideScreen';
 import sheetStyles from './ChoreoSheet.module.css';
 import styles from './FlipView.module.css';
 
@@ -508,11 +510,36 @@ export function FlipView({
 
   const setSpeed = (s: FlipSpeed) => { setSpeedState(s); saveFlipSpeed(s); };
 
+  // 「流れ」: PC は左に常に出す列、携帯は上のバーの「流れ」で開く一覧
+  const wide = useWideScreen();
+  const [flowOpen, setFlowOpen] = useState(false);
+  const pickFlow = (rowIndex: number) => {
+    const p = rows.findIndex(r => r.index === rowIndex);
+    if (p >= 0) changePage(p);
+    setFlowOpen(false);
+  };
+
   if (!row) return null;
   const prev = rows[page - 1], next = rows[page + 1];
 
   return (
-    <div className={styles.root} role="dialog" aria-modal="true" aria-label={`めくり — ${title ?? '振付シート'}`} data-testid="flip-view">
+    <div className={`${styles.root} ${wide ? styles.rootWide : ''}`} role="dialog" aria-modal="true" aria-label={`めくり — ${title ?? '振付シート'}`} data-testid="flip-view">
+      {wide && (
+        <aside className={styles.rail} aria-label="技の流れ">
+          <FlowList rows={rows} frames={frames} currentIndex={row.index} onPick={pickFlow} layout="list" />
+        </aside>
+      )}
+      {!wide && flowOpen && (
+        <div className={styles.flowSheet} role="dialog" aria-label="技の流れ" data-testid="flow-sheet">
+          <div className={styles.flowSheetHead}>
+            <span>技の流れ</span>
+            <button type="button" className={styles.flowClose} aria-label="流れを閉じる" onClick={() => setFlowOpen(false)}>✕</button>
+          </div>
+          <div className={styles.flowSheetBody}>
+            <FlowList rows={rows} frames={frames} currentIndex={row.index} onPick={pickFlow} layout="list" heading={false} />
+          </div>
+        </div>
+      )}
       <div className={styles.top}>
         <Flipbook
           row={row}
@@ -531,6 +558,7 @@ export function FlipView({
             <button type="button" className={`${styles.segBtn} ${styles.segOn}`} aria-pressed="true">めくり</button>
             <button type="button" className={styles.segBtn} aria-pressed="false" onClick={onList}>一覧</button>
           </div>
+          {!wide && <button type="button" className={styles.flowBtn} aria-expanded={flowOpen} onClick={() => setFlowOpen(v => !v)}>流れ</button>}
           {title && <span className={styles.title}>{title}</span>}
           {onClose && <button type="button" className={styles.close} aria-label="閉じる" onClick={onClose}>✕</button>}
         </div>
@@ -540,12 +568,12 @@ export function FlipView({
         <nav className={styles.nav} aria-label="技の移動">
           <button type="button" className={styles.navBtn} disabled={!prev} onClick={() => goRef.current?.(-1)}
             aria-label={prev ? `前の技: #${prev.no} ${prev.name}` : '前の技なし'}>
-            {prev && <><span aria-hidden="true">‹</span><span className={styles.navName}>{prev.name}</span></>}
+            {prev && <><span aria-hidden="true">‹</span><span className={styles.navName}><span className={styles.navTag}>前</span>{prev.name}</span></>}
           </button>
-          <span className={styles.pageNo} data-testid="flip-page">{pageLabel(page, n)}</span>
+          <span className={styles.pageNo} data-testid="flip-page">{pageLabel(page, n)}<span className={styles.pageUnit}> 技</span></span>
           <button type="button" className={`${styles.navBtn} ${styles.navNext}`} disabled={!next} onClick={() => goRef.current?.(1)}
             aria-label={next ? `次の技: #${next.no} ${next.name}` : '次の技なし'}>
-            {next && <><span className={styles.navName}>{next.name}</span><span aria-hidden="true">›</span></>}
+            {next && <><span className={styles.navName}><span className={styles.navTag}>次</span>{next.name}</span><span aria-hidden="true">›</span></>}
           </button>
         </nav>
       </div>

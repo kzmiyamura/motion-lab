@@ -236,3 +236,11 @@
   color: var(--color-fg-dim);
   line-height: 1.4;
 }
+
+/* PC: 細い 640px に収めず、画面の幅を使う（カードを 2 列に並べ、コマを大きく） */
+@media (min-width: 900px) {
+  .modal {
+    max-width: min(1280px, 96vw);
+    max-height: min(94vh, 100%);
+  }
+}

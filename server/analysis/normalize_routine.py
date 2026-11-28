@@ -1764,6 +1764,19 @@ def clean_steps(steps):
 # ---------------------------------------------------------------- 本体
 
 def normalize(result, summary, duration=None, default_timing=None, tracks=None, swap_beat=None):
+    """_normalize の入口。handLeadIn があるときは、まず写しで 1 回通して最終の行頭（位相補正・頭の引き込み後の実時刻）を得て、
+    本番の 1 回目でそれを使って handLeadIn の範囲と比べる（handLeadIn の時刻は動画の実時刻。行の判定に使う内部の格子の時刻は
+    位相補正で最終の start とずれる）。行数が合わなければ内部の時刻のまま"""
+    if LEAD_IN_HOLD and isinstance(summary, dict) and isinstance(summary.get("handLeadIn"), dict):
+        import copy
+        tmp = copy.deepcopy(result)
+        _normalize(tmp, summary, duration, default_timing, tracks, swap_beat)
+        fs = [m.get("start") for m in ((tmp.get("routine") or {}).get("moves") or [])]
+        return _normalize(result, summary, duration, default_timing, tracks, swap_beat, final_starts=fs)
+    return _normalize(result, summary, duration, default_timing, tracks, swap_beat)
+
+
+def _normalize(result, summary, duration=None, default_timing=None, tracks=None, swap_beat=None, final_starts=None):
     """result（dict）の routine を整えて返す（result をその場で書き換える）。
     default_timing: Claude が on1/on2 を決めなかったときの数え方（None なら DEFAULT_TIMING）
     tracks: analyze_pair の tracks.json（主ペアの立ち位置を読む。None なら立ち位置と整合チェックは省く）"""
@@ -1885,7 +1898,12 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
                 out[k - 1]["sides"]["swapAt"] = out[k - 1]["sides"]["swapAt"] + early
                 mv["swapEarly"] = early
         t1 = out[k + 1]["start"] if k + 1 < len(out) else t0 + mv["counts"] * beat
-        apply_lead_in_hold(mv, summary, t0, t1)
+        if final_starts and len(final_starts) == len(out) and all(_num(x) for x in final_starts):
+            fcount = mv.get("counts") or 8
+            apply_lead_in_hold(mv, summary, final_starts[k],
+                               final_starts[k + 1] if k + 1 < len(out) else final_starts[k] + fcount * beat)
+        else:
+            apply_lead_in_hold(mv, summary, t0, t1)
         ft = prefer_follower_turn(mv, cv_spin_info(summary, t0, t1, beat=beat))
         if not ft:
             t2 = (out[k + 2]["start"] if k + 2 < len(out) else t1 + (out[k + 1].get("counts") or 8) * beat) \

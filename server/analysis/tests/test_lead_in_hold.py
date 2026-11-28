@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import normalize_routine as nr  # noqa: E402
 
-LI = {"from": 0.2, "to": 10.7, "hand": "R-R", "conflicts": [{"hand": "R-L", "from": 3.3, "to": 3.9}, {"hand": "L-L", "from": 2.7, "to": 2.7}]}
+LI = {"from": 0.2, "to": 10.7, "hand": "R-R", "split": False, "firstEvidence": {"t": 2.7, "hand": "L-L"}, "conflicts": [{"hand": "R-L", "from": 3.3, "to": 3.9}, {"hand": "L-L", "from": 2.7, "to": 2.7}]}
 
 
 def summary(li=LI):
@@ -34,6 +34,16 @@ class ApplyLeadInHold(unittest.TestCase):
     def test_hand_change_row_untouched(self):
         mv = {"move": "hand_change", "holdStart": "RL", "holdEnd": "RL"}
         self.assertFalse(nr.apply_lead_in_hold(mv, summary(), 1.9, 4.5))
+
+    def test_split_estimate_not_used(self):
+        mv = {"move": "left_turn", "holdStart": None, "holdEnd": "RL"}
+        self.assertFalse(nr.apply_lead_in_hold(mv, summary(dict(LI, split=True)), 1.9, 4.5))
+        self.assertEqual(mv["holdEnd"], "RL")
+
+    def test_unreadable_only_before_first_evidence(self):
+        mv = {"move": "cbl", "holdStart": None, "holdEnd": "RR"}
+        self.assertFalse(nr.apply_lead_in_hold(mv, summary(), 5.0, 7.0))   # 最初に読めた時刻（2.7 秒）より後の None は埋めない
+        self.assertIsNone(mv["holdStart"])
 
     def test_no_value_no_override(self):
         mv = {"move": "left_turn", "holdStart": None, "holdEnd": "RL"}

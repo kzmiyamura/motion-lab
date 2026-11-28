@@ -1112,11 +1112,16 @@ def apply_lead_in_hold(mv, summary, t0, t1):
     if not (isinstance(hand, str) and len(hand) == 3 and _num(end)) or t0 < (li.get("from") or 0.0) - 1e-6 or t1 > end + 0.5:
         return False
     lead = hand[0] + hand[2]
+    if li.get("split"):
+        return False   # 読みが割れている（次点が 3 割以上）推定は上書きに使わない（digest では「?」付きの手がかりのまま）
     bad = {str(c.get("hand", "")).replace("-", "") for c in (li.get("conflicts") or []) if isinstance(c, dict)}
+    # 「読めない」(None) を埋めるのは、読めない冒頭の区間（最初に読めた時刻まで）に掛かる行だけ
+    fe = (li.get("firstEvidence") or {}).get("t")
+    unreadable_row = _num(fe) and t0 < fe
     changed = False
     for key in ("holdStart", "holdEnd"):
         v = mv.get(key)
-        if v in (None, "", "none") or (v in bad and v != lead):
+        if (v in (None, "", "none") and unreadable_row) or (v in bad and v != lead):
             if v != lead:
                 mv[key] = lead
                 changed = True

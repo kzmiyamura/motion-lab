@@ -651,7 +651,18 @@ export const LEAD_IN_SEC = 8.0;   // 冒頭の「読めない区間」のあと�
  * （途中は持ち替えと見分けられず、区間の多数決にすると持ち替えを潰す: img1884 の正解表で男の手 9/9 → 5/9）。
  * 最初に読めた手が多数と違えば、その読みは重なり中として当てにならないと書く。無ければ null
  */
-export function describeLeadIn(regions: HandRegion[], holds: HoldSpan[] = []): string | null {
+export interface LeadIn {
+  from: number; to: number;
+  /** 推定の手。"R-R" = リーダー右手×フォロワー右手 */
+  hand: string;
+  firstEvidence: { t: number; hand: string };
+  secs: Record<string, number>;
+  split: boolean;
+  /** 当てにならないとされた読み（最初に読めた別の組・CV の hold の食い違う区間） */
+  conflicts: Array<{ hand: string; from: number; to: number }>;
+}
+
+export function computeLeadIn(regions: HandRegion[], holds: HoldSpan[] = []): LeadIn | null {
   const g = regions[0];
   if (!g || g.from > 1.0 || g.firstEvidence.t - g.from <= 0.5) return null;
   const end = Math.min(g.to, g.firstEvidence.t + LEAD_IN_SEC);
@@ -661,15 +672,28 @@ export function describeLeadIn(regions: HandRegion[], holds: HoldSpan[] = []): s
   for (const [, h] of evs) secs[h] = (secs[h] ?? 0) + g.step;
   const sorted = Object.entries(secs).sort((x, y) => y[1] - x[1]);
   const total = sorted.reduce((s, [, v]) => s + v, 0);
-  const [best] = sorted[0];
-  const txt = sorted.map(([k, v]) => `${k} ${r2(v)}秒`).join(', ');
-  const parts = [
-    `冒頭〜${r2(g.firstEvidence.t)} 秒は手が読めない（重なり・隠れ）。${r2(g.firstEvidence.t)}〜${r2(end)} 秒の重なっていないコマで一番長く読めた手は ${best}（${handJa(best)}。${txt}）。離す動きは見えていない→冒頭からこの手のまま（推定）${sorted.length > 1 && sorted[1][1] / total >= 0.3 ? '。ただし読みが割れている（?）' : ''}`,
-  ];
-  if (g.firstEvidence.hand !== best) parts.push(`最初に読めた ${g.firstEvidence.hand}（${r2(g.firstEvidence.t)} 秒〜）は少数で、重なり中の左右の取り違えの可能性が高い`);
+  const best = sorted[0][0];
+  const conflicts: LeadIn['conflicts'] = [];
+  if (g.firstEvidence.hand !== best) conflicts.push({ hand: g.firstEvidence.hand, from: r2(g.firstEvidence.t), to: r2(g.firstEvidence.t) });
   for (const h of holds) {
     const k = holdKey(h.hold);
-    if (k && k !== best && h.from <= end && h.to >= g.from) parts.push(`CV の hold ${k}（${r2(h.from)}〜${r2(h.to)} 秒）は重なり中の読みで当てにならない`);
+    if (k && k !== best && h.from <= end && h.to >= g.from) conflicts.push({ hand: k, from: r2(h.from), to: r2(h.to) });
   }
+  return {
+    from: r2(g.from), to: r2(end), hand: best, firstEvidence: g.firstEvidence,
+    secs: Object.fromEntries(sorted.map(([k, v]) => [k, r2(v)])),
+    split: sorted.length > 1 && sorted[1][1] / total >= 0.3, conflicts,
+  };
+}
+
+export function describeLeadIn(regions: HandRegion[], holds: HoldSpan[] = []): string | null {
+  const li = computeLeadIn(regions, holds);
+  if (!li) return null;
+  const txt = Object.entries(li.secs).map(([k, v]) => `${k} ${v}秒`).join(', ');
+  const parts = [
+    `冒頭〜${r2(li.firstEvidence.t)} 秒は手が読めない（重なり・隠れ）。${r2(li.firstEvidence.t)}〜${li.to} 秒の重なっていないコマで一番長く読めた手は ${li.hand}（${handJa(li.hand)}。${txt}）。離す動きは見えていない→冒頭からこの手のまま（推定）${li.split ? '。ただし読みが割れている（?）' : ''}`,
+  ];
+  if (li.firstEvidence.hand !== li.hand) parts.push(`最初に読めた ${li.firstEvidence.hand}（${r2(li.firstEvidence.t)} 秒〜）は少数で、重なり中の左右の取り違えの可能性が高い`);
+  for (const c of li.conflicts) if (c.to !== c.from || c.hand !== li.firstEvidence.hand) parts.push(`CV の hold ${c.hand}（${c.from}〜${c.to} 秒）は重なり中の読みで当てにならない`);
   return parts.join('。');
 }

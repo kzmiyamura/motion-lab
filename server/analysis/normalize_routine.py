@@ -1095,6 +1095,37 @@ def cv_pass_side(summary, t0, t1):
     return None
 
 
+# 冒頭の手の推定（summary.handLeadIn。jobWorker 等が digest と同じ計算で measurements.json に書き足す）。
+# 動画の頭が重なり・隠れで手が読めないとき、続く 8 秒の重なっていない読みの最長の組を、離す動きが見えるまで同じ手とみなす。
+# 行が冒頭の区間（0〜handLeadIn.to）に収まり、その行の hold が「読めない」か「当てにならないとされた CV の読み」
+# （handLeadIn.conflicts）のときだけ、推定の手に置き換える。持ち替えの行・区間の外の行・値が無い経路は触らない
+LEAD_IN_HOLD = os.environ.get("MOTION_LAB_LEAD_IN_HOLD", "1") != "0"
+LEAD_IN_SKIP_MOVES = {"hand_change"}
+
+
+def apply_lead_in_hold(mv, summary, t0, t1):
+    """冒頭の行の hold を handLeadIn で置き換える。置き換えたら True（holdEstimated / holdLeadIn を付ける）"""
+    li = summary.get("handLeadIn") if isinstance(summary, dict) else None
+    if not LEAD_IN_HOLD or not isinstance(li, dict) or mv.get("move") in LEAD_IN_SKIP_MOVES:
+        return False
+    hand, end = li.get("hand"), li.get("to")
+    if not (isinstance(hand, str) and len(hand) == 3 and _num(end)) or t0 < (li.get("from") or 0.0) - 1e-6 or t1 > end + 0.5:
+        return False
+    lead = hand[0] + hand[2]
+    bad = {str(c.get("hand", "")).replace("-", "") for c in (li.get("conflicts") or []) if isinstance(c, dict)}
+    changed = False
+    for key in ("holdStart", "holdEnd"):
+        v = mv.get(key)
+        if v in (None, "", "none") or (v in bad and v != lead):
+            if v != lead:
+                mv[key] = lead
+                changed = True
+    if changed:
+        mv["holdEstimated"] = True
+        mv["holdLeadIn"] = {"hand": lead, "to": end}
+    return changed
+
+
 def cv_lead_hand(summary, t0, t1):
     """行の中の CV の CBL イベントで男性が頭上に上げた手（L/R）。無ければ None"""
     for e in (summary or {}).get("events") or []:
@@ -1847,6 +1878,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
                 out[k - 1]["sides"]["swapAt"] = out[k - 1]["sides"]["swapAt"] + early
                 mv["swapEarly"] = early
         t1 = out[k + 1]["start"] if k + 1 < len(out) else t0 + mv["counts"] * beat
+        apply_lead_in_hold(mv, summary, t0, t1)
         ft = prefer_follower_turn(mv, cv_spin_info(summary, t0, t1, beat=beat))
         if not ft:
             t2 = (out[k + 2]["start"] if k + 2 < len(out) else t1 + (out[k + 1].get("counts") or 8) * beat) \

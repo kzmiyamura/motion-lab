@@ -241,7 +241,9 @@ class SwapGridTest(unittest.TestCase):
                 normalize({"routine": {"moves": [dict(m) for m in moves]}}, summary, 80.0)
         finally:
             nr.fit_grid_to_swaps = orig
-        self.assertEqual(seen, [False, False, True])
+        # normalize は最終の行頭を得るために写しで 1 回余分に通す（2 回ずつ呼ばれる）
+        self.assertEqual(seen[::2], [False, False, True])
+        self.assertEqual(seen[1::2], [False, False, True])
 
     def test_no_drift_when_not_needed(self):
         sw = swaps_on_grid(2.6, 0.5, 50, jitter=self.JIT)

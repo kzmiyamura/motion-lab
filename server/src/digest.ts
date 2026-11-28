@@ -9,7 +9,7 @@
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { buildSegmentDigest, type Tracks } from './segmentDigest.js';
+import { buildHandRegions, buildSegmentDigest, describeLeadIn, type Tracks } from './segmentDigest.js';
 
 type Json = Record<string, unknown>;
 
@@ -208,6 +208,14 @@ export function buildDigest(measurements: Json, keyframes: DigestKeyframe[], env
     },
     counts,
     ...(tracks && compactHints ? { handHintsKey: HAND_HINTS_KEY } : {}),
+    // 冒頭が重なり・隠れで手が読めないとき、冒頭からの手の推定（CV の決定的な計算。離す動きが見えるまで同じ手）。無ければ出さない
+    ...(() => {
+      if (!tracks) return {};
+      try {
+        const line = describeLeadIn(buildHandRegions(tracks, aspect), tracks.holdTimeline ?? []);
+        return line ? { handLeadIn: line } : {};
+      } catch (err) { console.warn(`[digest] handLeadIn failed: ${(err as Error).message}`); return {}; }
+    })(),
     verdictByRule: summary.verdictByRule ?? null,
     // リーダーを何で決めたか: source=anchor（Claude の写真判定）/ cv-vote（CV 多数決。カメラに近い人に偏って逆になることがある）
     leaderDecision: summary.leaderDecision ?? null,

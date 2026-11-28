@@ -1101,6 +1101,8 @@ def cv_pass_side(summary, t0, t1):
 # （handLeadIn.conflicts）のときだけ、推定の手に置き換える。持ち替えの行・区間の外の行・値が無い経路は触らない
 LEAD_IN_HOLD = os.environ.get("MOTION_LAB_LEAD_IN_HOLD", "1") != "0"
 LEAD_IN_SKIP_MOVES = {"hand_change"}
+# Turn と hold の CV イベントを行に当てる窓を、内部の格子の窓でなく最終の行頭（実時刻）の窓にする（評価用の切り替え）
+FINAL_WINDOW = os.environ.get("MOTION_LAB_FINAL_WINDOW", "1") != "0"
 
 
 def apply_lead_in_hold(mv, summary, t0, t1):
@@ -1167,7 +1169,7 @@ def cv_holds(summary, t0, t1):
     return out
 
 
-def infer_hold(mv, summary, t0, t1):
+def infer_hold(mv, summary, t0, t1, h0=None, h1=None):
     """女性のターンで、つないだ手がデータに無いとき、男が頭上に上げた手（CV）から普通のつなぎを推す（決定的）:
     男の左手が上がっていれば女の右手（LR）、右手なら女の左手（RL）。行の欄・CV のどちらかに同じ側の手どうし
     （RR・LL）やクロスが見えていれば推さない。離している（none）と書かれた行も推さない。
@@ -1180,7 +1182,7 @@ def infer_hold(mv, summary, t0, t1):
     if not isinstance(turn, dict) or turn.get("by") not in ("follower", "both") or turn_hold(mv):
         return None
     holds = {mv.get("holdStart"), mv.get("holdEnd")}
-    if "none" in holds or holds & NON_STANDARD_HOLDS or cv_holds(summary, t0, t1) & NON_STANDARD_HOLDS:
+    if "none" in holds or holds & NON_STANDARD_HOLDS or cv_holds(summary, t0 if h0 is None else h0, t1 if h1 is None else h1) & NON_STANDARD_HOLDS:
         return None
     h = STANDARD_HOLD.get(cv_lead_hand(summary, t0, t1))
     if h is None:
@@ -1767,7 +1769,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
     """_normalize の入口。handLeadIn があるときは、まず写しで 1 回通して最終の行頭（位相補正・頭の引き込み後の実時刻）を得て、
     本番の 1 回目でそれを使って handLeadIn の範囲と比べる（handLeadIn の時刻は動画の実時刻。行の判定に使う内部の格子の時刻は
     位相補正で最終の start とずれる）。行数が合わなければ内部の時刻のまま"""
-    if LEAD_IN_HOLD and isinstance(summary, dict) and isinstance(summary.get("handLeadIn"), dict):
+    if FINAL_WINDOW or (LEAD_IN_HOLD and isinstance(summary, dict) and isinstance(summary.get("handLeadIn"), dict)):
         import copy
         tmp = copy.deepcopy(result)
         _normalize(tmp, summary, duration, default_timing, tracks, swap_beat)
@@ -1904,21 +1906,27 @@ def _normalize(result, summary, duration=None, default_timing=None, tracks=None,
                                final_starts[k + 1] if k + 1 < len(out) else final_starts[k] + fcount * beat)
         else:
             apply_lead_in_hold(mv, summary, t0, t1)
-        ft = prefer_follower_turn(mv, cv_spin_info(summary, t0, t1, beat=beat))
+        # Turn と hold の CV イベントは、最終の行頭（実時刻）の窓で当てる（FINAL_WINDOW）。CBL（腰の交差）は位相補正が合わせた内部の窓のまま
+        w0, w1, w2 = t0, t1, None
+        if FINAL_WINDOW and final_starts and len(final_starts) == len(out) and all(_num(x) for x in final_starts):
+            w0 = final_starts[k]
+            w1 = final_starts[k + 1] if k + 1 < len(out) else w0 + (mv.get("counts") or 8) * beat
+            w2 = (final_starts[k + 2] if k + 2 < len(out) else w1 + (out[k + 1].get("counts") or 8) * beat) if k + 1 < len(out) else None
+        ft = prefer_follower_turn(mv, cv_spin_info(summary, w0, w1, beat=beat))
         if not ft:
             t2 = (out[k + 2]["start"] if k + 2 < len(out) else t1 + (out[k + 1].get("counts") or 8) * beat) \
                 if k + 1 < len(out) else None
-            ft = spilled_turn(mv, summary, t0, t1, t2, beat)
+            ft = spilled_turn(mv, summary, w0, w1, w2 if w2 is not None else t2, beat)
         if ft:
             mv["turnCheck"] = ft
             mark_uncertain(mv)
         before = mv.get("move")
-        flip = check_direction(mv, cv_spin(summary, t0, t1, beat=beat))
+        flip = check_direction(mv, cv_spin(summary, w0, w1, beat=beat))
         if flip:
             mv["directionCheck"] = flip
             mark_uncertain(mv)
         # 手が分からない女性のターンは、男が上げた手から普通のつなぎを推す（「?」は付けない）
-        infer_hold(mv, summary, t0, t1)
+        infer_hold(mv, summary, t0, t1, w0, w1)
         fix = check_pass(mv, cv_pass_side(summary, t0, t1))
         if fix:
             mv["passCheck"] = fix
@@ -1933,11 +1941,11 @@ def _normalize(result, summary, duration=None, default_timing=None, tracks=None,
             mark_uncertain(mv)
             if FILL_CBL_TURN and not mv.get("turnCheck"):
                 # other / wrap / copa から CBL にした行も、女性の CV のターンがあれば CBL＋ターン
-                ft = prefer_follower_turn(mv, cv_spin_info(summary, t0, t1, beat=beat))
+                ft = prefer_follower_turn(mv, cv_spin_info(summary, w0, w1, beat=beat))
                 if ft:
                     mv["turnCheck"] = ft
         # 回転数を技の普通の回数へ（技の種類が決まった後で）
-        rot = apply_rotation_prior(mv, cv_spin_info(summary, t0, t1, beat=beat), beat)
+        rot = apply_rotation_prior(mv, cv_spin_info(summary, w0, w1, beat=beat), beat)
         if rot:
             mv["rotationCheck"] = rot
         # リードする手: 片手でつないでいれば男性のその手、無ければ CV が見た頭上に上がった手

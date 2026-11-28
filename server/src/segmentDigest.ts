@@ -673,14 +673,17 @@ export function computeLeadIn(regions: HandRegion[], holds: HoldSpan[] = []): Le
   const sorted = Object.entries(secs).sort((x, y) => y[1] - x[1]);
   const total = sorted.reduce((s, [, v]) => s + v, 0);
   const best = sorted[0][0];
+  // 推定を延ばすのは、採った手の読み（根拠）の最後の時刻まで。根拠の無い先（離す動きが見えていないだけの区間）へは延ばさない
+  // （820f0461: 8.7 秒以降は手を離しているのに、最初の読み + 8 秒の 11.06 秒まで RR と推定して holdEnd を上書きしていた）
+  const lastBest = Math.max(...evs.filter(([, h]) => h === best).map(([t]) => t));
   const conflicts: LeadIn['conflicts'] = [];
   if (g.firstEvidence.hand !== best) conflicts.push({ hand: g.firstEvidence.hand, from: r2(g.firstEvidence.t), to: r2(g.firstEvidence.t) });
   for (const h of holds) {
     const k = holdKey(h.hold);
-    if (k && k !== best && h.from <= end && h.to >= g.from) conflicts.push({ hand: k, from: r2(h.from), to: r2(h.to) });
+    if (k && k !== best && h.from <= lastBest && h.to >= g.from) conflicts.push({ hand: k, from: r2(h.from), to: r2(h.to) });
   }
   return {
-    from: r2(g.from), to: r2(end), hand: best, firstEvidence: g.firstEvidence,
+    from: r2(g.from), to: r2(lastBest), hand: best, firstEvidence: g.firstEvidence,
     secs: Object.fromEntries(sorted.map(([k, v]) => [k, r2(v)])),
     split: sorted.length > 1 && sorted[1][1] / total >= 0.3, conflicts,
   };

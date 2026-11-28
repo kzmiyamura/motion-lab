@@ -263,7 +263,7 @@ type ResultLike = {
   style?: { onBeat?: string } | null;
   routine?: {
     timing?: string; bpm?: number | null; bpmSource?: string;
-    grid?: { beatSec?: number } | null;
+    grid?: { beatSec?: number; provisional?: boolean } | null;
     moves?: unknown[];
   } | null;
   beatGrid?: { bpm?: number } | null;
@@ -283,7 +283,9 @@ export function parseChoreoSheet(resultJson: string | null): ChoreoSheetData | n
   header.push(timing === 'on1' ? 'On1' : 'On2');
   const bpm = d.routine?.bpm ?? d.beatGrid?.bpm;
   const hasBpm = typeof bpm === 'number' && bpm > 0;
-  if (hasBpm) header.push(d.routine?.bpmSource === 'routine' ? `テンポ≈${Math.round(bpm)}（推定）` : `BPM ${Math.round(bpm)}`);
+  // 位相を確定できず暫定の格子を使ったとき（無音で入れ替わりが少ない動画。grid.provisional）は、カウントに「?」を付ける
+  const provisional = d.routine?.grid?.provisional === true;
+  if (hasBpm) header.push(d.routine?.bpmSource === 'routine' || provisional ? `テンポ≈${Math.round(bpm)}（推定）` : `BPM ${Math.round(bpm)}`);
   if (d.leader?.side === 'right') header.push('男＝右スタート');
   else if (d.leader?.side === 'left') header.push('男＝左スタート');
 
@@ -321,7 +323,7 @@ export function parseChoreoSheet(resultJson: string | null): ChoreoSheetData | n
       start,
       end,
       time: start === null ? '' : fmtClock(start),
-      counts: `1-${counts}`,
+      counts: provisional ? `1-${counts}?` : `1-${counts}`,
       name: dancerTurnName(m) ?? rawName.replace(/\s*[?？]$/, ''),
       startPos,
       steps: parseSteps(m.steps),

@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  buildClaudeArgs, buildRunnerPrompt, collectOutputs, countImageReads, listJudgeImages, listWorkdirFiles, mainEnv, modelForStep, needsReadAllImages, readSessionLog, removeWorkdir, stageFlatDir, stageJobDir,
+  buildClaudeArgs, buildRunnerPrompt, collectOutputs, countImageReads, effortForStep, listJudgeImages, listWorkdirFiles, mainEnv, modelForStep, needsReadAllImages, readSessionLog, removeWorkdir, stageFlatDir, stageJobDir,
 } from './claudeRunner.js';
 import { buildDigest, parseKeyframeName, writeDigest } from './digest.js';
 
@@ -57,6 +57,16 @@ test('buildClaudeArgs: モデル指定があれば --model、無ければ付け�
   const a = buildClaudeArgs('main', '30', 'sonnet');
   assert.equal(a[a.indexOf('--model') + 1], 'sonnet');
   assert.ok(!buildClaudeArgs('anchor', '10', null).includes('--model'));
+});
+
+test('effortForStep: main だけ・正しい値だけ --effort になる（既定は付けない）', () => {
+  assert.equal(effortForStep('main', {}), null);
+  assert.equal(effortForStep('main', { CLAUDE_EFFORT_MAIN: ' Medium ' }), 'medium');
+  assert.equal(effortForStep('main', { CLAUDE_EFFORT_MAIN: 'turbo' }), null);
+  assert.equal(effortForStep('anchor', { CLAUDE_EFFORT_MAIN: 'low' }), null);
+  const a = buildClaudeArgs('main', '30', null, 'low');
+  assert.equal(a[a.indexOf('--effort') + 1], 'low');
+  assert.ok(!buildClaudeArgs('main', '30', null, null).includes('--effort'));
 });
 
 test('mainEnv: 本解析の python が UTF-8 で書くよう PYTHONUTF8=1 を足す（元の環境は残す）', () => {
@@ -273,7 +283,8 @@ test('buildDigest: tracks があればイベントに handHints（つないだ�
   const hh = d.events[0].handHints;
   assert.ok(hh, 'handHints が付く');
   assert.ok(Array.isArray(hh.jointHands) && hh.jointHands.length > 0, 'つないだ手の候補が出る');
-  assert.ok(hh.jointHands.every((s: string) => /秒/.test(s)));
+  assert.ok(hh.jointHands.every((s: string) => /: \d/.test(s)), '「中身: 区間, 区間」の形');
+  assert.ok(typeof d.handHintsKey === 'string' && d.handHintsKey.includes('中身: 区間'), '凡例が付く');
   const d0 = buildDigest(m, [], { pythonBin: 'py' }) as Record<string, any>;
   assert.equal(d0.events[0].handHints, undefined);
 });

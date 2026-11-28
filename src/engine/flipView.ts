@@ -140,7 +140,7 @@ export type FrameSpan = { start: number; end: number };
 
 /** 技の 8 カウントの数（"1-8" → 8、"1-16" → 16） */
 export function rowCounts(row: Pick<SheetRow, 'counts'>): number {
-  const m = /(\d+)\s*$/.exec(row.counts);
+  const m = /(\d+)\s*[?？]?\s*$/.exec(row.counts);   // 位相が暫定のときは "1-8?"
   const n = m ? Number(m[1]) : 8;
   return n > 0 ? n : 8;
 }

@@ -312,7 +312,14 @@ def swap_concentration(swaps, period, drift=0.0, span=1.0):
     return math.hypot(c, s), (math.atan2(s, c) / (2 * math.pi)) % 1
 
 
-def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT, chance_gate=True):
+SWAP_PROVISIONAL = True    # 門（z・R・z2）で落ちた無音の動画に、事前範囲＋入れ替わりの最良値で暫定の格子を出す（カウントに「?」を付ける）
+SWAP_TEMPO_RANGE = (2.18, 3.0)   # 暫定の格子で周期を探す範囲（秒）。160〜220 BPM（video-analysis-cues §2.6）。GT からは決めていない
+                           # 門は変えない: n≈10 の入れ替わりは帰無で z が中央 2.3〜3.2・95%点 4.7〜5.8 になり、門を下げると偽陽性が 25〜45% に増える。
+                           # 暫定は「偶然（count 0.25）よりまし」の推定で、確定ではない（grid.provisional = True）
+
+
+def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT, chance_gate=True, force=False,
+                      period_range=None):
     """CV の入れ替わり時刻に 8 カウントの格子を当てる。CBL なら入れ替わりは毎回 8 カウントの同じ所
     （On2 は 2 で女が男の横を通る）に来るので、周期を目安の ±SWAP_PERIOD_RANGE で振って位相が最も揃う周期を取る。
     SWAP_FIT_TURNS なら周期（と揃っているかの判定）に女性のターン（turns）も足すが、既定では足さない
@@ -326,12 +333,12 @@ def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT
     use_turns = list(turns or ()) if SWAP_FIT_TURNS else []
     events = sorted(list(swaps) + use_turns)
     span = max(duration or 0, events[-1], 1.0)
-    fit = _search_period(events, unit_guess, span)
+    fit = _search_period(events, unit_guess, span, period_range)
     if fit is None:
         return None
     period, drift, r_best = fit
     z = len(events) * r_best ** 2
-    if z < SWAP_MIN_Z:
+    if z < SWAP_MIN_Z and not force:
         return None
     used = sorted(swaps)
     if SWAP_OUTLIER_BEATS > 0:
@@ -339,7 +346,7 @@ def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT
         if refit is not None:
             period, drift, _ = refit
     r_swap, mean = swap_concentration(used, period, drift, span)
-    if r_swap < SWAP_MIN_R:
+    if r_swap < SWAP_MIN_R and not force:
         return None
     # 偶然の門（README 27）: On2 の入れ替わりは 8 カウントの同じ所か、その 4 拍後（1 行に 2 回通る）に来るので、
     # 当てた周期の半分（4 拍）でも揃う。周期は z（1 倍の揃い）を最大にするよう探したので、でたらめな時刻でも z は
@@ -347,7 +354,7 @@ def fit_grid_to_swaps(swaps, unit_guess, duration, turns=(), swap_beat=SWAP_BEAT
     # 時刻が コマ番号 / fps（2026-10-05 より前のジョブ）だと入れ替わりが最大 1 秒ずれて z2 が崩れる（1230b3d5 で 0.5〜0.9）ので、
     # chance_gate=False（measurements の summary.frameClock が "pts" でない）ときは掛けない
     z2 = len(used) * swap_harmonic(used, period, drift, span, 2) ** 2
-    if chance_gate and z2 < SWAP_MIN_Z2:
+    if chance_gate and z2 < SWAP_MIN_Z2 and not force:
         return None
     # 入れ替わりの平均位置が 8 カウントの SWAP_BEAT 拍目に来るように頭を決める
     head0 = (mean - swap_beat / 8) % 1
@@ -369,15 +376,21 @@ def swap_harmonic(swaps, period, drift=0.0, span=1.0, k=2):
     return math.hypot(c, s) / len(swaps)
 
 
-def _search_period(events, unit_guess, span):
-    """events の位相が最も揃う周期（と drift）を探す。戻り値 (period, drift, R) か None"""
+def _search_period(events, unit_guess, span, period_range=None):
+    """events の位相が最も揃う周期（と drift）を探す。戻り値 (period, drift, R) か None。
+    period_range=(lo, hi) なら Claude の目安に依らずその範囲（秒）で探す（目安への罰も付けない）"""
     def score(p, q):
         r, _ = swap_concentration(events, p, q, span)
+        if period_range:
+            return r, r
         return r - SWAP_PRIOR * abs(math.log(p / unit_guess)), r
 
-    # 周期は目安の ±SWAP_PERIOD_RANGE、かつサルサのテンポ（BPM_MIN〜BPM_MAX）の中で探す
-    lo = max(MIN_UNIT8, 8 * 60 / BPM_MAX, unit_guess * (1 - SWAP_PERIOD_RANGE))
-    hi = min(MAX_UNIT8, 8 * 60 / BPM_MIN, unit_guess * (1 + SWAP_PERIOD_RANGE))
+    if period_range:
+        lo, hi = period_range
+    else:
+        # 周期は目安の ±SWAP_PERIOD_RANGE、かつサルサのテンポ（BPM_MIN〜BPM_MAX）の中で探す
+        lo = max(MIN_UNIT8, 8 * 60 / BPM_MAX, unit_guess * (1 - SWAP_PERIOD_RANGE))
+        hi = min(MAX_UNIT8, 8 * 60 / BPM_MIN, unit_guess * (1 + SWAP_PERIOD_RANGE))
     if lo > hi:
         return None
     cands = []
@@ -1733,6 +1746,7 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
     if duration is None or not _num(duration):
         duration = None
     swap_fit = None
+    provisional = False   # 位相を確定できず暫定の格子を使ったか（無音で入れ替わりの門に落ちたとき）
     sb = swap_beat if _num(swap_beat) else swap_beat_for(summary)
     downbeat = downbeat_from_beats(summary) if beats else None
     if beats:
@@ -1750,6 +1764,14 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
         swaps = swap_times(summary)
         swap_fit = fit_grid_to_swaps(swaps, guess, duration or (max(starts) + guess), turn_times(summary),
                                      swap_beat=sb, chance_gate=(summary or {}).get("frameClock") == "pts")
+        provisional = False
+        if not swap_fit:
+            # 門で落ちた: 入れ替わりが SWAP_MIN 件以上あれば、事前範囲＋入れ替わりの最良値を暫定の格子にする。
+            # 位相の手がかりは Claude の生出力に依らないので、再解析で count が動かない。確定ではないので provisional
+            provisional = True
+            if SWAP_PROVISIONAL:
+                swap_fit = fit_grid_to_swaps(swaps, guess, duration or (max(starts) + guess), turn_times(summary),
+                                             swap_beat=sb, chance_gate=False, force=True, period_range=SWAP_TEMPO_RANGE)
         if swap_fit:
             period = swap_fit["period"]
             phase = (swap_fit["head0"] * period) % period
@@ -1942,6 +1964,8 @@ def normalize(result, summary, duration=None, default_timing=None, tracks=None, 
         "unitSec": round(period, 3), "beatSec": round(beat, 4), "phaseSec": round(phase % period, 3),
         "source": tempo_src,
     }
+    if provisional:
+        routine["grid"]["provisional"] = True
     if downbeat:
         routine["grid"]["phaseSource"] = "downbeat"
         routine["grid"]["downbeatSource"] = downbeat.get("source")

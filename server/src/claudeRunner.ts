@@ -97,14 +97,30 @@ export function modelForStep(kind: ClaudeKind, env: NodeJS.ProcessEnv = process.
   return v;
 }
 
+/**
+ * main の思考量（CLAUDE_EFFORT_MAIN。claude CLI の --effort: low / medium / high / xhigh / max）。
+ * 未設定・空・不正な値なら null で --effort を付けない（CLI の既定 = 従来どおり）。main 以外には付けない
+ */
+export function effortForStep(kind: ClaudeKind, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (kind !== 'main') return null;
+  const v = env.CLAUDE_EFFORT_MAIN?.trim().toLowerCase();
+  if (!v) return null;
+  if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(v)) {
+    console.warn(`[claudeRunner] CLAUDE_EFFORT_MAIN を無視しました: ${JSON.stringify(v)}`);
+    return null;
+  }
+  return v;
+}
+
 /** claude に渡す引数（プロンプトは stdin。argv にはフラグだけ） */
-export function buildClaudeArgs(kind: ClaudeKind, maxTurns: string, model: string | null = modelForStep(kind)): string[] {
+export function buildClaudeArgs(kind: ClaudeKind, maxTurns: string, model: string | null = modelForStep(kind), effort: string | null = effortForStep(kind)): string[] {
   const read = kind !== 'main';
   return [
     '-p',
     '--allowedTools', read ? 'Read' : 'Bash(python*) Read Write',
     ...claudeSlimArgs(read ? ['Read'] : ['Bash', 'Read', 'Write']),
     ...(model ? ['--model', model] : []),
+    ...(effort ? ['--effort', effort] : []),
     '--max-turns', maxTurns,
     '--output-format', 'json',
   ];

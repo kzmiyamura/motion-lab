@@ -62,5 +62,21 @@ class ApplyLeadInHold(unittest.TestCase):
         self.assertEqual(mv["holdEnd"], "RL")
 
 
+class FinalStartsUsed(unittest.TestCase):
+    def test_uses_final_row_times_not_grid_times(self):
+        # 位相補正で行頭が動く（格子の 4.0 秒の行が最終では 4.6 秒）。handLeadIn.to=4.4 に対し、
+        # 格子の時刻（行の終わり 8.0）でも最終の時刻（8.6）でも超える行は触らない。最初の行（格子 0.0〜4.0 / 最終 0.6〜4.6）は
+        # 最終の終わり 4.6 が to=4.4 を超えるので holdEnd は触らず、holdStart だけ置き換える
+        li = {"from": 0.0, "to": 4.4, "hand": "R-R", "split": False, "firstEvidence": {"t": 3.0, "hand": "R-R"}, "conflicts": [{"hand": "R-L", "from": 1.0, "to": 2.0}]}
+        res = {"routine": {"timing": "on1", "moves": [
+            {"start": 0.0, "move": "basic", "counts": 8, "holdStart": "RL", "holdEnd": "RL"},
+            {"start": 4.0, "move": "basic", "counts": 8, "holdStart": "RL", "holdEnd": "RL"},
+        ]}}
+        nr.normalize(res, {"handLeadIn": li, "beatGrid": {"bpm": 120, "beatIntervalSec": 0.5, "firstBeatSec": 0.0}}, duration=8.0)
+        m = res["routine"]["moves"][0]
+        self.assertEqual(m["holdStart"], "RR")
+        self.assertEqual(m["holdEnd"], "RL" if m["start"] + m["counts"] * 0.5 > 4.4 else "RR")
+
+
 if __name__ == "__main__":
     unittest.main()

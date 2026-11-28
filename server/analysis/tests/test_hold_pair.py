@@ -20,10 +20,22 @@ def frame(lw, fw):
 
 
 class NearestHoldPair(unittest.TestCase):
-    def test_cross_wins_when_slightly_farther(self):
-        # 右×右 .050、右×左 .060（クロスが少し遠い）→ クロスを選ぶ
+    def test_nearest_wins_by_default(self):
+        # 既定（割増 1.0）: 右×右 .050、右×左 .060 → 近い方（同じ側）を選ぶ。握手主体の動画（820f0461）で RR を不利にしない
         df = frame((None, (0.5, 0.5)), ((0.44, 0.5), (0.55, 0.5)))
         pair, d = ap.nearest_hold_pair(df, 0)
+        self.assertEqual(pair, "R-R")
+        self.assertAlmostEqual(d, 0.05, places=3)
+
+    def test_cross_wins_when_slightly_farther_with_penalty(self):
+        # 割増を入れた場合（MOTION_LAB_HOLD_SAME_SIDE_PENALTY=1.5）: クロスが少し遠くても選ぶ
+        old = ap.HOLD_SAME_SIDE_PENALTY
+        ap.HOLD_SAME_SIDE_PENALTY = 1.5
+        try:
+            df = frame((None, (0.5, 0.5)), ((0.44, 0.5), (0.55, 0.5)))
+            pair, d = ap.nearest_hold_pair(df, 0)
+        finally:
+            ap.HOLD_SAME_SIDE_PENALTY = old
         self.assertEqual(pair, "R-L")
         self.assertAlmostEqual(d, 0.06, places=3)
 

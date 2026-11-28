@@ -1983,7 +1983,7 @@ def detect_hand_raise(draw_frames, t_cross, leader_pid):
 
 HOLD_DIST = 0.07       # 手首間の正規化距離がこれ未満なら「つないでいる」
 HOLD_WINDOW_SEC = 0.35  # イベント時刻の前後この範囲でホールドを判定
-HOLD_SAME_SIDE_PENALTY = 1.5  # 向かい合う2人の握手は男の左×女の右・男の右×女の左（クロス）。同じ側同士は交差握手のときだけなので、近さを比べるときに距離を割り増す
+HOLD_SAME_SIDE_PENALTY = float(os.environ.get("MOTION_LAB_HOLD_SAME_SIDE_PENALTY", "1.0"))  # 向かい合う2人の握手は男の左×女の右・男の右×女の左（クロス）。同じ側同士は交差握手のときだけなので、近さを比べるときに距離を割り増す
 HOLD_SEG_MIN_SEC = 0.5  # ホールドタイムラインに載せる区間の最小長
 HOLD_MISS_TOLERANCE = 3  # 区間を切らずに許容する連続取りこぼしサンプル数（10fpsで0.3秒）
 

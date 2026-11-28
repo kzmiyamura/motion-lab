@@ -1109,7 +1109,7 @@ def apply_lead_in_hold(mv, summary, t0, t1):
     if not LEAD_IN_HOLD or not isinstance(li, dict) or mv.get("move") in LEAD_IN_SKIP_MOVES:
         return False
     hand, end = li.get("hand"), li.get("to")
-    if not (isinstance(hand, str) and len(hand) == 3 and _num(end)) or t0 < (li.get("from") or 0.0) - 1e-6 or t1 > end + 0.5:
+    if not (isinstance(hand, str) and len(hand) == 3 and _num(end)) or t0 < (li.get("from") or 0.0) - 1e-6 or t0 > end:
         return False
     lead = hand[0] + hand[2]
     if li.get("split"):
@@ -1120,6 +1120,8 @@ def apply_lead_in_hold(mv, summary, t0, t1):
     unreadable_row = _num(fe) and t0 < fe
     changed = False
     for key in ("holdStart", "holdEnd"):
+        if key == "holdEnd" and t1 > end + 0.5:
+            continue   # 行の終わりが根拠（採った手の最後の読み）の先なら、holdEnd は推定しない（その先で手を離しているかもしれない）
         v = mv.get(key)
         if (v in (None, "", "none") and unreadable_row) or (v in bad and v != lead):
             if v != lead:

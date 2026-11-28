@@ -35,6 +35,17 @@ class ApplyLeadInHold(unittest.TestCase):
         mv = {"move": "hand_change", "holdStart": "RL", "holdEnd": "RL"}
         self.assertFalse(nr.apply_lead_in_hold(mv, summary(), 1.9, 4.5))
 
+    def test_hold_end_untouched_past_evidence(self):
+        # 行の終わり（9.5 秒）が根拠の最後（to=7.3）+ 0.5 を超える → holdEnd は触らない。holdStart（行の頭は根拠の中）は置き換える
+        li = dict(LI, to=7.3)
+        mv = {"move": "cbl", "holdStart": "RL", "holdEnd": "RL"}
+        self.assertTrue(nr.apply_lead_in_hold(mv, summary(li), 7.19, 9.5))
+        self.assertEqual((mv["holdStart"], mv["holdEnd"]), ("RR", "RL"))
+
+    def test_row_starting_past_evidence_untouched(self):
+        mv = {"move": "cbl", "holdStart": "RL", "holdEnd": "RL"}
+        self.assertFalse(nr.apply_lead_in_hold(mv, summary(dict(LI, to=7.3)), 8.0, 9.5))
+
     def test_split_estimate_not_used(self):
         mv = {"move": "left_turn", "holdStart": None, "holdEnd": "RL"}
         self.assertFalse(nr.apply_lead_in_hold(mv, summary(dict(LI, split=True)), 1.9, 4.5))

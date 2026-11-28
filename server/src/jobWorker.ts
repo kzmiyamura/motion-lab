@@ -23,6 +23,7 @@ import { PRESETS, type JobContext } from './presets.js';
 import { runClaude, runClaudeAnchorReport,ClaudeAuthError, ClaudeRateLimitError } from './claudeRunner.js';
 import { judgeTurns } from './turnJudge.js';
 import { segmentFinishNote } from './segmentFinish.js';
+import { writeHandLeadIn } from './handLeadIn.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const JOBS_DIR = path.resolve(__dirname, '../storage/analysis-jobs');
@@ -403,6 +404,7 @@ async function normalizeRoutine(
 ): Promise<string | null> {
   const resultPath = path.join(jobDirOf(jobId), 'out', 'result.json');
   try {
+    writeHandLeadIn(ctx.measurementsPath);   // 冒頭の手の推定（summary.handLeadIn）。無ければ normalize は上書きしない
     await runPython([
       path.resolve(__dirname, '../analysis/normalize_routine.py'),
       resultPath,

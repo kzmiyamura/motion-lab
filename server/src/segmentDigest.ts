@@ -488,3 +488,212 @@ export function parseHands(text: string): ParsedHands {
   const m = /男性(右|左)手/.exec(text), w = /女性(右|左)手/.exec(text);
   return { man: m ? side(m[1]) : null, woman: w ? side(w[1]) : null };
 }
+
+// ---- 連続区間ごとの手の推定（本解析の digest 用） ----
+//
+// つないだ手は「離す動き」が見えるまで同じ。技の窓ごとの jointHands だけだと、冒頭など手が読めない区間で
+// 最初に出た読み（重なり中の左右取り違え）に引きずられる。全編の手首の読みから、離す動きの無い連続区間ごとに
+// 「重なっていないコマで一番長く読めた組」を決める（決定的。Claude には「推定」として渡す）。
+// 閾値は a priori（約 3 拍・8 カウントの半分）で、正解表に合わせた調整はしていない。
+
+export const REGION_RELEASE_DIST = 1.0;   // 2人が分かれて見え、手首の最小距離が胴長のこの倍を超える = 離している
+export const REGION_RELEASE_SEC = 1.0;     // それが続く時間。これ以上で「離す動き」
+export const REGION_EVIDENCE_GAP = 4.0;    // 読みが途切れてよい最長（これを超えたら別の区間。区間は読みの前後へこの秒数まで広げる）
+export const REGION_CHANGE_SEC = 1.0;      // 別の手が重なりなしで安定して続く最短（持ち替え）
+export const REGION_RUN_GAP = 0.5;         // 同じ組の読みを 1 つの塊とみなす隙間
+
+export interface HandRegion {
+  from: number; to: number;
+  /** 推定の手。"R-R" = リーダー右手×フォロワー右手 */
+  hand: string;
+  /** 組ごとの重なっていないコマの時間（秒） */
+  secs: Record<string, number>;
+  /** 最初にはっきり読めた時刻・組 */
+  firstEvidence: { t: number; hand: string };
+  /** コマの刻み（秒） */
+  step: number;
+  /** 読み（時刻, 組）。重なっていないコマだけ */
+  evid: Array<[number, string]>;
+  /** 重なっていないコマの読みが割れている（次点が 3 割以上） */
+  split: boolean;
+}
+
+const handKey = (h: Hand) => (h === '右手' ? 'R' : 'L');
+
+export function buildHandRegions(tracks: Tracks, aspect: number): HandRegion[] {
+  const leaderPid = tracks.leaderPid;
+  if (leaderPid === undefined) return [];
+  const frames = framesIn(tracks, 0, Infinity);
+  if (frames.length < 3) return [];
+  const ts = frames.map(f => f.t);
+  const diffs = ts.slice(1).map((t, i) => t - ts[i]).filter(d => d > 0).sort((a, b) => a - b);
+  const step = diffs.length ? diffs[Math.floor(diffs.length / 2)] : 0.1;
+
+  type Ev = { i: number; hand: string } | null;
+  const ev: Ev[] = [];
+  const rel: boolean[] = [];
+  frames.forEach((f, i) => {
+    ev.push(null); rel.push(false);
+    if (f.persons.length !== 2 || f.state !== 'apart') return;
+    const [a, b] = f.persons;
+    const aLead = a.pid === leaderPid, bLead = b.pid === leaderPid;
+    if (aLead === bLead) return;   // リーダーが 2 人のうち一方に当たらないコマは使わない
+    const any = closestWristPair(a, b, aspect);
+    if (any && any.dist > REGION_RELEASE_DIST) rel[i] = true;
+    const skipA = wristsNearHead(a, b, aspect).map(w => w.idx);
+    const skipB = wristsNearHead(b, a, aspect).map(w => w.idx);
+    const c = closestWristPair(a, b, aspect, skipA, skipB);
+    if (!c || c.dist > JOINT_DIST) return;
+    ev[i] = { i, hand: aLead ? `${handKey(c.handA)}-${handKey(c.handB)}` : `${handKey(c.handB)}-${handKey(c.handA)}` };
+  });
+
+  // 離す動き（分かれて見え、離れている状態が REGION_RELEASE_SEC 以上続く）
+  const released = new Array<boolean>(frames.length).fill(false);
+  for (let i = 0; i < frames.length;) {
+    if (!rel[i]) { i++; continue; }
+    let j = i;
+    while (j + 1 < frames.length && rel[j + 1] && ts[j + 1] - ts[j] <= 3 * step) j++;
+    if (ts[j] - ts[i] + step >= REGION_RELEASE_SEC - 1e-6) for (let k = i; k <= j; k++) released[k] = true;
+    i = j + 1;
+  }
+
+  // 読み（evidence）を、離す動き・途切れ・持ち替えで区間に分ける
+  const idx = frames.map((_, i) => i).filter(i => ev[i] !== null && !released[i]);
+  const regions: HandRegion[] = [];
+  let cur: number[] = [];
+  const flush = () => {
+    if (!cur.length) return;
+    // 同じ組の塊 → 安定した塊（REGION_CHANGE_SEC 以上）が別の組へ変わるところで切る
+    const runs: Array<{ hand: string; a: number; b: number }> = [];
+    for (const i of cur) {
+      const h = ev[i]!.hand, last = runs[runs.length - 1];
+      if (last && last.hand === h && ts[i] - ts[last.b] <= REGION_RUN_GAP) last.b = i;
+      else runs.push({ hand: h, a: i, b: i });
+    }
+    const stable = runs.filter(r => ts[r.b] - ts[r.a] + step >= REGION_CHANGE_SEC - 1e-6);
+    const cuts = [0];
+    for (let s = 1; s < stable.length; s++) {
+      if (stable[s].hand !== stable[s - 1].hand) {
+        const mid = (ts[stable[s - 1].b] + ts[stable[s].a]) / 2;
+        cuts.push(cur.findIndex(i => ts[i] > mid));
+      }
+    }
+    cuts.push(cur.length);
+    for (let c = 0; c < cuts.length - 1; c++) {
+      const part = cur.slice(cuts[c], cuts[c + 1]);
+      if (!part.length) continue;
+      const secs: Record<string, number> = {};
+      for (const i of part) secs[ev[i]!.hand] = (secs[ev[i]!.hand] ?? 0) + step;
+      const sorted = Object.entries(secs).sort((x, y) => y[1] - x[1]);
+      const total = sorted.reduce((s, [, v]) => s + v, 0);
+      const first = part[0];
+      regions.push({
+        from: ts[first], to: ts[part[part.length - 1]], hand: sorted[0][0],
+        secs: Object.fromEntries(sorted.map(([k, v]) => [k, r2(v)])),
+        firstEvidence: { t: ts[first], hand: ev[first]!.hand },
+        step,
+        evid: part.map((i): [number, string] => [ts[i], ev[i]!.hand]),
+        split: sorted.length > 1 && sorted[1][1] / total >= 0.3,
+      });
+    }
+    cur = [];
+  };
+  for (const i of idx) {
+    if (cur.length && (ts[i] - ts[cur[cur.length - 1]] > REGION_EVIDENCE_GAP || released.slice(cur[cur.length - 1], i).some(Boolean))) flush();
+    cur.push(i);
+  }
+  flush();
+  // 区間を読みの前後へ広げる（隣の区間・離す動き・REGION_EVIDENCE_GAP まで）
+  const tMin = ts[0], tMax = ts[ts.length - 1];
+  const evFrom = regions.map(g => g.from), evTo = regions.map(g => g.to);   // 読みのある範囲（広げる前）
+  for (let r = 0; r < regions.length; r++) {
+    const g = regions[r];
+    const prevEnd = r > 0 ? evTo[r - 1] : tMin;
+    const nextStart = r + 1 < regions.length ? evFrom[r + 1] : tMax;
+    let lo = Math.max(prevEnd, g.from - REGION_EVIDENCE_GAP, tMin);
+    let hi = Math.min(nextStart, g.to + REGION_EVIDENCE_GAP, tMax);
+    // 離す動きに入ったら、そこで止める
+    for (let i = frames.length - 1; i >= 0; i--) if (released[i] && ts[i] < g.from && ts[i] >= lo) { lo = ts[i] + step; break; }
+    for (let i = 0; i < frames.length; i++) if (released[i] && ts[i] > g.to && ts[i] <= hi) { hi = ts[i] - step; break; }
+    // 隣の区間と手が違えば、境目は 2 つの読みの真ん中
+    if (r > 0 && regions[r - 1].hand !== g.hand) lo = Math.max(lo, (evTo[r - 1] + g.from) / 2);
+    if (r + 1 < regions.length && regions[r + 1].hand !== g.hand) hi = Math.min(hi, (evTo[r] + evFrom[r + 1]) / 2);
+    g.from = r2(Math.min(lo, evFrom[r])); g.to = r2(Math.max(hi, evTo[r]));
+  }
+  return regions;
+}
+
+const handJa = (h: string) => `リーダー${h[0] === 'R' ? '右' : '左'}手×フォロワー${h[2] === 'R' ? '右' : '左'}手`;
+const holdKey = (label: string) => {
+  const m = /リーダー(右|左)手×フォロワー(右|左)手/.exec(label);
+  return m ? `${m[1] === '右' ? 'R' : 'L'}-${m[2] === '右' ? 'R' : 'L'}` : null;
+};
+
+/** buildHandRegions の結果を文にする（digest.handRegions）。CV の hold と食い違う区間は当てにならないと明示 */
+export function describeHandRegions(regions: HandRegion[], holds: HoldSpan[] = []): string[] {
+  return regions.map(g => {
+    const secs = Object.entries(g.secs).map(([k, v]) => `${k} ${v}秒`).join(', ');
+    const parts = [`${r2(g.from)}〜${r2(g.to)} 秒: 離す動きが見えない連続区間。重なっていないコマで一番長く読めた手は ${g.hand}（${handJa(g.hand)}。${secs}）→ この区間の手（推定）は ${g.hand}${g.split ? '。ただし読みが割れている（?）' : ''}`];
+    if (g.firstEvidence.t - g.from > 0.5) parts.push(`${r2(g.from)}〜${r2(g.firstEvidence.t)} 秒は手が読めない（重なり・隠れ）。最初にはっきり読めた手は ${g.firstEvidence.hand}（${r2(g.firstEvidence.t)} 秒〜）。離す動きは見えていない→同じ手とみなす`);
+    for (const h of holds) {
+      const k = holdKey(h.hold);
+      if (k && k !== g.hand && h.to >= g.from && h.from <= g.to) parts.push(`CV の hold ${k}（${r2(h.from)}〜${r2(h.to)} 秒）はこの区間の読みと食い違う。重なり中の読み・左右の取り違えで当てにならない`);
+    }
+    return parts.join('。');
+  });
+}
+
+export const LEAD_IN_SEC = 8.0;   // 冒頭の「読めない区間」のあと、この秒数の読みで手を決める（約 3 拍 × 8 カウント分。a priori）
+
+/**
+ * 冒頭だけ: 動画の頭から手が読めない区間（重なり・隠れ）があるとき、その区間の手を、続く LEAD_IN_SEC 秒の
+ * 読みのうち一番長い組（離す動きが見えるまで）として 1 行で出す。途中の区間には出さない
+ * （途中は持ち替えと見分けられず、区間の多数決にすると持ち替えを潰す: img1884 の正解表で男の手 9/9 → 5/9）。
+ * 最初に読めた手が多数と違えば、その読みは重なり中として当てにならないと書く。無ければ null
+ */
+export interface LeadIn {
+  from: number; to: number;
+  /** 推定の手。"R-R" = リーダー右手×フォロワー右手 */
+  hand: string;
+  firstEvidence: { t: number; hand: string };
+  secs: Record<string, number>;
+  split: boolean;
+  /** 当てにならないとされた読み（最初に読めた別の組・CV の hold の食い違う区間） */
+  conflicts: Array<{ hand: string; from: number; to: number }>;
+}
+
+export function computeLeadIn(regions: HandRegion[], holds: HoldSpan[] = []): LeadIn | null {
+  const g = regions[0];
+  if (!g || g.from > 1.0 || g.firstEvidence.t - g.from <= 0.5) return null;
+  const end = Math.min(g.to, g.firstEvidence.t + LEAD_IN_SEC);
+  const secs: Record<string, number> = {};
+  const evs = g.evid.filter(([t]) => t <= end);
+  if (evs.length < 2) return null;
+  for (const [, h] of evs) secs[h] = (secs[h] ?? 0) + g.step;
+  const sorted = Object.entries(secs).sort((x, y) => y[1] - x[1]);
+  const total = sorted.reduce((s, [, v]) => s + v, 0);
+  const best = sorted[0][0];
+  const conflicts: LeadIn['conflicts'] = [];
+  if (g.firstEvidence.hand !== best) conflicts.push({ hand: g.firstEvidence.hand, from: r2(g.firstEvidence.t), to: r2(g.firstEvidence.t) });
+  for (const h of holds) {
+    const k = holdKey(h.hold);
+    if (k && k !== best && h.from <= end && h.to >= g.from) conflicts.push({ hand: k, from: r2(h.from), to: r2(h.to) });
+  }
+  return {
+    from: r2(g.from), to: r2(end), hand: best, firstEvidence: g.firstEvidence,
+    secs: Object.fromEntries(sorted.map(([k, v]) => [k, r2(v)])),
+    split: sorted.length > 1 && sorted[1][1] / total >= 0.3, conflicts,
+  };
+}
+
+export function describeLeadIn(regions: HandRegion[], holds: HoldSpan[] = []): string | null {
+  const li = computeLeadIn(regions, holds);
+  if (!li) return null;
+  const txt = Object.entries(li.secs).map(([k, v]) => `${k} ${v}秒`).join(', ');
+  const parts = [
+    `冒頭〜${r2(li.firstEvidence.t)} 秒は手が読めない（重なり・隠れ）。${r2(li.firstEvidence.t)}〜${li.to} 秒の重なっていないコマで一番長く読めた手は ${li.hand}（${handJa(li.hand)}。${txt}）。離す動きは見えていない→冒頭からこの手のまま（推定）${li.split ? '。ただし読みが割れている（?）' : ''}`,
+  ];
+  if (li.firstEvidence.hand !== li.hand) parts.push(`最初に読めた ${li.firstEvidence.hand}（${r2(li.firstEvidence.t)} 秒〜）は少数で、重なり中の左右の取り違えの可能性が高い`);
+  for (const c of li.conflicts) if (c.to !== c.from || c.hand !== li.firstEvidence.hand) parts.push(`CV の hold ${c.hand}（${c.from}〜${c.to} 秒）は重なり中の読みで当てにならない`);
+  return parts.join('。');
+}

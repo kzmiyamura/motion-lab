@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { findWeakWindows } from '../src/segmentFinish.js';
+import { writeHandLeadIn } from '../src/handLeadIn.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = path.resolve(__dirname, '..');
@@ -71,6 +72,7 @@ wins.forEach((w, i) => {
 // 置き換えたカードには steps が無いので、normalize_routine で埋める
 const norm = path.join(SERVER_DIR, 'analysis', 'normalize_routine.py');
 if (!inPlace && existsSync(norm)) { // --in-place のときは jobWorker 側が preset の既定で normalize する
+  writeHandLeadIn(path.join(outDir, 'measurements.json'));   // jobWorker と同じ冒頭の手の推定を渡す
   const r = spawnSync(PYTHON_BIN, [norm, copyPath, path.join(outDir, 'measurements.json'), '--default-onbeat=on2'], { encoding: 'utf-8', env: { ...process.env, PYTHONUTF8: '1' } });
   console.log(`[finish] normalize_routine exit=${r.status}`);
 }

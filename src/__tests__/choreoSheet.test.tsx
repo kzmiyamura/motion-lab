@@ -11,6 +11,7 @@ vi.mock('../engine/homeServer', async (importOriginal) => {
 });
 
 import { getJobDetail } from '../engine/homeServer';
+import { rowCounts } from '../engine/flipView';
 import { ReportModal } from '../components/ReportModal';
 
 const JOB_ID = 'job-1';
@@ -173,6 +174,18 @@ describe('choreoSheet（純関数）', () => {
     // On1/On2 が決まっていない（unclear）ときは既定の On2
     expect(s.header).toEqual(['On2', 'テンポ≈195（推定）']);
     expect(s.beatSec).toBe(0.3076);
+  });
+
+  it('位相が暫定（grid.provisional）なら、カウントに「?」を付け、テンポは「推定」と書く', () => {
+    const s = parseChoreoSheet(JSON.stringify({
+      routine: {
+        timing: 'on2', bpm: 207, bpmSource: 'swaps', grid: { beatSec: 0.29, provisional: true },
+        moves: [{ start: 0, move: 'basic', counts: 8 }, { start: 2.3, move: 'cbl', counts: 16 }],
+      },
+    }))!;
+    expect(s.header).toEqual(['On2', 'テンポ≈207（推定）']);
+    expect(s.rows.map(r => r.counts)).toEqual(['1-8?', '1-16?']);
+    expect(rowCounts(s.rows[1])).toBe(16);
   });
 
   it('On2 の見出しは「On2 · BPM · 男＝右スタート」', () => {

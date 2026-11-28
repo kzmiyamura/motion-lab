@@ -1055,5 +1055,48 @@ class AudioPhaseFromSwaps(unittest.TestCase):
         self.assertIsNone(nr.audio_phase_from_swaps(scattered, period, beat, first, nr.SWAP_BEAT))
 
 
+class ProvisionalGridTest(unittest.TestCase):
+    """門（z・R・z2）で落ちた無音の動画の暫定の格子（grid.provisional）"""
+
+    def _run(self, sw, duration=40.0, step=2.4):
+        res = {"routine": {"timing": "on2", "moves": [mv(0.5 + step * i, "cbl" if i % 2 else "basic") for i in range(12)]}}
+        normalize(res, {"events": cbl_events(sw), "frameClock": "pts"}, duration=duration)
+        return res["routine"]["grid"]
+
+    def test_gated_swaps_are_not_provisional(self):
+        sw = swaps_on_grid(2.6, 0.5, 50, jitter=(0.0, 0.1, -0.1), skip={3, 9, 10})
+        grid = self._run(sw, duration=130.0)
+        self.assertEqual(grid["source"], "swaps")
+        self.assertNotIn("provisional", grid)
+
+    def test_failed_gate_with_enough_swaps_gives_provisional_swap_grid(self):
+        # でたらめに近い 10 件: 門（z≥4.5・z2≥2.5）は通らないが、事前範囲＋入れ替わりの最良値の暫定の格子が出る
+        import normalize_routine as nr
+        rng = random.Random(3)
+        sw = sorted(round(rng.uniform(1, 38), 2) for _ in range(10))
+        self.assertIsNone(fit_grid_to_swaps(sw, 2.4, 40.0))
+        grid = self._run(sw)
+        self.assertTrue(grid.get("provisional"))
+        self.assertEqual(grid["source"], "swaps")
+        lo, hi = nr.SWAP_TEMPO_RANGE
+        self.assertTrue(lo - 0.01 <= grid["unitSec"] <= hi + 0.01, grid)
+
+    def test_provisional_grid_does_not_depend_on_claude_rows(self):
+        rng = random.Random(3)
+        sw = sorted(round(rng.uniform(1, 38), 2) for _ in range(10))
+        a, b = self._run(sw, step=2.1), self._run(sw, step=3.0)
+        self.assertEqual((a["unitSec"], a["phaseSec"]), (b["unitSec"], b["phaseSec"]))
+
+    def test_too_few_swaps_fall_back_to_rows_and_are_provisional(self):
+        grid = self._run([5.0, 10.0, 15.0])
+        self.assertEqual(grid["source"], "routine")
+        self.assertTrue(grid.get("provisional"))
+
+    def test_audio_grid_is_not_provisional(self):
+        res = {"routine": {"timing": "on1", "moves": [mv(0.6), mv(4.3, "cbl")]}}
+        normalize(res, {"beatGrid": {"bpm": 120, "beatIntervalSec": 0.5, "firstBeatSec": 0.5}}, duration=8.0)
+        self.assertNotIn("provisional", res["routine"]["grid"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -36,7 +36,7 @@ class ApplyLeadInHold(unittest.TestCase):
         self.assertFalse(nr.apply_lead_in_hold(mv, summary(), 1.9, 4.5))
 
     def test_hold_end_untouched_past_evidence(self):
-        # 行の終わり（9.5 秒）が根拠の最後（to=7.3）+ 0.5 を超える → holdEnd は触らない。holdStart（行の頭は根拠の中）は置き換える
+        # 行の終わり（9.5 秒）が根拠の最後（to=7.3）を超える → holdEnd は触らない。holdStart（行の頭は根拠の中）は置き換える
         li = dict(LI, to=7.3)
         mv = {"move": "cbl", "holdStart": "RL", "holdEnd": "RL"}
         self.assertTrue(nr.apply_lead_in_hold(mv, summary(li), 7.19, 9.5))

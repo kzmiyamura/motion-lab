@@ -1120,7 +1120,7 @@ def apply_lead_in_hold(mv, summary, t0, t1):
     unreadable_row = _num(fe) and t0 < fe
     changed = False
     for key in ("holdStart", "holdEnd"):
-        if key == "holdEnd" and t1 > end + 0.5:
+        if key == "holdEnd" and t1 > end:
             continue   # 行の終わりが根拠（採った手の最後の読み）の先なら、holdEnd は推定しない（その先で手を離しているかもしれない）
         v = mv.get(key)
         if (v in (None, "", "none") and unreadable_row) or (v in bad and v != lead):
